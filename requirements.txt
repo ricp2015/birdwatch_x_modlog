@@ -1,4 +1,8 @@
 pip
 python-dotenv
 ruff
--e .
+numpy
+pandas
+requests
+tqdm
+convokit
