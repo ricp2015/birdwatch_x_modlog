@@ -15,11 +15,11 @@ from tqdm import trange
 # ---------------------------------------------------------------------------
 # Hyperparameters
 # ---------------------------------------------------------------------------
-LEARNING_RATE           = 0.01   # applied after per-parameter count normalisation
-L2_LAMBDA               = 0.005  # L2 regularisation weight — validate against paper
-N_EPOCHS                = 1000   # increased: Reddit had not converged at 500
+LEARNING_RATE           = 0.01
+L2_LAMBDA               = 0.005
+N_EPOCHS                = 1500
 RANDOM_SEED             = 42
-INIT_STD                = 0.1    # factor init σ; smaller → stable without clipping
+INIT_STD                = 0.1
 #   With INIT_STD=0.1: |f_u·f_n| ≈ 0.01 early on → gradients well-behaved
 #   With old INIT_STD=0.5: |f_u·f_n| ≈ 0.25 → clipping was needed for stability
 PATIENCE                = 50
@@ -609,7 +609,7 @@ def run_step2(
     """
     log.info("=" * 55)
     log.info(
-        "STEP 2 — Birdwatch MF  (%s)  vote_sign=%+d  batch=%s",
+        "STEP 2: Birdwatch MF  (%s)  vote_sign=%+d  batch=%s",
         step1_dir.name, vote_sign,
         "full" if batch_size is None else str(batch_size),
     )
@@ -655,5 +655,10 @@ if __name__ == "__main__":
     run_step2(
         step1_dir=Path("results/step1/reddit"),
         output_dir=Path("results/step2/reddit"),
+    )
+    run_step2(
+        step1_dir=Path("results/step1/reddit"),
+        output_dir=Path("results/step2/reddit"),
+        vote_sign=-1,
     )
 

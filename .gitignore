@@ -1,5 +1,6 @@
 /data/
 /results/
+/communitynotes_main/
 .DS_Store
 *.swp
 *.swo
