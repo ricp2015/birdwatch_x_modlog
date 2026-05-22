@@ -12,35 +12,42 @@ METRICS = [
 ]
 
 RUN_LABELS = {
-    "reddit_cn": "CN+",
-    "reddit_cn_inverted": "CN-",
-    "BL1_net_score": "Net",
+    "reddit_cn":              "CN+",
+    "reddit_cn_inverted":     "CN-",
+    "BL1_net_score":          "Net",
     "BL2_weighted_net_score": "WNet",
     "BL3_subreddit_adjusted": "SubAdj",
+    "BL4_reddit_score":       "RedditScore",
+    "BL5_subreddit":          "RedditScore+Sub",
+    "expertise_ranker_k10":   "ExpertTop10",
 }
 
 COLORS = {
-    "CN+": "#0647b8",
-    "CN-": "#ee1d40",
-    "Net": "#0da25a",
-    "WNet": "#d8b226",
-    "SubAdj": "#b541e6",
+    "CN+":              "#0647b8",
+    "CN-":              "#ee1d40",
+    "Net":              "#0da25a",
+    "WNet":             "#d8b226",
+    "SubAdj":           "#b541e6",
+    "RedditScore":      "#e67e22",
+    "RedditScore+Sub":  "#c0392b",
+    "ExpertTop10":      "#16a085",
 }
 
-
-# ── load ────────────────────────────────────────────
+#load
 def load_metrics(path):
     with open(path) as f:
         return json.load(f)
 
 
+
 def collect(results_dir: Path):
     rows = []
 
+    # tutti i metrics.json sotto results_dir, indipendentemente dalla profondità
     for p in results_dir.rglob("metrics.json"):
-        run = "/".join(p.parent.relative_to(results_dir).parts)
-
-        if "wikipedia" in run:
+        # ignora wikipedia
+        parts = p.parent.relative_to(results_dir).parts
+        if any("wikipedia" in part for part in parts):
             continue
 
         m = load_metrics(p)
@@ -49,25 +56,24 @@ def collect(results_dir: Path):
         label = RUN_LABELS.get(label_key, label_key)
 
         row = {"run": label}
-
         for k in METRICS:
-            row[k] = m.get(k, None)
-            row[k + "_std"] = m.get(k + "_std", None)
+            row[k]            = m.get(k,            None)
+            row[k + "_std"]   = m.get(k + "_std",   None)
 
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    df = df.sort_values("macro_f1", ascending=False)
+    df = df.sort_values("macro_f1", ascending=False).reset_index(drop=True)
     return df
 
 
-# ── print ────────────────────────────────────────────
+#print
 def print_summary(df):
     print("\n=== SUMMARY (no wikipedia) ===\n")
     print(df[["run", "macro_f1", "roc_auc", "f1_pos", "f1_neg"]])
 
 
-# ── plot with CI ─────────────────────────────────────
+#plot with CI
 def plot_metric(df, metric):
     plt.figure(figsize=(8,4))
 
@@ -113,7 +119,7 @@ def plot_metric(df, metric):
     plt.show()
 
 
-# ── main ────────────────────────────────────────────
+#main
 def compare(results_dir: Path):
     df = collect(results_dir)
 
@@ -130,5 +136,4 @@ def compare(results_dir: Path):
     return df
 
 
-# ── run ─────────────────────────────────────────────
 compare(Path("results/step2"))

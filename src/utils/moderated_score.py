@@ -1,17 +1,3 @@
-"""
-moderated_posts_scores.py
-=========================
-Recupera score e dettagli dei post moderati (label == -1)
-chiamando Arctic Shift con gli item_id dal dataset.
-
-Input:
-    results/step1/reddit/filtered_votes.parquet
-
-Output:
-    results/step1/reddit/moderated_posts_scores.parquet
-    results/step1/reddit/moderated_posts_scores.csv
-"""
-
 from pathlib import Path
 import time
 import logging

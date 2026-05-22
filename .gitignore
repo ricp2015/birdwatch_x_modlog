@@ -1,10 +1,9 @@
-/data/
-/results/
-/communitynotes_main/
 .DS_Store
 *.swp
 *.swo
-# Byte-compiled / optimized / DLL files
+normvio/
+results/
+communitynotes_main/
 __pycache__/
 *.py[cod]
 *$py.class

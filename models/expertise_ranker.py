@@ -14,7 +14,7 @@ df = df.dropna(subset=["timestamp", "vote", "label"])
 df = df.sort_values("timestamp").reset_index(drop=True)
 
 
-def iterative_cleanup(df, min_user_votes=5, min_sub_users=40):
+def iterative_cleanup(df, min_user_votes=5, min_sub_users=10):
     print(f"Starting cleanup on {len(df):,} rows...")
     df_curr = df.copy()
     iteration = 0
@@ -296,3 +296,97 @@ plt.savefig("var_evaluation.png", dpi=150, bbox_inches="tight")
 plt.savefig("var_evaluation.pdf", dpi=300, bbox_inches="tight")
 
 plt.show()
+
+
+import json
+from pathlib import Path
+from sklearn.metrics import f1_score, roc_auc_score, precision_score, recall_score
+from sklearn.model_selection import KFold
+
+N_FOLDS    = 5
+SCALAR_METRICS = [
+    "macro_f1", "roc_auc",
+    "f1_pos", "f1_neg",
+    "macro_precision", "macro_recall",
+    "precision_pos", "recall_pos",
+    "precision_neg", "recall_neg",
+]
+
+def evaluate_fold(decisions):
+    y_true = decisions["label"].values
+    y_pred = decisions["predicted"].values
+    labels = sorted(np.unique(y_true))
+    return {
+        "macro_f1":        f1_score(y_true, y_pred, average="macro",    zero_division=0),
+        "roc_auc":         roc_auc_score(y_true, y_pred, average="macro", multi_class="ovr", labels=labels),
+        "f1_pos":          f1_score(y_true, y_pred, pos_label=1,        average="binary", zero_division=0),
+        "f1_neg":          f1_score(y_true, y_pred, pos_label=-1,       average="binary", zero_division=0),
+        "macro_precision": precision_score(y_true, y_pred, average="macro",   zero_division=0),
+        "macro_recall":    recall_score(y_true, y_pred, average="macro",      zero_division=0),
+        "precision_pos":   precision_score(y_true, y_pred, pos_label=1,  average="binary", zero_division=0),
+        "recall_pos":      recall_score(y_true, y_pred, pos_label=1,     average="binary", zero_division=0),
+        "precision_neg":   precision_score(y_true, y_pred, pos_label=-1, average="binary", zero_division=0),
+        "recall_neg":      recall_score(y_true, y_pred, pos_label=-1,    average="binary", zero_division=0),
+    }
+
+def var_classification_kfold(test_df, train_scores, k, n_folds=N_FOLDS):
+    test_ranked = test_df.merge(
+        train_scores[["community", "username", "VAR_score"]],
+        on=["community", "username"],
+        how="left",
+    )
+    test_ranked["VAR_score"] = test_ranked["VAR_score"].fillna(0)
+
+    top_k_users = (
+        test_ranked[["community", "username", "VAR_score"]]
+        .drop_duplicates()
+        .sort_values("VAR_score", ascending=False)
+        .groupby("community")
+        .head(k)
+    )
+    votes = test_ranked.merge(
+        top_k_users[["community", "username"]], on=["community", "username"]
+    )
+
+    decisions = (
+        votes.groupby(["community", "item_id"])
+        .agg(predicted=("vote", lambda x: x.value_counts().idxmax()),
+             label=("label", "first"))
+        .reset_index()
+    )
+
+    labeled_items = decisions[["item_id", "label"]].drop_duplicates().reset_index(drop=True)
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+
+    fold_metrics = []
+    for _, test_idx in kf.split(labeled_items):
+        test_ids     = labeled_items.iloc[test_idx]["item_id"].values
+        fold_dec     = decisions[decisions["item_id"].isin(test_ids)]
+        if len(fold_dec) < 2 or fold_dec["label"].nunique() < 2:
+            continue
+        fold_metrics.append(evaluate_fold(fold_dec))
+
+    agg = {"n_folds": len(fold_metrics)}
+    for key in SCALAR_METRICS:
+        vals = [m[key] for m in fold_metrics]
+        agg[key]                = float(np.mean(vals))
+        agg[f"{key}_std"]       = float(np.std(vals))
+        agg[f"{key}_per_fold"]  = vals
+    return agg
+
+OUTPUT_ROOT = Path("results/step2")
+
+print("\nExporting VAR classification metrics (KFold)...")
+best_agg, best_k, best_f1 = None, None, -1
+for k in [5, 10, 15, 20, 30, 40, 50]:
+    agg = var_classification_kfold(test_df, train_scores, k)
+    print(f"  VAR_k{k}: macro_f1={agg['macro_f1']:.3f} ± {agg['macro_f1_std']:.3f}  roc_auc={agg['roc_auc']:.3f}")
+    if agg['macro_f1'] > best_f1:
+        best_f1, best_k, best_agg = agg['macro_f1'], k, agg
+
+out_dir = OUTPUT_ROOT / f"expertise_ranker_k{best_k}"
+out_dir.mkdir(parents=True, exist_ok=True)
+with open(out_dir / "metrics.json", "w") as f:
+    json.dump(best_agg, f, indent=2)
+print(f"\n  Saved best: expertise_ranker_k{best_k} (macro_f1={best_f1:.3f})")
+print("Done.\n")
