@@ -1,31 +1,32 @@
 """
-step3_expert_finder.py  (v6)
+step3_expert_finder.py  (v5)
 ============================
-Semantic Expert Finder — changes vs v5:
+Semantic Expert Finder — changes vs v4:
 
-  V6-1  Signal C restored in formula with gamma=1-alpha-beta.
-        With VAL_GRID_SAMPLE=3000, gamma=0.10-0.20 is consistently non-zero.
+  V5-1  Systematic disagreement: users who consistently vote AGAINST moderators
+        are now treated as informative sources. Reliability = |prec - 0.5|,
+        effective_vote = vote * sign(prec - 0.5). Users with prec < 0.5 have
+        their vote flipped; their weight is based on how far they are from
+        random (0.5), not from 1.0.
 
-  V6-2  Vectorised compute_expert_weights:
-        - FAISS batch query for all test posts at once
-        - Signal C as matrix multiply (user_emb @ post_emb.T)
-        - Signal A inner loop uses plain dict lookups instead of pandas iterrows
-        ~10-15x speedup on the main bottleneck.
+  V5-2  Richer subreddit features: sub_approve_rate is joined by
+        sub_approve_rate_text (text posts only), sub_approve_std (temporal
+        variance across months), and sub_n_posts (size signal).
 
-  V6-3  Vectorised _compute_weighted_votes: groupby + numpy, no per-post loop.
+  V5-3  Disaggregated per-rank expert features: instead of top-N mean,
+        the meta-model receives individual weight/local/global/signal_c
+        for each of the top RANK_N experts per direction (pos and neg),
+        sorted by expert_weight descending. Missing slots are zero-padded.
+        Suggested by supervisor: "instead of mean and std, report
+        vote1, vote2, ..., vote5".
 
-  V6-4  Batch predict_meta_model: single clf.predict/predict_proba call.
+Signals (unchanged from v4):
+  A  local_prec       FAISS-neighbour precision (sim-weighted, shrinkage)
+  B  sub_prec         historical subreddit precision
+  C  signal_c_directed = cosine_sim if vote=-1, else 1-cosine_sim
 
-  V6-5  Grid search: FAISS results precomputed once for all K values and reused
-        across alpha/beta. Only weight combination varies in inner loop.
-
-Signals:
-  A  local_reliability   FAISS-neighbour reliability (|prec-0.5|, sim-weighted)
-  B  sub_reliability     subreddit-level reliability
-  C  signal_c_directed   cosine_sim if vote=-1, else 1-cosine_sim
-
-  expert_weight = alpha*A + beta*B + (1-alpha-beta)*C
-  effective_vote = vote * bias_sign  (contrarians flipped)
+  expert_weight = alpha*A + beta*B + (1-alpha-beta)*C_directed
+  effective_vote = vote * sign(prec - 0.5)   [V5-1]
 """
 
 from __future__ import annotations
@@ -70,25 +71,24 @@ BATCH_SIZE      = 64
 # ---------------------------------------------------------------------------
 K_NEIGHBORS    = 5
 MIN_USER_VOTES = 10
-ALPHA          = 0.5
-BETA           = 0.3
+ALPHA          = 0.4
+BETA           = 0.4
 LAMBDA_SMOOTH  = 2.0
-TOP_T          = 3
+TOP_T          = 1
 CAL_SAMPLE     = 500
 MIN_SUB_SAMPLES = 50
 
-# Number of per-rank expert slots in feature vector
+# Number of per-rank expert slots in feature vector (V5-3)
 RANK_N = 5
 
 # ---------------------------------------------------------------------------
-# Grid search
+# Grid search — fixed params, skip with --no-grid-search
 # ---------------------------------------------------------------------------
 GRID_K     = [5, 10]
-GRID_T     = [1, 3, 5]
+GRID_T     = [1, 3, 5, 10]
 GRID_ALPHA = [0.2, 0.3, 0.4, 0.5, 0.6]
 GRID_BETA  = [0.2, 0.3, 0.4, 0.5, 0.6]
-# valid combos: alpha+beta <= 1.0
-VAL_GRID_SAMPLE = 3000
+VAL_GRID_SAMPLE = 1000
 
 # ---------------------------------------------------------------------------
 # Meta-model feature T values
@@ -440,106 +440,107 @@ def compute_expert_weights(
     lambda_smooth:  float,
 ) -> pd.DataFrame:
     """
-    Vectorized expert weight computation (V6-2).
-    expert_weight = alpha*A + beta*B + gamma*C
-      A = local reliability on FAISS neighbours (sim-weighted, Bayesian shrinkage)
-      B = subreddit-level reliability
+    expert_weight(u, P) = alpha*A + beta*B + gamma*C_directed
+      A = local precision on FAISS neighbours (sim-weighted, Bayesian shrinkage)
+      B = subreddit-level historical precision
       C = signal_c_directed (direction-aware topical similarity)
-    """
-    # ── lookup tables ────────────────────────────────────────────────────────
-    global_map: Dict[tuple, tuple] = {}
-    sub_map:    Dict[tuple, tuple] = {}
-    for row in prec_df.itertuples(index=False):
-        val = (float(row.prec), float(row.reliability), int(row.bias_sign))
-        if row.subreddit is None:
-            global_map[(row.username, row.direction)] = val
-        else:
-            sub_map[(row.username, row.direction, row.subreddit)] = val
 
-    laplace_default = lambda_smooth / (2 * lambda_smooth)
+    V5-1: systematic disagreement.
+      reliability(u) = |prec - 0.5|  — how informative the user is regardless of direction
+      effective_vote = vote * bias_sign  — flipped for contrarian users
+      expert_weight is based on reliability, not raw precision, so contrarians
+      with prec=0.1 get the same weight as concordants with prec=0.9.
+    """
+    # build lookup maps: (username, direction) -> (prec, reliability, bias_sign)
+    global_map: Dict[tuple, tuple] = {}   # -> (prec, reliability, bias_sign)
+    sub_map:    Dict[tuple, tuple] = {}
+    for _, r in prec_df.iterrows():
+        val = (float(r["prec"]), float(r["reliability"]), int(r["bias_sign"]))
+        if r["subreddit"] is None:
+            global_map[(r["username"], r["direction"])] = val
+        else:
+            sub_map[(r["username"], r["direction"], r["subreddit"])] = val
+
+    laplace_default = lambda_smooth / (2 * lambda_smooth)  # 0.5 -> reliability=0, bias_sign=1
+
     gamma = 1.0 - alpha - beta
 
-    # ── training vote lookup: {item_id: {username: [(vote, correct)]}} ───────
     train_votes = vote_df[vote_df["item_id"].isin(train_item_ids)].copy()
-    train_votes["correct"] = (train_votes["vote"] == train_votes["label"]).astype(np.int8)
-    train_lookup: Dict[str, Dict[str, List[Tuple[int, float]]]] = {}
-    for row in train_votes.itertuples(index=False):
-        d = train_lookup.setdefault(row.item_id, {})
-        d.setdefault(row.username, []).append((int(row.vote), float(row.correct)))
-
-    valid_ids = [iid for iid in test_item_ids if iid in post_id2idx]
-    if not valid_ids:
-        return pd.DataFrame(columns=[
-            "item_id", "username", "vote", "effective_vote", "expert_weight",
-            "local_prec", "global_prec", "reliability", "bias_sign",
-            "signal_c", "signal_c_directed",
-        ])
+    train_votes["correct"] = (train_votes["vote"] == train_votes["label"]).astype(int)
+    item_votes: Dict[str, pd.DataFrame] = {
+        iid: grp[["username", "vote", "correct"]]
+        for iid, grp in train_votes.groupby("item_id")
+    }
 
     post_sub = (
-        vote_df[vote_df["item_id"].isin(valid_ids)]
+        vote_df[vote_df["item_id"].isin(test_item_ids)]
         .drop_duplicates("item_id").set_index("item_id")["community"].to_dict()
     )
-    test_votes_by_post: Dict[str, List[Tuple[str, int]]] = {}
-    for row in vote_df[vote_df["item_id"].isin(valid_ids)][["item_id","username","vote"]].itertuples(index=False):
-        test_votes_by_post.setdefault(row.item_id, []).append((row.username, int(row.vote)))
-
-    # ── V6-2a: batch FAISS ───────────────────────────────────────────────────
-    post_indices = [post_id2idx[iid] for iid in valid_ids]
-    batch_sims, batch_idxs = faiss_index.search(post_emb[post_indices], k_neighbors + 1)
+    test_votes = vote_df[vote_df["item_id"].isin(test_item_ids)][["item_id", "username", "vote"]]
 
     rows = []
-    train_ids_set = train_item_ids
+    for item_id in test_item_ids:
+        if item_id not in post_id2idx:
+            continue
 
-    for idx, item_id in enumerate(valid_ids):
         subreddit = post_sub.get(item_id)
-        p_vec     = post_emb[post_indices[idx]]
+        p_idx     = post_id2idx[item_id]
+        query_vec = post_emb[p_idx : p_idx + 1]
+        p_vec     = post_emb[p_idx]
 
-        # neighbours
+        raw_sims, raw_idxs = faiss_index.search(query_vec, k_neighbors + 1)
         neighbours: List[Tuple[str, float]] = []
-        for sim, j in zip(batch_sims[idx], batch_idxs[idx]):
+        for sim, j in zip(raw_sims[0], raw_idxs[0]):
             if j < 0:
                 continue
             nid = post_ids_ordered[j]
-            if nid != item_id and nid in train_ids_set:
-                neighbours.append((nid, max(float(sim), 0.0)))
-        mean_sim = float(np.mean([s for _, s in neighbours])) if neighbours else 1.0
+            if nid == item_id or nid not in train_item_ids:
+                continue
+            neighbours.append((nid, max(float(sim), 0.0)))
 
-        voters = test_votes_by_post.get(item_id, [])
-        if not voters:
-            continue
+        mean_sim = np.mean([s for _, s in neighbours]) if neighbours else 1.0
 
-        # ── V6-2b: Signal C for all voters at once ────────────────────────────
-        known = [(i, u) for i, (u, _) in enumerate(voters) if u in user_id2idx]
-        sig_c_map: Dict[str, float] = {}
-        if known and user_emb.shape[0] > 0:
-            uidxs   = [user_id2idx[u] for _, u in known]
-            raw_c   = np.clip(user_emb[uidxs] @ p_vec, 0.0, 1.0)
-            for (_, u), c in zip(known, raw_c):
-                sig_c_map[u] = float(c)
+        for _, vrow in test_votes[test_votes["item_id"] == item_id].iterrows():
+            uname     = vrow["username"]
+            direction = int(vrow["vote"])
 
-        for uname, direction in voters:
-            g_val = global_map.get((uname, direction), (laplace_default, 0.0, 1))
-            s_val = sub_map.get((uname, direction, subreddit), g_val)
+            # lookup precision, reliability, bias_sign
+            g_val  = global_map.get((uname, direction), (laplace_default, 0.0, 1))
+            s_val  = sub_map.get((uname, direction, subreddit), g_val)
             sub_p, reliability, bias_sign = s_val
+
+            # effective_vote: flipped for contrarians (bias_sign=-1)
             effective_vote = direction * bias_sign
 
-            # Signal A via dict lookup
+            # Signal A: local precision on FAISS neighbours
+            # use reliability (|prec-0.5|) as the correctness signal so that
+            # contrarians contribute positively when their effective_vote is used
             loc_correct = loc_weight = 0.0
             for nid, sim in neighbours:
-                ndata = train_lookup.get(nid, {}).get(uname)
-                if ndata is None:
+                if nid not in item_votes:
                     continue
-                for v, correct in ndata:
-                    if v == direction:
-                        aligned = correct if bias_sign == 1 else (1.0 - correct)
+                for _, ur in item_votes[nid][item_votes[nid]["username"] == uname].iterrows():
+                    if int(ur["vote"]) == direction:
+                        # correct = 1 if user agreed with mod; for contrarians
+                        # "correct" means they disagreed with mod (bias_sign=-1),
+                        # so we use bias_sign to align the signal
+                        aligned = float(ur["correct"]) if bias_sign == 1 else (1.0 - float(ur["correct"]))
                         loc_correct += sim * aligned
                         loc_weight  += sim
 
-            local_rel = (loc_correct + lambda_smooth * reliability * mean_sim) /                         (loc_weight  + lambda_smooth * mean_sim)
+            local_reliability = (loc_correct + lambda_smooth * reliability * mean_sim) / \
+                                 (loc_weight  + lambda_smooth * mean_sim)
 
-            raw_c      = sig_c_map.get(uname, reliability)
-            signal_c_d = raw_c if direction == -1 else (1.0 - raw_c)
-            expert_w   = alpha * local_rel + beta * reliability + gamma * signal_c_d
+            # Signal C — direction-aware (V4-1 unchanged)
+            if uname in user_id2idx and user_emb.shape[0] > 0:
+                raw_sim = max(0.0, float(np.dot(user_emb[user_id2idx[uname]], p_vec)))
+            else:
+                raw_sim = reliability  # fallback: use reliability as proxy
+            signal_c          = raw_sim
+            signal_c_directed = raw_sim if direction == -1 else (1.0 - raw_sim)
+
+            # expert_weight based on reliability (V5-1), not raw precision
+            expert_w = alpha * local_reliability + beta * reliability + gamma * signal_c_directed
 
             rows.append({
                 "item_id":           item_id,
@@ -547,12 +548,12 @@ def compute_expert_weights(
                 "vote":              direction,
                 "effective_vote":    effective_vote,
                 "expert_weight":     float(expert_w),
-                "local_prec":        float(local_rel),
+                "local_prec":        float(local_reliability),
                 "global_prec":       float(sub_p),
                 "reliability":       float(reliability),
                 "bias_sign":         int(bias_sign),
-                "signal_c":          float(raw_c),
-                "signal_c_directed": float(signal_c_d),
+                "signal_c":          float(signal_c),
+                "signal_c_directed": float(signal_c_directed),
             })
 
     if not rows:
@@ -562,6 +563,7 @@ def compute_expert_weights(
             "signal_c", "signal_c_directed",
         ])
     return pd.DataFrame(rows)
+
 
 # ===========================================================================
 # 5. FEATURE EXTRACTION  (V4-2 early fusion + V5-2 subreddit + V5-3 per-rank)
@@ -759,23 +761,18 @@ def predict_meta_model(
     scaler:    StandardScaler,
     feat_cols: List[str],
 ) -> Dict[str, Tuple[int, float]]:
-    """V6-4: batch prediction — single clf call instead of per-post loop."""
+    """Returns {item_id: (predicted_label, proba_positive)}."""
     df = feat_df.set_index("item_id")
-    pos_class_idx = list(clf.classes_).index(1)
-
-    known = [iid for iid in item_ids if iid in df.index]
-    result: Dict[str, Tuple[int, float]] = {iid: (1, 0.5) for iid in item_ids}
-
-    if not known:
-        return result
-
-    X     = df.loc[known, feat_cols].values.astype(float)
-    X_s   = scaler.transform(X)
-    preds = clf.predict(X_s)
-    probas= clf.predict_proba(X_s)[:, pos_class_idx]
-
-    for iid, pred, proba in zip(known, preds, probas):
-        result[iid] = (int(pred), float(proba))
+    result = {}
+    for item_id in item_ids:
+        if item_id not in df.index:
+            result[item_id] = (1, 0.5)
+            continue
+        x     = df.loc[item_id, feat_cols].values.astype(float).reshape(1, -1)
+        x_s   = scaler.transform(x)
+        pred  = int(clf.predict(x_s)[0])
+        proba = float(clf.predict_proba(x_s)[0, list(clf.classes_).index(1)])
+        result[item_id] = (pred, proba)
     return result
 
 
@@ -789,41 +786,26 @@ def _compute_weighted_votes(
     weights_df: pd.DataFrame,
     top_t:      int,
 ) -> Dict[str, float]:
-    """V6-3: vectorised weighted vote using groupby instead of per-post loop."""
+    """Weighted vote using effective_vote (flipped for contrarians) if available."""
     if weights_df.empty:
         raw = vote_df[vote_df["item_id"].isin(item_ids)][["item_id", "vote"]]
-        return {iid: float(g["vote"].mean()) for iid, g in raw.groupby("item_id")}
+        return {iid: float(grp["vote"].mean()) for iid, grp in raw.groupby("item_id")}
 
-    vote_col = "effective_vote" if "effective_vote" in weights_df.columns else "vote"
-    w = weights_df[weights_df["item_id"].isin(item_ids)][
-        ["item_id", "expert_weight", vote_col]
-    ].copy()
+    w         = weights_df[weights_df["item_id"].isin(item_ids)]
+    raw_votes = vote_df[vote_df["item_id"].isin(item_ids)][["item_id", "username", "vote"]]
+    vote_col  = "effective_vote" if "effective_vote" in w.columns else "vote"
 
-    # raw vote fallback for posts not in weights_df
-    raw_votes = vote_df[vote_df["item_id"].isin(item_ids)][["item_id", "vote"]]
-    raw_mean  = raw_votes.groupby("item_id")["vote"].mean().to_dict()
-
-    if w.empty:
-        return {iid: raw_mean.get(iid, 0.0) for iid in item_ids}
-
-    # keep top-T per post by expert_weight, then compute weighted mean
-    w_sorted  = w.sort_values("expert_weight", ascending=False)
-    w_top     = w_sorted.groupby("item_id", sort=False).head(top_t)
-    w_top     = w_top.copy()
-    w_top["expert_weight"] = w_top["expert_weight"].clip(lower=1e-9)
-    w_top["wv_num"] = w_top["expert_weight"] * w_top[vote_col]
-
-    agg = w_top.groupby("item_id").agg(
-        num=("wv_num", "sum"),
-        den=("expert_weight", "sum"),
-    )
-    agg["wv"] = agg["num"] / agg["den"]
-    result = agg["wv"].to_dict()
-
-    # fill posts missing from weights_df
-    for iid in item_ids:
-        if iid not in result:
-            result[iid] = raw_mean.get(iid, 0.0)
+    result = {}
+    for item_id in item_ids:
+        pw = w[w["item_id"] == item_id]
+        if pw.empty:
+            rv = raw_votes[raw_votes["item_id"] == item_id]["vote"].values
+            result[item_id] = float(rv.mean()) if len(rv) > 0 else 0.0
+            continue
+        top     = pw.nlargest(top_t, "expert_weight")
+        weights = top["expert_weight"].values.clip(min=1e-9)
+        votes   = top[vote_col].values.astype(float)
+        result[item_id] = float(np.dot(weights, votes) / weights.sum())
     return result
 
 
@@ -911,11 +893,7 @@ def grid_search_hyperparams(
     faiss_index:   faiss.Index,
     lambda_smooth: float,
 ) -> Tuple[int, int, float, float]:
-    """
-    V6-5: grid search with FAISS precomputed per K.
-    For each K, compute weights once per (alpha, beta) combo.
-    T iteration reuses the same weights_df — no extra compute_expert_weights calls.
-    """
+    """Grid over K x T x alpha x beta; optimises macro-F1 on val sample."""
     labels  = (
         vote_df[vote_df["item_id"].isin(val_ids)]
         .drop_duplicates("item_id").set_index("item_id")["label"].to_dict()
@@ -924,37 +902,39 @@ def grid_search_hyperparams(
     if not val_ids:
         return K_NEIGHBORS, TOP_T, ALPHA, BETA
 
-    valid_ab = [(a, b) for a in GRID_ALPHA for b in GRID_BETA if a + b <= 1.0]
-    n_combos = len(GRID_K) * len(valid_ab) * len(GRID_T)
-    log.info("  Grid search: %d combos on %d val posts …", n_combos, len(val_ids))
-
     best = {"f1": -1.0, "k": K_NEIGHBORS, "t": TOP_T, "alpha": ALPHA, "beta": BETA}
 
-    for k in GRID_K:
-        # precompute weights once per (k, alpha, beta) — T is free to vary after
-        for alpha, beta in valid_ab:
-            weights_df = compute_expert_weights(
-                val_ids, train_ids, vote_df, prec_df,
-                post_emb, post_id2idx, user_emb, user_id2idx,
-                faiss_index, k, alpha, beta, lambda_smooth,
-            )
-            for t in GRID_T:
-                wv     = _compute_weighted_votes(val_ids, vote_df, weights_df, t)
-                common = [iid for iid in wv if iid in labels]
-                if not common:
-                    continue
-                y_true  = np.array([labels[iid] for iid in common])
-                y_score = np.array([wv[iid]     for iid in common])
+    n_combos = (
+        len(GRID_K) * len(GRID_T)
+        * sum(1 for a in GRID_ALPHA for b in GRID_BETA if a + b <= 1.0)
+    )
+    log.info("  Grid search: %d combos on %d val posts …", n_combos, len(val_ids))
 
-                best_f1_t = -1.0
-                for thr in np.linspace(y_score.min(), y_score.max(), 50):
-                    y_pred = np.where(y_score >= thr, 1, -1)
-                    f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
-                    if f1 > best_f1_t:
-                        best_f1_t = f1
+    for alpha in GRID_ALPHA:
+        for beta in [b for b in GRID_BETA if alpha + b <= 1.0]:
+            for k in GRID_K:
+                weights_df = compute_expert_weights(
+                    val_ids, train_ids, vote_df, prec_df,
+                    post_emb, post_id2idx, user_emb, user_id2idx,
+                    faiss_index, k, alpha, beta, lambda_smooth,
+                )
+                for t in GRID_T:
+                    wv     = _compute_weighted_votes(val_ids, vote_df, weights_df, t)
+                    common = [iid for iid in wv if iid in labels]
+                    if not common:
+                        continue
+                    y_true  = np.array([labels[iid] for iid in common])
+                    y_score = np.array([wv[iid] for iid in common])
 
-                if best_f1_t > best["f1"]:
-                    best = {"f1": best_f1_t, "k": k, "t": t, "alpha": alpha, "beta": beta}
+                    best_thr, best_f1_t = 0.0, -1.0
+                    for thr in np.linspace(y_score.min(), y_score.max(), 50):
+                        y_pred = np.where(y_score >= thr, 1, -1)
+                        f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+                        if f1 > best_f1_t:
+                            best_f1_t, best_thr = f1, float(thr)
+
+                    if best_f1_t > best["f1"]:
+                        best = {"f1": best_f1_t, "k": k, "t": t, "alpha": alpha, "beta": beta}
 
     log.info("  Best: k=%d t=%d alpha=%.2f beta=%.2f macro_f1=%.4f",
              best["k"], best["t"], best["alpha"], best["beta"], best["f1"])

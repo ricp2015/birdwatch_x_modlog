@@ -1,8 +1,19 @@
-pip
+# Core
 python-dotenv
 ruff
 numpy
 pandas
 requests
 tqdm
+scipy
+scikit-learn
+transformers==4.40.2
+huggingface-hub
+pyarrow
+fastparquet
+faiss-cpu
+neo4j
+praw
 convokit
+matplotlib
+seaborn

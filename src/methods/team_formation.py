@@ -175,7 +175,10 @@ def score_texts(
     probs     = np.full(len(texts), np.nan)
     valid_idx = [i for i, t in enumerate(texts) if t.strip()]
 
-    for start in range(0, len(valid_idx), batch_size):
+    n_batches = (len(valid_idx) + batch_size - 1) // batch_size
+    for batch_num, start in enumerate(range(0, len(valid_idx), batch_size)):
+        if batch_num == 0:
+            print(f"      inference: {len(valid_idx)} texts, {n_batches} batches ...", flush=True)
         chunk      = valid_idx[start: start + batch_size]
         batch_texts = [texts[i] for i in chunk]
         encoded    = [encode_text(t, tokenizer) for t in batch_texts]
@@ -351,27 +354,42 @@ def step_B(votes_dir: Path, docs_path: Path, models_dir: Path,
 # ============================================================================
 # STEP C — User skill extractor
 # ============================================================================
-
-def _safe_corr(x: np.ndarray, y: np.ndarray) -> float:
-    mask = ~(np.isnan(x) | np.isnan(y))
-    xm, ym = x[mask], y[mask]
-    if len(xm) < 2 or xm.std() == 0 or ym.std() == 0:
-        return np.nan
-    r, _ = pearsonr(xm, ym)
-    return float(r)
-
+# Skill definition (v2 — moderator agreement per NormVio category):
+#
+#   NormVio is used as a TOPIC MODEL only — it assigns each post to a
+#   norm category (spam, incivility, ...) regardless of whether the post
+#   was actually removed. The skill of user u in category c is defined as:
+#
+#       skill(u, c) = fraction of votes on category-c posts where
+#                     vote(u, i) agrees with label(i)
+#                   = P(vote == label | category == c)
+#
+#   where agreement means: upvote (+1) on approved post (+1),
+#   or downvote (-1) on removed post (-1).
+#
+#   This avoids using NormVio scores as violation detectors (which fail
+#   on Reddit posts) and avoids data leakage because:
+#     - categories come from NormVio (not ground truth)
+#     - skill is computed on temporally prior posts (chronological split)
+#
+# Agreement is computed on the TRAIN split only; skill is then applied
+# to score posts in VAL/TEST. This is handled inside step_D via the
+# chronological split already present in results/step1/reddit/splits/.
 
 def step_C(votes_dir: Path, scores_path: Path,
            out_path: Path, min_votes: int) -> pd.DataFrame:
-    print("\n=== STEP C: User skill extractor ===")
+    print("\n=== STEP C: User skill extractor (moderator agreement per category) ===")
 
     votes  = load_votes(votes_dir)
-    scores = pd.read_parquet(scores_path)[
-        ["item_id"] + [f"score_{c}" for c in CATEGORIES]
-    ]
+    scores = pd.read_parquet(scores_path)[["item_id", "top_violation_category"]]
+
+    # join votes with NormVio category assignment
     merged = votes.merge(scores, on="item_id", how="inner")
-    print(f"  Votes with scores: {len(merged):,}  "
-          f"(dropped {len(votes) - len(merged):,})")
+    merged = merged.dropna(subset=["label", "top_violation_category"])
+    print(f"  Votes with category + label: {len(merged):,}")
+
+    # agreement: +1 if vote == label, 0 otherwise
+    merged["agrees"] = (merged["vote"] == merged["label"]).astype(float)
 
     records = []
     for (username, community), grp in tqdm(
@@ -381,25 +399,29 @@ def step_C(votes_dir: Path, scores_path: Path,
                "n_votes": len(grp)}
         skill_vals = []
         for cat in CATEGORIES:
-            arr   = grp[f"score_{cat}"].values
-            valid = ~np.isnan(arr)
-            if valid.sum() < min_votes:
+            cat_grp = grp[grp["top_violation_category"] == cat]
+            if len(cat_grp) < min_votes:
                 row[f"skill_{cat}"] = np.nan
                 continue
-            # negate: downvoting violations = high skill
-            r = _safe_corr(grp["vote"].values, arr)
-            s = -r if not np.isnan(r) else np.nan
-            row[f"skill_{cat}"] = s
-            if not np.isnan(s):
-                skill_vals.append(s)
+            # skill = fraction of correct votes in this category
+            # subtract 0.5 so that chance level = 0, range [-0.5, +0.5]
+            skill = float(cat_grp["agrees"].mean()) - 0.5
+            row[f"skill_{cat}"] = skill
+            skill_vals.append(skill)
         row["skill_overall"] = float(np.nanmean(skill_vals)) if skill_vals else np.nan
         records.append(row)
 
     out_df = pd.DataFrame(records)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
+
+    n_valid = out_df["skill_overall"].notna().sum()
     print(f"  Users×communities: {len(out_df):,}")
-    print(f"  With valid overall skill: {out_df['skill_overall'].notna().sum():,}")
+    print(f"  With valid overall skill: {n_valid:,}")
+    if n_valid > 0:
+        print(f"  Mean skill_overall: {out_df['skill_overall'].mean():.4f}")
+        print(f"  Skill > 0 (better than chance): "
+              f"{(out_df['skill_overall'] > 0).sum():,} / {n_valid:,}")
     print(f"  Saved → {out_path}")
     return out_df
 
@@ -511,8 +533,14 @@ def _evaluate(item_scores: pd.DataFrame,
         "macro_f1":        float(f),
         "macro_precision": float(p),
         "macro_recall":    float(r),
-        "f1_approve":      float(f1),
-        "f1_remove":       float(f_),
+        "f1_pos":          float(f1),   # approve class (label=+1)
+        "f1_neg":          float(f_),   # remove  class (label=-1)
+        "f1_approve":      float(f1),   # alias
+        "f1_remove":       float(f_),   # alias
+        "precision_pos":   float(p1),
+        "recall_pos":      float(r1),
+        "precision_neg":   float(p_),
+        "recall_neg":      float(r_),
         "roc_auc":         auc,
         "n_items":         len(test),
     }
@@ -567,7 +595,7 @@ def step_D(votes_dir: Path, scores_path: Path, skills_path: Path,
         agg[f"{k}_per_fold"] = [m[k] for m in fold_metrics]
 
     print(f"\n  === TFR Summary ({n_folds}-fold) ===")
-    for k in ("macro_f1", "roc_auc", "f1_approve", "f1_remove"):
+    for k in ("macro_f1", "roc_auc", "f1_pos", "f1_neg", "macro_precision", "macro_recall"):
         print(f"    {k:20s}  {agg[k]:.4f} ± {agg[f'{k}_std']:.4f}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -646,6 +674,7 @@ def main():
                user_skill_path, out_dir, args.n_folds)
 
     print("\nDone.")
+
 
 if __name__ == "__main__":
     main()
