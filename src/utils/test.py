@@ -81,7 +81,7 @@ def make_pairplot(df: pd.DataFrame, out_path: Path) -> None:
         corner=True,
     )
     g.figure.suptitle(
-        "NormVio score distributions by category\n(blue=approved, red=removed)",
+        "blue -> approved, red -> removed)",
         y=1.01, fontsize=13,
     )
     g.figure.savefig(out_path, dpi=120, bbox_inches="tight")
@@ -168,6 +168,71 @@ def make_barplot(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
     print(f"Barplot saved -> {out_path}")
 
+def make_violinplot(df: pd.DataFrame, out_path: Path) -> None:
+    """
+    Distribution of each classifier score conditional on moderator decision.
+    Useful to inspect which classifiers separate approved vs removed content.
+    """
+
+    rows = []
+
+    for cat in CATEGORIES:
+        col = f"score_{cat}"
+
+        tmp = df[[col, "label_str"]].copy()
+        tmp["category"] = cat
+
+        tmp = tmp.rename(
+            columns={
+                col: "score",
+                "label_str": "moderation"
+            }
+        )
+
+        rows.append(tmp)
+
+    long_df = pd.concat(rows, ignore_index=True)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    palette = {
+        "approved": "#2196F3",
+        "removed": "#F44336"
+    }
+
+    sns.violinplot(
+        data=long_df,
+        x="category",
+        y="score",
+        hue="moderation",
+        split=True,
+        inner="quartile",
+        palette=palette,
+        cut=0,
+        ax=ax,
+    )
+
+    ax.set_title(
+        "NormVio classifier scores conditioned on moderator decision",
+        fontsize=12,
+    )
+
+    ax.set_xlabel("NormVio classifier")
+    ax.set_ylabel("Violation probability")
+
+    ax.tick_params(axis="x", rotation=30)
+
+    ax.set_ylim(0, 0.05)
+
+    ax.legend(title="Moderator decision")
+
+    plt.tight_layout()
+
+    fig.savefig(out_path, dpi=150)
+
+    plt.close(fig)
+
+    print(f"Violin plot saved -> {out_path}")
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,6 +240,7 @@ def main():
     make_pairplot(df, OUT_DIR / "normvio_pairplot.png")
     make_boxplot( df, OUT_DIR / "normvio_boxplot.png")
     make_barplot( df, OUT_DIR / "normvio_barplot.png")
+    make_violinplot(df, OUT_DIR / "normvio_violinplot.png")
     print("\nAll plots saved to", OUT_DIR)
 
 

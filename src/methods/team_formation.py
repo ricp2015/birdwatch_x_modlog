@@ -5,9 +5,15 @@ Full pipeline for the Team Formation Ranker (TFR) method.
 
 Steps
 -----
-  B  Post violation scorer — runs NormVio violation detectors on every post
-  C  User skill extractor  — correlates user votes with violation scores
-  D  Ranker + benchmark    — weighted vote by skill, K-fold evaluation
+  B  Post violation scorer     — runs NormVio violation detectors on every post
+  C  User skill extractor      — correlates user votes with violation scores (full dataset)
+  D  Ranker + benchmark        — weighted vote by skill, random K-fold evaluation (legacy)
+  E  Multi-split benchmark     — same ranker, evaluated on every split produced by
+                                  prepare_data_step1 (splits/, splits_full/,
+                                  splits_intersection/, windowed_folds_full/*,
+                                  windowed_folds_intersection/*). Skill is computed
+                                  on each split's TRAIN votes only, threshold is
+                                  calibrated on VAL, metrics are reported on TEST.
 
 Run all steps (default)
 -----------------------
@@ -23,6 +29,7 @@ Run all steps (default)
 Run individual steps
 --------------------
     python team_formation_ranker.py --steps C D   # assumes B output already exists
+    python team_formation_ranker.py --steps E      # only the per-split benchmark (needs B output)
 
 Architecture
 ------------
@@ -268,6 +275,49 @@ def load_votes(votes_dir: Path) -> pd.DataFrame:
     return votes[["username", "item_id", "vote", "community", "label"]]
 
 
+def _load_split_votes(path: Path) -> pd.DataFrame:
+    """
+    Load one train/val/test parquet produced by prepare_data_step1 and
+    reduce it to the columns the TFR pipeline needs, with the same dtype
+    handling as load_votes().
+    """
+    votes = pd.read_parquet(path)
+    votes["vote"] = votes["vote"].astype(float)
+    if "label" not in votes.columns:
+        votes["label"] = float("nan")
+    else:
+        votes["label"] = votes["label"].astype(float)
+    return votes[["username", "item_id", "vote", "community", "label"]]
+
+
+def discover_splits(votes_dir: Path) -> Dict[str, Path]:
+    """
+    Find every split directory produced by prepare_data_step1 under votes_dir,
+    i.e. any folder containing train_votes.parquet / val_votes.parquet /
+    test_votes.parquet.
+
+    Returns a dict: split_label -> directory Path, where split_label is
+    e.g. "splits", "splits_full", "splits_intersection",
+    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
+    """
+    found: Dict[str, Path] = {}
+
+    # simple three-way splits
+    for name in ("splits", "splits_full", "splits_intersection"):
+        d = votes_dir / name
+        if (d / "train_votes.parquet").exists():
+            found[name] = d
+
+    # windowed folds (one train/val/fixed-test per window size)
+    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
+        root = votes_dir / tag
+        if root.exists():
+            for w_dir in sorted(root.glob("w*")):
+                if (w_dir / "train_votes.parquet").exists():
+                    found[f"{tag}/{w_dir.name}"] = w_dir
+
+    return found
+
 
 # ============================================================================
 # STEP B — Post violation scorer
@@ -373,45 +423,161 @@ def step_B(votes_dir: Path, docs_path: Path, models_dir: Path,
 #     - skill is computed on temporally prior posts (chronological split)
 #
 # Agreement is computed on the TRAIN split only; skill is then applied
-# to score posts in VAL/TEST. This is handled inside step_D via the
-# chronological split already present in results/step1/reddit/splits/.
+# to score posts in VAL/TEST.
+#
+#   - step_C() (below) computes skill on the WHOLE dataset (legacy
+#     behaviour, kept for backwards compatibility / the CLI "C" step).
+#   - compute_user_skill() is the same logic factored out so step_E can
+#     call it once per split, passing only that split's TRAIN votes.
 
-def step_C(votes_dir: Path, scores_path: Path,
-           out_path: Path, min_votes: int) -> pd.DataFrame:
-    print("\n=== STEP C: User skill extractor (moderator agreement per category) ===")
+METADATA_PATH = Path("data/processed/user_metadata.csv")
 
-    votes  = load_votes(votes_dir)
-    scores = pd.read_parquet(scores_path)[["item_id", "top_violation_category"]]
+def _load_feature_skill(metadata_path: Path) -> pd.Series:
+    """
+    Compute a metadata-based skill score for each user, normalised to [-0.5, +0.5].
 
-    # join votes with NormVio category assignment
-    merged = votes.merge(scores, on="item_id", how="inner")
+    Features used:
+      - log(total_karma + 1)   — proxy for community standing
+      - tenure_days            — days since account creation at dataset cut-off
+      - is_suspended           — suspended users get NaN (excluded)
+      - has_verified_email     — small credibility signal
+
+    Each feature is percentile-ranked across all users, averaged, then
+    shifted to [-0.5, +0.5] so that the median user has skill_feat = 0.
+    Returns a Series indexed by username.
+    """
+    if not metadata_path.exists():
+        print(f"  [WARNING] metadata not found at {metadata_path} — skipping feature skill")
+        return pd.Series(dtype=float)
+
+    meta = pd.read_csv(metadata_path)
+
+    # exclude suspended accounts entirely
+    meta = meta[meta["is_suspended"] != True].copy()
+
+    # tenure in days from account creation to a fixed reference point
+    meta["account_created_utc"] = pd.to_numeric(meta["account_created_utc"], errors="coerce")
+    REF_TS = 1685000000  # ~May 2023, end of dataset window
+    meta["tenure_days"] = (REF_TS - meta["account_created_utc"]) / 86400
+    meta["tenure_days"] = meta["tenure_days"].clip(lower=0)
+
+    meta["log_karma"]  = np.log1p(meta["total_karma"].fillna(0).clip(lower=0))
+    meta["email_bonus"] = meta["has_verified_email"].fillna(False).astype(float)
+
+    # percentile rank each feature → [0, 1]
+    for col in ["log_karma", "tenure_days"]:
+        meta[f"{col}_rank"] = meta[col].rank(pct=True, na_option="bottom")
+
+    # composite: karma and tenure equally weighted, small email bonus
+    meta["feat_score"] = (
+        meta["log_karma_rank"] * 0.45 +
+        meta["tenure_days_rank"] * 0.45 +
+        meta["email_bonus"] * 0.10
+    )
+
+    # shift to [-0.5, +0.5]
+    meta["skill_feat"] = meta["feat_score"] - 0.5
+
+    result = meta.set_index("username")["skill_feat"]
+    print(f"  Feature skill computed for {len(result):,} users "
+          f"(mean={result.mean():.4f}, std={result.std():.4f})")
+    return result
+
+
+def compute_user_skill(
+    votes:         pd.DataFrame,
+    scores:        pd.DataFrame,
+    min_votes:     int,
+    metadata_path: Path = METADATA_PATH,
+    alpha:         float = 0.5,
+    verbose:       bool = True,
+) -> pd.DataFrame:
+    """
+    Core skill computation, factored out of step_C so it can be run on any
+    votes subset (e.g. a single split's TRAIN votes in step_E), not just the
+    full dataset.
+
+    Composite skill = alpha * skill_mod + (1-alpha) * skill_feat
+
+    skill_mod:  moderator-agreement per NormVio category [-0.5, +0.5],
+                computed only from the `votes` passed in (i.e. TRAIN votes
+                when called per-split).
+    skill_feat: metadata-based (karma + tenure + email)  [-0.5, +0.5]
+
+    alpha=1.0 → pure moderator agreement
+    alpha=0.0 → pure metadata
+    alpha=0.5 → equal combination (default)
+    """
+    scores_cat = scores[["item_id", "top_violation_category"]]
+    merged = votes.merge(scores_cat, on="item_id", how="inner")
     merged = merged.dropna(subset=["label", "top_violation_category"])
-    print(f"  Votes with category + label: {len(merged):,}")
+    if verbose:
+        print(f"  Votes with category + label: {len(merged):,}")
 
-    # agreement: +1 if vote == label, 0 otherwise
     merged["agrees"] = (merged["vote"] == merged["label"]).astype(float)
 
+    skill_feat = _load_feature_skill(metadata_path) if alpha < 1.0 else pd.Series(dtype=float)
+    use_meta   = len(skill_feat) > 0 and alpha < 1.0
+
     records = []
-    for (username, community), grp in tqdm(
-            merged.groupby(["username", "community"]),
-            desc="  user×community"):
+    iterator = merged.groupby(["username", "community"])
+    if verbose:
+        iterator = tqdm(iterator, desc="  user×community")
+    for (username, community), grp in iterator:
         row = {"username": username, "community": community,
                "n_votes": len(grp)}
+
+        feat = float(skill_feat.get(username, np.nan)) if use_meta else np.nan
+
         skill_vals = []
         for cat in CATEGORIES:
             cat_grp = grp[grp["top_violation_category"] == cat]
-            if len(cat_grp) < min_votes:
-                row[f"skill_{cat}"] = np.nan
-                continue
-            # skill = fraction of correct votes in this category
-            # subtract 0.5 so that chance level = 0, range [-0.5, +0.5]
-            skill = float(cat_grp["agrees"].mean()) - 0.5
-            row[f"skill_{cat}"] = skill
-            skill_vals.append(skill)
+
+            if len(cat_grp) >= min_votes:
+                s_mod = float(cat_grp["agrees"].mean()) - 0.5
+            else:
+                s_mod = np.nan
+
+            if not np.isnan(s_mod) and not np.isnan(feat):
+                s = alpha * s_mod + (1 - alpha) * feat
+            elif not np.isnan(s_mod):
+                s = s_mod          # no metadata → fall back to mod agreement
+            elif not np.isnan(feat) and alpha < 1.0:
+                s = feat           # no mod agreement → fall back to metadata
+            else:
+                s = np.nan
+
+            row[f"skill_{cat}"]     = s
+            row[f"skill_mod_{cat}"] = s_mod   # keep raw components for analysis
+            if not np.isnan(s):
+                skill_vals.append(s)
+
+        row["skill_feat"]    = feat
         row["skill_overall"] = float(np.nanmean(skill_vals)) if skill_vals else np.nan
         records.append(row)
 
-    out_df = pd.DataFrame(records)
+    return pd.DataFrame(records)
+
+
+def step_C(votes_dir: Path, scores_path: Path,
+           out_path: Path, min_votes: int,
+           metadata_path: Path = METADATA_PATH,
+           alpha: float = 0.5) -> pd.DataFrame:
+    """
+    Legacy CLI step: computes skill on the WHOLE dataset (load_votes(votes_dir),
+    i.e. the original 73k-vote CSV), unrestricted by any split. Kept for
+    backwards compatibility with the "C" step and with step_D's random KFold.
+
+    If skill_mod is NaN (not enough votes in category) but skill_feat
+    exists, skill_feat is used as fallback — increasing coverage.
+    """
+    print(f"\n=== STEP C: User skill extractor (alpha={alpha:.2f}) ===")
+
+    votes  = load_votes(votes_dir)
+    scores = pd.read_parquet(scores_path)
+
+    out_df = compute_user_skill(votes, scores, min_votes, metadata_path, alpha, verbose=True)
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
 
@@ -427,7 +593,7 @@ def step_C(votes_dir: Path, scores_path: Path,
 
 
 # ============================================================================
-# STEP D — Team Formation Ranker + benchmark
+# STEP D — Team Formation Ranker + benchmark (legacy: random K-fold)
 # ============================================================================
 
 def _compute_tfr_scores(
@@ -439,9 +605,6 @@ def _compute_tfr_scores(
                   .merge(scores[["item_id", "top_violation_category"]],
                          on="item_id", how="left"))
 
-    skill_lookup = (skills.set_index(["username", "community"])
-                          [[f"skill_{c}" for c in CATEGORIES]])
-
     # vectorised approach: merge votes with skill per item's top category
     # We do one pass per category to avoid O(N²) iterrows
     votes_scores = votes.merge(
@@ -450,23 +613,30 @@ def _compute_tfr_scores(
     )
 
     records = []
-    for cat in CATEGORIES:
-        subset = votes_scores[votes_scores["top_violation_category"] == cat].copy()
-        if subset.empty:
-            continue
-        # attach skill for this category
-        skill_col = f"skill_{cat}"
-        subset = subset.merge(
-            skills[["username", "community", skill_col]],
-            on=["username", "community"], how="left"
-        )
-        records.append(subset[["item_id", "vote", skill_col, "community", "label"]]
-                       .rename(columns={skill_col: "weight"}))
+    if len(skills) > 0:
+        for cat in CATEGORIES:
+            subset = votes_scores[votes_scores["top_violation_category"] == cat].copy()
+            if subset.empty:
+                continue
+            # attach skill for this category
+            skill_col = f"skill_{cat}"
+            subset = subset.merge(
+                skills[["username", "community", skill_col]],
+                on=["username", "community"], how="left"
+            )
+            records.append(subset[["item_id", "vote", skill_col, "community", "label"]]
+                           .rename(columns={skill_col: "weight"}))
 
-    # items with no category (NaN top_violation_category)
+    # items with no category (NaN top_violation_category), or no skills table at all
     no_cat = votes_scores[votes_scores["top_violation_category"].isna()].copy()
     no_cat["weight"] = np.nan
     records.append(no_cat[["item_id", "vote", "weight", "community", "label"]])
+
+    if len(skills) == 0:
+        # nothing to weight by — every vote is unweighted
+        rest = votes_scores[votes_scores["top_violation_category"].notna()].copy()
+        rest["weight"] = np.nan
+        records.append(rest[["item_id", "vote", "weight", "community", "label"]])
 
     all_votes = pd.concat(records, ignore_index=True)
 
@@ -548,7 +718,13 @@ def _evaluate(item_scores: pd.DataFrame,
 
 def step_D(votes_dir: Path, scores_path: Path, skills_path: Path,
            out_dir: Path, n_folds: int) -> Dict:
-    print("\n=== STEP D: Team Formation Ranker + benchmark ===")
+    """
+    Legacy benchmark: skill computed once on the whole dataset (step_C),
+    then a random sklearn KFold cross-validation is used purely to get
+    stable performance estimates. Does NOT use the splits produced by
+    prepare_data_step1 — see step_E for that.
+    """
+    print("\n=== STEP D: Team Formation Ranker + benchmark (random K-fold, legacy) ===")
 
     votes  = load_votes(votes_dir)
     scores = pd.read_parquet(scores_path)
@@ -609,6 +785,176 @@ def step_D(votes_dir: Path, scores_path: Path, skills_path: Path,
 
 
 # ============================================================================
+# STEP E — Multi-split benchmark (uses splits produced by prepare_data_step1)
+# ============================================================================
+
+def _add_net_vote_fallback(
+    item_scores: pd.DataFrame,
+    votes:       pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Force full coverage: for every item_id present in `votes` but missing
+    from `item_scores` (i.e. TFR found no skilled voter for it), add a row
+    using the item's net vote (mean of +1/-1 votes) as a stand-in score.
+
+    Net vote lies in [-1, 1], the same range as tfr_score (a weighted
+    average of skill*vote), so the SAME calibrated threshold can be applied
+    to both real and fallback rows without rescaling.
+
+    Only used for the "splits_full" benchmark, where every test item must
+    receive a prediction instead of being silently dropped for lack of
+    coverage.
+    """
+    covered_ids = set(item_scores["item_id"].unique()) if not item_scores.empty else set()
+    all_ids     = set(votes["item_id"].unique())
+    missing_ids = all_ids - covered_ids
+    if not missing_ids:
+        return item_scores
+
+    missing_votes = votes[votes["item_id"].isin(missing_ids)]
+    net_vote = (
+        missing_votes.groupby("item_id")
+        .agg(community=("community", "first"),
+             label=("label", "first"),
+             tfr_score=("vote", "mean"))
+        .reset_index()
+    )
+    net_vote["top_category"] = None
+    net_vote["is_fallback"]   = True
+
+    item_scores = item_scores.copy()
+    if "is_fallback" not in item_scores.columns:
+        item_scores["is_fallback"] = False
+
+    return pd.concat([item_scores, net_vote], ignore_index=True)
+
+
+def step_E_multi_split(
+    votes_dir:     Path,
+    scores_path:   Path,
+    out_dir:       Path,
+    min_votes:     int   = MIN_VOTES_SKILL,
+    metadata_path: Path  = METADATA_PATH,
+    alpha:         float = 0.5,
+) -> Dict[str, Dict]:
+    """
+    Run the TFR ranker on every split directory found under votes_dir
+    (splits/, splits_full/, splits_intersection/, and every window under
+    windowed_folds_full/ and windowed_folds_intersection/).
+
+    For each split:
+      - skill is computed with compute_user_skill() using ONLY that split's
+        train_votes.parquet (no leakage from val/test)
+      - item scores are computed for val_votes.parquet and test_votes.parquet
+        using that split's skill table
+      - the decision threshold is calibrated on val, then applied to test
+      - results are saved under out_dir/<split_label>/, mirroring the
+        directory layout produced by prepare_data_step1:
+
+          out_dir/
+            splits/{user_skill,item_scores_val,item_scores_test}.parquet + metrics.json
+            splits_full/...
+            splits_intersection/...
+            windowed_folds_full/w020/...
+            windowed_folds_full/w040/...
+            ...
+            windowed_folds_intersection/w020/...
+            ...
+            all_splits_summary.json   <- metrics for every split, for easy comparison
+    """
+    print("\n=== STEP E: TFR benchmark on every prepared split ===")
+
+    scores = pd.read_parquet(scores_path)
+    splits = discover_splits(votes_dir)
+
+    if not splits:
+        print(f"  [WARNING] no split directories found under {votes_dir} "
+              f"(expected splits/, splits_full/, splits_intersection/, "
+              f"windowed_folds_full/w*, windowed_folds_intersection/w*)")
+        return {}
+
+    print(f"  Found {len(splits)} split(s): {list(splits.keys())}")
+    summary: Dict[str, Dict] = {}
+
+    for split_name, split_path in splits.items():
+        print(f"\n  --- split: {split_name} ---")
+
+        train_votes = _load_split_votes(split_path / "train_votes.parquet")
+        val_votes   = _load_split_votes(split_path / "val_votes.parquet")
+        test_votes  = _load_split_votes(split_path / "test_votes.parquet")
+
+        skills = compute_user_skill(
+            train_votes, scores, min_votes, metadata_path, alpha, verbose=False
+        )
+        n_valid_skill = int(skills["skill_overall"].notna().sum()) if len(skills) else 0
+        print(f"    Skill computed on TRAIN only: {len(skills):,} user×community rows "
+              f"({n_valid_skill:,} with a valid overall skill)")
+
+        item_scores_val  = _compute_tfr_scores(val_votes,  scores, skills)
+        item_scores_test = _compute_tfr_scores(test_votes, scores, skills)
+
+        if item_scores_val.empty or item_scores_test.empty:
+            print(f"    [SKIP] no scoreable items in val or test for split '{split_name}' "
+                  f"(val={len(item_scores_val)}, test={len(item_scores_test)})")
+            continue
+
+        threshold = _calibrate(item_scores_val, item_scores_val["item_id"].values)
+
+        # "splits_full" only: force full test coverage using net-vote as a
+        # fallback score for items TFR couldn't score (no skilled voter),
+        # instead of silently dropping them. This measures how much
+        # performance degrades when every item must get a decision.
+        if split_name == "splits_full":
+            n_before = len(item_scores_test)
+            item_scores_test = _add_net_vote_fallback(item_scores_test, test_votes)
+            n_fallback = len(item_scores_test) - n_before
+        else:
+            n_fallback = 0
+
+        metrics = _evaluate(item_scores_test, item_scores_test["item_id"].values, threshold)
+
+        n_test_items = test_votes["item_id"].nunique()
+        metrics["split"]         = split_name
+        metrics["n_train_items"] = train_votes["item_id"].nunique()
+        metrics["n_val_items"]   = val_votes["item_id"].nunique()
+        metrics["n_test_items"]  = n_test_items
+        metrics["coverage_test"] = len(item_scores_test) / max(n_test_items, 1)
+        if split_name == "splits_full":
+            metrics["used_net_vote_fallback"] = True
+            metrics["n_fallback_items"]        = n_fallback
+
+        print(f"    thr={threshold:.3f} | macro_F1={metrics['macro_f1']:.4f} | "
+              f"AUC={metrics['roc_auc']:.4f} | coverage={metrics['coverage_test']:.1%}"
+              + (f" | fallback_items={n_fallback}" if split_name == "splits_full" else ""))
+
+        split_out_dir = out_dir / split_name
+        split_out_dir.mkdir(parents=True, exist_ok=True)
+        skills.to_parquet(split_out_dir / "user_skill.parquet", index=False)
+        item_scores_val.to_parquet(split_out_dir / "item_scores_val.parquet", index=False)
+        item_scores_test.to_parquet(split_out_dir / "item_scores_test.parquet", index=False)
+        with open(split_out_dir / "metrics.json", "w") as fh:
+            json.dump(metrics, fh, indent=2)
+        print(f"    Saved → {split_out_dir}/")
+
+        summary[split_name] = metrics
+
+    summary_path = out_dir / "all_splits_summary.json"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(summary_path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"\n  Summary of all splits saved → {summary_path}")
+
+    if summary:
+        print("\n  === Cross-split comparison ===")
+        print(f"    {'split':35s}  {'macro_F1':>9s}  {'AUC':>7s}  {'n_test':>7s}  {'coverage':>9s}")
+        for name, m in summary.items():
+            print(f"    {name:35s}  {m['macro_f1']:9.4f}  {m['roc_auc']:7.4f}  "
+                  f"{m['n_test_items']:7d}  {m['coverage_test']:9.1%}")
+
+    return summary
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -625,17 +971,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch_size",  type=int, default=32)
     p.add_argument("--device",      default="",
                    help="cuda | cpu (auto-detected if empty)")
-    p.add_argument("--n_folds",     type=int, default=5)
+    p.add_argument("--n_folds",     type=int, default=5,
+                   help="Number of folds for the legacy random K-fold benchmark (step D)")
     p.add_argument("--min_votes",   type=int, default=MIN_VOTES_SKILL,
                    help="Min votes per user×community×category to compute skill")
+    p.add_argument("--metadata_path", default="data/processed/user_metadata.csv",
+                   help="Path to user metadata CSV from Shayan")
+    p.add_argument("--alpha",         type=float, default=0.5,
+                   help="Weight for moderator-agreement skill vs metadata skill (1.0=pure mod, 0.0=pure meta)")
 
-    p.add_argument("--steps",       nargs="+", default=["B", "C", "D"],
-                   choices=["B", "C", "D"],
-                   help="Steps to run (default: all)")
+    p.add_argument("--steps",       nargs="+", default=["B", "C", "D", "E"],
+                   choices=["B", "C", "D", "E"],
+                   help="Steps to run (default: all, including E = per-split benchmark)")
     p.add_argument("--max_posts",   type=int, default=None,
                    help="Limit number of posts scored in step B (for testing)")
     p.add_argument("--skip_steps",  nargs="+", default=[],
-                   choices=["B", "C", "D"],
+                   choices=["B", "C", "D", "E"],
                    help="Steps to skip (use existing output files)")
     return p.parse_args()
 
@@ -656,6 +1007,7 @@ def main():
     # intermediate file paths
     viol_scores_path = out_dir / "post_violation_scores.parquet"
     user_skill_path  = out_dir / "user_skill.parquet"
+    per_split_dir    = out_dir / "benchmark_by_split"
 
     if "B" in steps_to_run:
         print("\nLoading BERT tokenizer ...")
@@ -667,11 +1019,18 @@ def main():
 
     if "C" in steps_to_run:
         step_C(Path(args.votes_dir), viol_scores_path,
-               user_skill_path, args.min_votes)
+               user_skill_path, args.min_votes,
+               metadata_path=Path(args.metadata_path),
+               alpha=args.alpha)
 
     if "D" in steps_to_run:
         step_D(Path(args.votes_dir), viol_scores_path,
                user_skill_path, out_dir, args.n_folds)
+
+    if "E" in steps_to_run:
+        step_E_multi_split(Path(args.votes_dir), viol_scores_path,
+                            per_split_dir, args.min_votes,
+                            Path(args.metadata_path), args.alpha)
 
     print("\nDone.")
 

@@ -14,7 +14,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import KFold
 import sys
 from pathlib import Path
-_SCORING_ROOT = Path(__file__).parent.parent / "communitynotes_main/scoring/src"
+_SCORING_ROOT = Path(__file__).parent.parent.parent / "communitynotes_main/scoring/src"
 if not _SCORING_ROOT.exists():
     raise ImportError(
         f"Cannot find the 'scoring' package at {_SCORING_ROOT}. "
@@ -47,6 +47,9 @@ MF_USER_INTERCEPT_LAMBDA= 0.03 * 5
 MF_NOTE_INTERCEPT_LAMBDA= 0.03 * 5
 MF_GLOBAL_INTERCEPT_LAMBDA = 0.03 * 5
 
+# minimum calibration sample size when falling back from an empty val split
+MIN_CAL_FALLBACK_ITEMS = 50
+
 
 # 1. load data
 def load_all_data(step1_dir: Path) -> pd.DataFrame:
@@ -57,6 +60,42 @@ def load_all_data(step1_dir: Path) -> pd.DataFrame:
     all_data = pd.concat([train, val, test], ignore_index=True)
     print(f"Loaded all: {len(all_data)} votes | {all_data['item_id'].nunique()} items")
     return all_data
+
+
+def discover_splits(votes_dir: Path) -> Dict[str, Path]:
+    """
+    Find every split directory produced by prepare_data_step1 under votes_dir,
+    i.e. any folder containing train_votes.parquet / val_votes.parquet /
+    test_votes.parquet.
+
+    Returns a dict: split_label -> directory Path, where split_label is
+    e.g. "splits", "splits_full", "splits_intersection",
+    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
+    """
+    found: Dict[str, Path] = {}
+
+    for name in ("splits", "splits_full", "splits_intersection"):
+        d = votes_dir / name
+        if (d / "train_votes.parquet").exists():
+            found[name] = d
+
+    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
+        root = votes_dir / tag
+        if root.exists():
+            for w_dir in sorted(root.glob("w*")):
+                if (w_dir / "train_votes.parquet").exists():
+                    found[f"{tag}/{w_dir.name}"] = w_dir
+
+    return found
+
+
+def load_split_data(split_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load one split's train/val/test parquets and their concatenation."""
+    train = pd.read_parquet(split_dir / "train_votes.parquet")
+    val   = pd.read_parquet(split_dir / "val_votes.parquet")
+    test  = pd.read_parquet(split_dir / "test_votes.parquet")
+    all_data = pd.concat([train, val, test], ignore_index=True)
+    return all_data, train, val, test
 
 
 # 2. mapping between string item_ids (e.g. 't3_dxlv9b') and contiguous int64 indices required by CN's noteIdKey
@@ -168,10 +207,25 @@ def evaluate(
     test_df:          pd.DataFrame,
     threshold:        float,
     item_vote_feats:  Optional[pd.DataFrame] = None,
+    fallback_scores:  Optional[Dict[str, float]] = None,
 ) -> Tuple[Dict, pd.DataFrame]:
+    """
+    fallback_scores: optional {item_id: net_vote_score} used ONLY for items
+    missing from note_params (i.e. the MF produced no i_n for them). When
+    given, those items get i_n = fallback_scores[item_id] instead of the
+    blanket 0.0 default — used by the "splits_full" multi-split benchmark to
+    force full test coverage via a net-vote fallback rather than a neutral
+    score. Items present in note_params are never touched.
+    """
     items_test = test_df.drop_duplicates("item_id")[["item_id", "label"]].copy()
     lookup = note_params.set_index("item_id")
-    items_test["i_n"] = items_test["item_id"].map(lookup[c.internalNoteInterceptKey]).fillna(0.0)
+    raw_i_n = items_test["item_id"].map(lookup[c.internalNoteInterceptKey])
+    n_missing_i_n = int(raw_i_n.isna().sum())
+    if fallback_scores:
+        fallback_series = items_test["item_id"].map(fallback_scores)
+        items_test["i_n"] = raw_i_n.fillna(fallback_series).fillna(0.0)
+    else:
+        items_test["i_n"] = raw_i_n.fillna(0.0)
     items_test["f_n"] = items_test["item_id"].map(lookup[c.internalNoteFactor1Key]).fillna(0.0)
     items_test["abs_f_n"]        = np.abs(items_test["f_n"])
     items_test["bridging_score"] = -items_test["abs_f_n"]
@@ -260,6 +314,7 @@ def evaluate(
         "roc_auc":                    auc,
         "polarity_correct":           polarity_correct,
         "n_items_test":               int(len(items_test)),
+        "n_items_missing_i_n":        n_missing_i_n,
         "n_bridging_items":           int(bridging_mask.sum()),
         "bridging_pct":               float(bridging_mask.mean()),
         "bridging_accuracy":          bridging_correct,
@@ -450,17 +505,212 @@ def run_step2(
         "item_scores":  pd.concat(fold_item_scores, ignore_index=True),
     }
 
+
+# ===========================================================================
+# MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
+# ===========================================================================
+#
+# CN's matrix factorization is transductive: it factorizes the (item, user,
+# vote) matrix and never sees ground-truth labels during fitting. So, unlike
+# TFR/SEF where "train only" matters to avoid leaking labels into a
+# supervised model, here the only thing that must come from the right split
+# is which votes feed the MF (kept to this split's own item population, so
+# no vote from another split/window leaks in) and which labels are used for
+# threshold calibration (VAL) vs evaluation (TEST).
+
+def run_single_split_cn(
+    split_label: str,
+    all_df:      pd.DataFrame,
+    train_df:    pd.DataFrame,
+    val_df:      pd.DataFrame,
+    test_df:     pd.DataFrame,
+    vote_sign:   int = 1,
+) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[float]]:
+    """
+    Fit CN's MF on this split's own votes (train+val+test — MF never sees
+    labels, so this is not a label-leakage risk, only a "keep this window's
+    item population self-contained" guarantee), calibrate the decision
+    threshold on this split's VAL labels, evaluate on this split's TEST
+    labels.
+
+    If VAL is empty (e.g. windowed_folds at w=100%, where the whole pool
+    goes to train), falls back to calibrating on a labelled sample carved
+    out of TRAIN instead of skipping the split outright — MF itself never
+    used those labels, so using them for calibration only is safe.
+
+    Returns (metrics | None, item_scores, cal_df, note_params, rater_params,
+    global_intercept). metrics is None (and the rest empty/None) if the
+    split has no usable test set.
+    """
+    if test_df.empty or test_df["item_id"].nunique() == 0:
+        log.warning("  [%s] empty test set — skipped.", split_label)
+        return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
+
+    item_vote_feats = compute_item_vote_features(all_df)
+    note_params, rater_params, global_intercept = run_cn_mf(all_df, vote_sign)
+    log.info(
+        "  [%s] Converged | mean|f_n|=%.4f | mean|f_u|=%.4f",
+        split_label,
+        note_params[c.internalNoteFactor1Key].abs().mean(),
+        rater_params[c.internalRaterFactor1Key].abs().mean(),
+    )
+
+    if val_df.empty or val_df["item_id"].nunique() == 0:
+        log.warning(
+            "  [%s] empty val split — falling back to a calibration sample "
+            "carved from TRAIN labels (MF itself never used those labels).",
+            split_label,
+        )
+        train_items = train_df.drop_duplicates("item_id")["item_id"].values
+        if len(train_items) == 0:
+            log.warning("  [%s] no train items either — skipped.", split_label)
+            return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
+        rng = np.random.RandomState(42)
+        sample_size = min(len(train_items), max(MIN_CAL_FALLBACK_ITEMS, int(0.2 * len(train_items))))
+        sample_ids  = rng.choice(train_items, size=sample_size, replace=False)
+        cal_source_df = train_df[train_df["item_id"].isin(sample_ids)]
+    else:
+        cal_source_df = val_df
+
+    threshold, cal_df    = calibrate_threshold(note_params, cal_source_df)
+
+    # "splits_full" only: force full test coverage using this item's net
+    # vote (mean of +1/-1 votes in this split's test set) for any item the
+    # MF produced no i_n for, instead of leaving it at a neutral 0.0.
+    fallback_scores = None
+    if split_label == "splits_full":
+        fallback_scores = test_df.groupby("item_id")["vote"].mean().to_dict()
+
+    metrics, item_scores = evaluate(note_params, test_df, threshold, item_vote_feats, fallback_scores)
+    if split_label == "splits_full" and metrics.get("n_items_missing_i_n", 0) > 0:
+        metrics["used_net_vote_fallback"] = True
+        metrics["n_fallback_items"]       = metrics["n_items_missing_i_n"]
+
+    metrics["split"]         = split_label
+    metrics["n_train_items"] = int(train_df["item_id"].nunique())
+    metrics["n_val_items"]   = int(val_df["item_id"].nunique())
+
+    log.info(
+        "  [%s] macro_f1=%.4f  roc_auc=%.4f  f1_pos=%.4f  f1_neg=%.4f  bridging=%.1f%%",
+        split_label, metrics["macro_f1"], metrics["roc_auc"],
+        metrics["f1_pos"], metrics["f1_neg"], 100 * metrics["bridging_pct"],
+    )
+
+    return metrics, item_scores, cal_df, note_params, rater_params, global_intercept
+
+
+def step_multi_split(
+    votes_dir:  Path,
+    output_dir: Path,
+    vote_sign:  int = 1,
+) -> Dict[str, Dict]:
+    """
+    Run Community Notes' MF on every split directory found under votes_dir
+    (splits/, splits_full/, splits_intersection/, and every window under
+    windowed_folds_full/ and windowed_folds_intersection/).
+
+    Results are saved under output_dir/<split_label>/, mirroring the
+    directory layout produced by prepare_data_step1:
+
+      output_dir/
+        splits/{item_scores,user_params,val_calibration}.parquet
+               + model_params.npz + metrics.json [+ user_analysis.parquet]
+        splits_full/...
+        splits_intersection/...
+        windowed_folds_full/w020/...
+        ...
+        windowed_folds_intersection/w020/...
+        ...
+        all_splits_summary.json   <- metrics for every split, for comparison
+                                      (PR-curve arrays stripped for brevity)
+    """
+    splits = discover_splits(votes_dir)
+    if not splits:
+        log.warning(
+            "No split directories found under %s (expected splits/, "
+            "splits_full/, splits_intersection/, windowed_folds_full/w*, "
+            "windowed_folds_intersection/w*)", votes_dir,
+        )
+        return {}
+
+    log.info("Found %d split(s): %s", len(splits), list(splits.keys()))
+    summary: Dict[str, Dict] = {}
+
+    for split_name, split_path in splits.items():
+        log.info("--- split: %s ---", split_name)
+
+        all_df, train_df, val_df, test_df = load_split_data(split_path)
+
+        metrics, item_scores, cal_df, note_params, rater_params, global_intercept = \
+            run_single_split_cn(split_name, all_df, train_df, val_df, test_df, vote_sign)
+
+        if metrics is None:
+            continue
+
+        user_params   = build_user_params(rater_params)
+        user_analysis = analyze_user_polarization(rater_params, votes_dir)
+
+        split_out_dir = output_dir / split_name
+        split_out_dir.mkdir(parents=True, exist_ok=True)
+        item_scores.to_parquet(split_out_dir / "item_scores.parquet", index=False)
+        user_params.to_parquet(split_out_dir / "user_params.parquet", index=False)
+        cal_df.to_parquet(split_out_dir / "val_calibration.parquet", index=False)
+        save_model_npz(note_params, rater_params, global_intercept, split_out_dir / "model_params.npz")
+        with open(split_out_dir / "metrics.json", "w") as fh:
+            json.dump(metrics, fh, indent=2)
+        if user_analysis is not None and not user_analysis.empty:
+            user_analysis.to_parquet(split_out_dir / "user_analysis.parquet", index=False)
+        log.info("  [%s] Saved → %s", split_name, split_out_dir)
+
+        summary[split_name] = metrics
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # strip the large PR-curve arrays for the cross-split summary file
+    summary_slim = {
+        name: {k: v for k, v in m.items()
+               if k not in ("pr_curve_precision", "pr_curve_recall", "pr_curve_thresholds")}
+        for name, m in summary.items()
+    }
+    summary_path = output_dir / "all_splits_summary.json"
+    with open(summary_path, "w") as fh:
+        json.dump(summary_slim, fh, indent=2)
+    log.info("Summary of all splits saved → %s", summary_path)
+
+    if summary_slim:
+        log.info("=== Cross-split comparison ===")
+        for name, m in summary_slim.items():
+            log.info("  %-35s macro_F1=%.4f  AUC=%.4f  n_test=%d  bridging=%.1f%%",
+                     name, m["macro_f1"], m["roc_auc"], m["n_items_test"],
+                     100 * m["bridging_pct"])
+
+    return summary
+
+
 if __name__ == "__main__":
     run_step2(
         step1_dir  = Path("results/step1/reddit"),
         output_dir = Path("results/step2/reddit_cn"),
+    )
+    step_multi_split(
+        votes_dir  = Path("results/step1/reddit"),
+        output_dir = Path("results/step2/reddit_cn/benchmark_by_split"),
     )
     run_step2(
         step1_dir  = Path("results/step1/reddit"),
         output_dir = Path("results/step2/reddit_cn_inverted"),
         vote_sign  = -1,
     )
+    step_multi_split(
+        votes_dir  = Path("results/step1/reddit"),
+        output_dir = Path("results/step2/reddit_cn_inverted/benchmark_by_split"),
+        vote_sign  = -1,
+    )
     run_step2(
         step1_dir=Path("results/step1/wikipedia"),
         output_dir=Path("results/step2/wikipedia"),
+    )
+    step_multi_split(
+        votes_dir  = Path("results/step1/wikipedia"),
+        output_dir = Path("results/step2/wikipedia/benchmark_by_split"),
     )

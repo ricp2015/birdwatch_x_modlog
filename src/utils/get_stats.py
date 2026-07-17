@@ -72,6 +72,25 @@ def print_outcome_stats(name, raw_series, filt_series):
         perc = (f / r * 100) if r > 0 else 0
         print(f"  {val:<8} {r:>10,} {f:>10,}   ({perc:.1f}%)")
 
+def print_label_by_posts(name, raw_df, filt_df):
+    # Post unici prima del filtro: per ogni item_id, prendiamo la label (assumendo sia univoca)
+    raw_posts = raw_df[["item_id", "label"]].drop_duplicates(subset=["item_id"])
+    # Post unici dopo il filtro
+    filt_posts = filt_df[["item_id", "label"]].drop_duplicates(subset=["item_id"])
+
+    raw_counts = raw_posts["label"].value_counts().sort_index()
+    filt_counts = filt_posts["label"].value_counts().sort_index()
+
+    print(f"\n{name} distribution (per unique post):")
+    print(f"  {'label':<8} {'before':>10} {'after':>10}")
+    print(f"  {'-'*32}")
+
+    for val in [-1, 1]:
+        r = raw_counts.get(val, 0)
+        f = filt_counts.get(val, 0)
+        perc = (f / r * 100) if r > 0 else 0
+        print(f"  {val:<8} {r:>10,} {f:>10,}   ({perc:.1f}%)")
+
 
 # ---- RUN ----
 raw = load(INPUT_PATH)

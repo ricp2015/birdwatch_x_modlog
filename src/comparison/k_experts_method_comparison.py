@@ -405,3 +405,230 @@ top10 = train_scores.sort_values("VAR_score", ascending=False).head(10)
 for _, row in top10.iterrows():
     n = test_df[test_df["username"] == row["username"]]["item_id"].nunique()
     print(f"  {row['username']:<25} VAR={row['VAR_score']:.3f}  items_voted={n}")
+
+
+# ============================================================================
+# MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
+# ============================================================================
+#
+# Everything above runs VAR on its own ad-hoc 80/20 temporal split of the raw
+# CSV (with its own iterative density cleanup and a train∩test user
+# restriction), and picks the best K per strategy by looking directly at
+# macro_f1 on the TEST set itself — a real leakage, since the same data used
+# to pick the hyperparameter is also the one reported as the result.
+#
+# This section instead evaluates VAR on every split already produced by
+# prepare_data_step1 (splits/, splits_full/, splits_intersection/,
+# windowed_folds_full/*, windowed_folds_intersection/*):
+#   - VAR scores are computed on TRAIN only (calculate_var_scores)
+#   - the best (strategy, selection-mode, K) combination is chosen by
+#     evaluating on VAL
+#   - final metrics are reported on TEST, using that fixed combination
+#     (never re-selected against TEST)
+#
+# It does not touch or re-run anything above; it's purely additive.
+
+VOTES_DIR_DEFAULT      = Path("results/step1/reddit")
+VAR_MULTI_SPLIT_OUTPUT = OUTPUT_ROOT / "VAR_by_split"
+MIN_CAL_FALLBACK_ITEMS = 50
+
+
+def discover_splits(votes_dir: Path) -> dict:
+    """
+    Find every split directory produced by prepare_data_step1 under votes_dir,
+    i.e. any folder containing train_votes.parquet / val_votes.parquet /
+    test_votes.parquet.
+
+    Returns a dict: split_label -> directory Path, where split_label is
+    e.g. "splits", "splits_full", "splits_intersection",
+    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
+    """
+    found = {}
+    for name in ("splits", "splits_full", "splits_intersection"):
+        d = votes_dir / name
+        if (d / "train_votes.parquet").exists():
+            found[name] = d
+    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
+        root = votes_dir / tag
+        if root.exists():
+            for w_dir in sorted(root.glob("w*")):
+                if (w_dir / "train_votes.parquet").exists():
+                    found[f"{tag}/{w_dir.name}"] = w_dir
+    return found
+
+
+def load_split_data(split_dir: Path):
+    """Load one split's train/val/test parquets (no cleanup re-applied — the
+    splits from prepare_data_step1 are already density-filtered)."""
+    train = pd.read_parquet(split_dir / "train_votes.parquet")
+    val   = pd.read_parquet(split_dir / "val_votes.parquet")
+    test  = pd.read_parquet(split_dir / "test_votes.parquet")
+    return train, val, test
+
+
+def _fallback_val_from_train(split_label: str, train_df: pd.DataFrame):
+    """Carve a calibration sample out of TRAIN when VAL is empty (e.g.
+    windowed_folds at w=100%, where the whole pool goes to train)."""
+    train_items = train_df["item_id"].unique()
+    if len(train_items) == 0:
+        return None
+    rng = np.random.RandomState(42)
+    sample_size = min(len(train_items), max(MIN_CAL_FALLBACK_ITEMS, int(0.2 * len(train_items))))
+    sample_ids = rng.choice(train_items, size=sample_size, replace=False)
+    return train_df[train_df["item_id"].isin(sample_ids)]
+
+
+def run_single_split_var(split_label: str, train_df: pd.DataFrame,
+                          val_df: pd.DataFrame, test_df: pd.DataFrame):
+    """
+    Train VAR scores on TRAIN, select the best (strategy, selection-mode, K)
+    combination by evaluating on VAL, then report final metrics on TEST with
+    that fixed combination.
+
+    Returns (best_cfg: dict, metrics: dict) or (None, None) if the split has
+    no usable data.
+    """
+    if test_df.empty or test_df["item_id"].nunique() == 0:
+        print(f"  [{split_label}] empty test set — skipped.")
+        return None, None
+
+    val_for_cal = val_df
+    if val_df.empty or val_df["item_id"].nunique() == 0:
+        print(f"  [{split_label}] empty val split — falling back to a sample carved from TRAIN.")
+        val_for_cal = _fallback_val_from_train(split_label, train_df)
+        if val_for_cal is None:
+            print(f"  [{split_label}] no train items either — skipped.")
+            return None, None
+
+    print(f"  [{split_label}] Training VAR on {train_df['item_id'].nunique()} train items...")
+    scores = calculate_var_scores(train_df)
+
+    selection_modes = {"per_community": _base_votes, "per_item": _base_votes_per_item}
+
+    best_cfg, best_f1_val = None, -1.0
+    for agg_name, agg_fn in AGGREGATIONS.items():
+        for mode_name, base_fn in selection_modes.items():
+            for k in K_VALUES:
+                val_votes = base_fn(val_for_cal, scores, k)
+                if val_votes.empty:
+                    continue
+                val_decisions = agg_fn(val_votes)
+                if val_decisions["label"].nunique() < 2:
+                    continue
+                val_metrics = evaluate_fold(val_decisions)
+                if val_metrics["macro_f1"] > best_f1_val:
+                    best_f1_val = val_metrics["macro_f1"]
+                    best_cfg = {"strategy": agg_name, "mode": mode_name, "k": k}
+
+    if best_cfg is None:
+        print(f"  [{split_label}] no valid (strategy, K) found on VAL — skipped.")
+        return None, None
+
+    agg_fn  = AGGREGATIONS[best_cfg["strategy"]]
+    base_fn = selection_modes[best_cfg["mode"]]
+
+    test_votes     = base_fn(test_df, scores, best_cfg["k"])
+    test_decisions = agg_fn(test_votes)
+
+    # "splits_full" only: force full test coverage. If none of the top-K
+    # selected users voted on an item, that item is silently absent from
+    # test_decisions (a real coverage gap for VAR). Add it back using the
+    # item's net vote (over ALL voters in this split's test set, not just
+    # the top-K), instead of dropping it from evaluation.
+    n_fallback = 0
+    if split_label == "splits_full":
+        covered_ids = set(test_decisions["item_id"].unique()) if not test_decisions.empty else set()
+        all_ids     = set(test_df["item_id"].unique())
+        missing_ids = all_ids - covered_ids
+        if missing_ids:
+            n_fallback = len(missing_ids)
+            missing_votes = test_df[test_df["item_id"].isin(missing_ids)]
+            fallback_rows = (
+                missing_votes.groupby(["community", "item_id"])
+                .agg(predicted=("vote", lambda x: 1 if x.mean() >= 0 else -1),
+                     label=("label", "first"))
+                .reset_index()
+            )
+            test_decisions = pd.concat([test_decisions, fallback_rows], ignore_index=True)
+
+    if test_decisions["label"].nunique() < 2:
+        print(f"  [{split_label}] single class in test — skipped.")
+        return None, None
+    test_metrics = evaluate_fold(test_decisions)  # single pass over the whole TEST set, no sub-bucketing
+
+    test_metrics.update({
+        "split":         split_label,
+        "strategy":      best_cfg["strategy"],
+        "mode":          best_cfg["mode"],
+        "k":             best_cfg["k"],
+        "val_macro_f1":  best_f1_val,
+        "n_train_items": int(train_df["item_id"].nunique()),
+        "n_val_items":   int(val_df["item_id"].nunique()),
+        "n_test_items":  int(test_df["item_id"].nunique()),
+    })
+    if split_label == "splits_full" and n_fallback > 0:
+        test_metrics["used_net_vote_fallback"] = True
+        test_metrics["n_fallback_items"]       = n_fallback
+
+    print(
+        f"  [{split_label}] best on VAL: {best_cfg['strategy']}_{best_cfg['mode']} k={best_cfg['k']} "
+        f"(val macro_f1={best_f1_val:.3f}) -> TEST macro_f1={test_metrics['macro_f1']:.3f} "
+        f"roc_auc={test_metrics['roc_auc']:.3f}"
+        + (f" | fallback_items={n_fallback}" if split_label == "splits_full" else "")
+    )
+    return best_cfg, test_metrics
+
+
+def step_multi_split(votes_dir: Path = VOTES_DIR_DEFAULT,
+                      output_dir: Path = VAR_MULTI_SPLIT_OUTPUT) -> dict:
+    """
+    Run VAR on every split directory found under votes_dir (splits/,
+    splits_full/, splits_intersection/, and every window under
+    windowed_folds_full/ and windowed_folds_intersection/).
+
+    Results are saved under output_dir/<split_label>/metrics.json, mirroring
+    the layout used by the other methods' multi-split benchmarks, plus a
+    final all_splits_summary.json comparing every split.
+    """
+    splits = discover_splits(votes_dir)
+    if not splits:
+        print(f"No split directories found under {votes_dir} "
+              f"(expected splits/, splits_full/, splits_intersection/, "
+              f"windowed_folds_full/w*, windowed_folds_intersection/w*)")
+        return {}
+
+    print(f"Found {len(splits)} split(s): {list(splits.keys())}")
+    summary = {}
+
+    for split_name, split_path in splits.items():
+        print(f"\n--- split: {split_name} ---")
+        train_df, val_df, test_df = load_split_data(split_path)
+        best_cfg, metrics = run_single_split_var(split_name, train_df, val_df, test_df)
+        if metrics is None:
+            continue
+
+        split_out_dir = output_dir / split_name
+        split_out_dir.mkdir(parents=True, exist_ok=True)
+        with open(split_out_dir / "metrics.json", "w") as fh:
+            json.dump(metrics, fh, indent=2)
+        print(f"  Saved → {split_out_dir}")
+
+        summary[split_name] = metrics
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "all_splits_summary.json"
+    with open(summary_path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"\nSummary of all splits saved → {summary_path}")
+
+    if summary:
+        print("\n=== Cross-split comparison ===")
+        for name, m in summary.items():
+            print(f"  {name:35s} {m['strategy']}_{m['mode']} k={m['k']:<3} "
+                  f"macro_F1={m['macro_f1']:.4f}  AUC={m['roc_auc']:.4f}  n_test={m['n_test_items']}")
+
+    return summary
+
+
+print("\nRunning multi-split VAR benchmark...")
+step_multi_split()

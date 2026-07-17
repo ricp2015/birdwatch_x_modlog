@@ -1,19 +1,3 @@
-"""
-embed_helper.py
-===============
-Standalone embedding script, called as a subprocess by step3_expert_finder.py.
-
-Running in a fresh process avoids the macOS fork+PyTorch segfault that occurs
-when sentence-transformers is imported inside a process that was forked.
-
-Arguments:
-  --texts-path   path to a .pkl file containing a list of strings to embed
-  --out-path     path where the output .npy array will be saved
-  --model-name   HuggingFace model name
-  --batch-size   sentences per batch (default 64)
-  --normalize    if set, L2-normalise the output embeddings
-"""
-
 import argparse
 import os
 import pickle
@@ -22,7 +6,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()

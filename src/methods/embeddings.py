@@ -1,31 +1,37 @@
 """
-step3_expert_finder.py  (v6)
+step3_expert_finder.py  (v7)
 ============================
-Semantic Expert Finder — changes vs v5:
+Semantic Expert Finder — changes vs v6:
 
-  V6-1  Signal C restored in formula with gamma=1-alpha-beta.
-        With VAL_GRID_SAMPLE=3000, gamma=0.10-0.20 is consistently non-zero.
+  V7-1  Asymmetric negative predictor.
+        For posts with at least MIN_NEG_EXPERTS reliable downvoter experts,
+        a dedicated binary classifier is trained to predict "remove" using
+        only downvoter-expert features. Its output probability is added as
+        a feature to the main meta-model (neg_expert_proba).
+        This directly implements the supervisor suggestion to restrict
+        ranking to downvotes for the negative class.
 
-  V6-2  Vectorised compute_expert_weights:
-        - FAISS batch query for all test posts at once
-        - Signal C as matrix multiply (user_emb @ post_emb.T)
-        - Signal A inner loop uses plain dict lookups instead of pandas iterrows
-        ~10-15x speedup on the main bottleneck.
+  V7-2  Model selection: Ridge, XGBoost, GradientBoosting are all trained
+        on each fold's training data and evaluated via cross-validation.
+        The best model is selected per fold and used for prediction.
+        Winner is logged per fold and aggregated in metrics.json.
 
-  V6-3  Vectorised _compute_weighted_votes: groupby + numpy, no per-post loop.
+  V7-3  Additional features for the negative predictor:
+        wv_neg_only    (weighted vote of downvoter experts only)
+        n_neg_reliable (number of downvoter experts with reliability > 0.1)
+        neg_expert_coverage (fraction of downvoters that are reliable experts)
 
-  V6-4  Batch predict_meta_model: single clf.predict/predict_proba call.
-
-  V6-5  Grid search: FAISS results precomputed once for all K values and reused
-        across alpha/beta. Only weight combination varies in inner loop.
-
-Signals:
-  A  local_reliability   FAISS-neighbour reliability (|prec-0.5|, sim-weighted)
-  B  sub_reliability     subreddit-level reliability
-  C  signal_c_directed   cosine_sim if vote=-1, else 1-cosine_sim
-
-  expert_weight = alpha*A + beta*B + (1-alpha-beta)*C
-  effective_vote = vote * bias_sign  (contrarians flipped)
+  V7-4  Multi-split benchmark (run_single_split / step_multi_split).
+        The per-fold logic used by the legacy random K-fold (run_kfold) is
+        factored out into run_single_split(train_ids, val_ids, test_ids, ...),
+        so it can be reused with the REAL train/val/test splits produced by
+        prepare_data_step1 (splits/, splits_full/, splits_intersection/,
+        windowed_folds_full/*, windowed_folds_intersection/*), instead of a
+        random sklearn KFold. Hyperparameter grid search and threshold
+        calibration now use the split's actual VAL set (when available);
+        the meta-model and negative predictor are trained only on TRAIN;
+        metrics are reported on TEST. Results are saved per split, mirroring
+        the folder layout produced by prepare_data_step1.
 """
 
 from __future__ import annotations
@@ -44,11 +50,19 @@ import pandas as pd
 import subprocess
 import sys
 import tempfile
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+
+try:
+    from xgboost import XGBClassifier
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+    log_msg = "xgboost not installed — skipping XGB. Run: pip install xgboost"
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -74,11 +88,15 @@ ALPHA          = 0.5
 BETA           = 0.3
 LAMBDA_SMOOTH  = 2.0
 TOP_T          = 3
-CAL_SAMPLE     = 500
+CAL_SAMPLE     = 4000
 MIN_SUB_SAMPLES = 50
 
 # Number of per-rank expert slots in feature vector
 RANK_N = 5
+
+# Minimum reliable downvoter experts required to activate the neg predictor
+MIN_NEG_EXPERTS = 1
+NEG_RELIABILITY_THR = 0.1   # minimum reliability to count as "reliable"
 
 # ---------------------------------------------------------------------------
 # Grid search
@@ -156,6 +174,47 @@ def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
     log.info("Votes: %d rows | %d posts | %d users", len(df),
              df["item_id"].nunique(), df["username"].nunique())
     return df
+
+
+def _load_split_votes(path: Path) -> pd.DataFrame:
+    """
+    Load one train/val/test parquet produced by prepare_data_step1.
+    Unlike load_votes() this keeps ALL columns present in the parquet
+    (timestamp, any merged metadata, ...) — it only enforces the dtypes
+    and non-null constraints the rest of this module relies on.
+    """
+    df = pd.read_parquet(path)
+    df = df.dropna(subset=["item_id", "username", "vote", "label"])
+    df["vote"]  = df["vote"].astype(int)
+    df["label"] = df["label"].astype(int)
+    return df
+
+
+def discover_splits(votes_dir: Path) -> Dict[str, Path]:
+    """
+    Find every split directory produced by prepare_data_step1 under votes_dir,
+    i.e. any folder containing train_votes.parquet / val_votes.parquet /
+    test_votes.parquet.
+
+    Returns a dict: split_label -> directory Path, where split_label is
+    e.g. "splits", "splits_full", "splits_intersection",
+    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
+    """
+    found: Dict[str, Path] = {}
+
+    for name in ("splits", "splits_full", "splits_intersection"):
+        d = votes_dir / name
+        if (d / "train_votes.parquet").exists():
+            found[name] = d
+
+    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
+        root = votes_dir / tag
+        if root.exists():
+            for w_dir in sorted(root.glob("w*")):
+                if (w_dir / "train_votes.parquet").exists():
+                    found[f"{tag}/{w_dir.name}"] = w_dir
+
+    return found
 
 
 def load_post_texts() -> pd.DataFrame:
@@ -698,6 +757,31 @@ def extract_post_features(
                     feats[f"r{r+1}_{tag}_evote"]       = dv
 
         feats["item_id"] = item_id
+
+        # V7-3: downvoter-specific features for the negative predictor
+        if not pw.empty:
+            pw_neg_all = pw[pw["vote"] == -1]
+            reliable_neg = pw_neg_all[
+                pw_neg_all.get("reliability", pd.Series(dtype=float)).reindex(pw_neg_all.index, fill_value=0.0) > NEG_RELIABILITY_THR
+            ] if "reliability" in pw_neg_all.columns else pw_neg_all
+            feats["n_neg_reliable"] = float(len(reliable_neg))
+            feats["neg_expert_coverage"] = float(len(reliable_neg) / max(len(pw_neg_all), 1))
+            if not reliable_neg.empty:
+                top_neg_r = reliable_neg.nlargest(5, "expert_weight")
+                w_neg_r   = top_neg_r["expert_weight"].values.clip(min=1e-9)
+                feats["wv_neg_only"] = float(
+                    np.dot(w_neg_r, top_neg_r[vote_col].values.astype(float)) / w_neg_r.sum()
+                )
+            else:
+                feats["wv_neg_only"] = 0.0
+        else:
+            feats["n_neg_reliable"]      = 0.0
+            feats["neg_expert_coverage"] = 0.0
+            feats["wv_neg_only"]         = 0.0
+
+        # placeholder for neg predictor proba — filled later in run_kfold / run_single_split
+        feats["neg_expert_proba"] = 0.5
+
         rows.append(feats)
 
     return pd.DataFrame(rows)
@@ -708,72 +792,246 @@ def get_meta_feature_cols(feat_df: pd.DataFrame) -> List[str]:
 
 
 # ===========================================================================
-# 6. META-MODEL  (I5: GradientBoostingClassifier replaces LogisticRegression)
+# 6. META-MODEL  (V7-2: model selection — Ridge / XGB / GBT)
 # ===========================================================================
+
+class _XGBWrapper:
+    """
+    Wraps an XGBClassifier trained on 0/1 labels to expose the same
+    predict / predict_proba interface as sklearn models trained on -1/+1.
+    """
+    def __init__(self, clf):
+        self._clf    = clf
+        self.classes_ = np.array([-1, 1])
+
+    def predict(self, X):
+        raw = self._clf.predict(X)
+        return np.where(raw == 1, 1, -1)
+
+    def predict_proba(self, X):
+        # columns: [proba_class0(=-1), proba_class1(=+1)]
+        return self._clf.predict_proba(X)   # already [p0, p1]
+
+    def get_params(self, deep=True):
+        return self._clf.get_params(deep=deep)
+
+    @property
+    def feature_importances_(self):
+        return self._clf.feature_importances_
+
+
+def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
+    """Build candidate models for selection."""
+    candidates = [
+        ("Ridge", LogisticRegression(
+            penalty="l2", C=0.1, class_weight="balanced",
+            max_iter=1000, solver="lbfgs",
+        )),
+        ("GBT", GradientBoostingClassifier(
+            n_estimators=200, learning_rate=0.05,
+            max_depth=4, subsample=0.8,
+            min_samples_leaf=20, random_state=42,
+        )),
+    ]
+    if HAS_XGBOOST:
+        pos_count  = int((y == 1).sum())
+        neg_count  = int((y == -1).sum())
+        scale_pos  = neg_count / max(pos_count, 1)
+        candidates.append(("XGB", XGBClassifier(
+            n_estimators=200, learning_rate=0.05,
+            max_depth=4, subsample=0.8,
+            scale_pos_weight=scale_pos,
+            eval_metric="logloss",
+            verbosity=0, random_state=42,
+        )))
+    return candidates
+
 
 def train_meta_model(
     feat_df:   pd.DataFrame,
     labels:    Dict[str, int],
     feat_cols: List[str],
-) -> Tuple[GradientBoostingClassifier, StandardScaler]:
+) -> Tuple[Any, StandardScaler, str]:
     """
-    I5: GradientBoostingClassifier.
-    Handles correlated features and non-linear interactions natively.
-    subsample=0.8 provides implicit regularisation against overfitting.
-    Class imbalance handled via sample_weight (balanced reweighting).
+    V7-2: trains Ridge, GBT, and XGBoost (if available).
+    Selects best by 3-fold CV macro F1 on the training sample.
+    Returns (best_clf, scaler, model_name).
+    GBT/XGB use sample_weight for imbalance; Ridge uses class_weight='balanced'.
     """
     items = feat_df[feat_df["item_id"].isin(labels)]["item_id"].tolist()
     X = feat_df.set_index("item_id").loc[items, feat_cols].values.astype(float)
     y = np.array([labels[i] for i in items])
 
-    # balanced sample weights
-    counts   = {c: (y == c).sum() for c in np.unique(y)}
-    max_cnt  = max(counts.values())
-    sw       = np.array([max_cnt / counts[yi] for yi in y])
+    counts  = {c: (y == c).sum() for c in np.unique(y)}
+    max_cnt = max(counts.values())
+    sw      = np.array([max_cnt / counts[yi] for yi in y])
 
     scaler = StandardScaler()
     X_s    = scaler.fit_transform(X)
 
-    clf = GradientBoostingClassifier(
-        n_estimators      = 200,
-        learning_rate     = 0.05,
-        max_depth         = 4,
-        subsample         = 0.8,
-        min_samples_leaf  = 20,
-        random_state      = 42,
-    )
-    clf.fit(X_s, y, sample_weight=sw)
+    candidates = _build_candidates(y)
+    best_name, best_clf, best_score = None, None, -1.0
 
-    # log top-3 feature importances
-    top3 = sorted(zip(feat_cols, clf.feature_importances_),
-                  key=lambda x: x[1], reverse=True)[:3]
-    log.info("  Meta-model top features: %s",
+    for name, clf in candidates:
+        try:
+            if name == "Ridge":
+                cv_scores = cross_val_score(
+                    clf, X_s, y, cv=3, scoring="f1_macro", n_jobs=-1
+                )
+            else:
+                from sklearn.model_selection import StratifiedKFold
+                skf    = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+                scores = []
+                # XGB needs 0/1 labels
+                y_fit = (y == 1).astype(int) if name == "XGB" else y
+                for tr, va in skf.split(X_s, y):
+                    clf_cv = type(clf)(**clf.get_params())
+                    clf_cv.fit(X_s[tr], y_fit[tr], sample_weight=sw[tr])
+                    raw_pred = clf_cv.predict(X_s[va])
+                    # remap XGB predictions back to -1/+1
+                    pred_va = np.where(raw_pred == 1, 1, -1) if name == "XGB" else raw_pred
+                    scores.append(f1_score(y[va], pred_va, average="macro", zero_division=0))
+                cv_scores = np.array(scores)
+
+            mean_f1 = float(cv_scores.mean())
+            log.info("    %s CV macro_f1=%.4f ± %.4f", name, mean_f1, cv_scores.std())
+
+            if mean_f1 > best_score:
+                best_score, best_name, best_clf = mean_f1, name, clf
+        except Exception as e:
+            log.warning("    %s failed: %s", name, e)
+
+    # fit best on full training data
+    if best_name == "Ridge":
+        best_clf.fit(X_s, y)
+    elif best_name == "XGB":
+        y_fit = (y == 1).astype(int)
+        best_clf.fit(X_s, y_fit, sample_weight=sw)
+        # wrap clf so predict/predict_proba return -1/+1
+        best_clf = _XGBWrapper(best_clf)
+    else:
+        best_clf.fit(X_s, y, sample_weight=sw)
+
+    # feature importances
+    actual_clf = best_clf._clf if isinstance(best_clf, _XGBWrapper) else best_clf
+    if hasattr(actual_clf, "feature_importances_"):
+        top3 = sorted(zip(feat_cols, actual_clf.feature_importances_),
+                      key=lambda x: x[1], reverse=True)[:3]
+    elif hasattr(actual_clf, "coef_"):
+        top3 = sorted(zip(feat_cols, np.abs(actual_clf.coef_[0])),
+                      key=lambda x: x[1], reverse=True)[:3]
+    else:
+        top3 = []
+
+    log.info("  Meta-model winner: %s (CV f1=%.4f) | top: %s",
+             best_name, best_score,
              {k: round(v, 3) for k, v in top3})
-    return clf, scaler
+    return best_clf, scaler, best_name
+
+
+# ===========================================================================
+# 6b. NEGATIVE PREDICTOR  (V7-1)
+# ===========================================================================
+
+def train_neg_predictor(
+    feat_df:   pd.DataFrame,
+    labels:    Dict[str, int],
+    feat_cols: List[str],
+) -> Tuple[Optional[Any], Optional[StandardScaler]]:
+    """
+    V7-1: dedicated classifier for the 'remove' class.
+    Trained only on posts that have at least MIN_NEG_EXPERTS reliable
+    downvoter experts (n_neg_reliable > 0). Uses only downvoter features.
+    Returns (clf, scaler) or (None, None) if insufficient data.
+    """
+    neg_feat_cols = [c for c in feat_cols if
+                     any(tag in c for tag in ["neg", "wv_neg", "n_neg", "neg_expert"])]
+    if not neg_feat_cols:
+        return None, None
+
+    df = feat_df[feat_df["item_id"].isin(labels)].copy()
+    df["_label"] = df["item_id"].map(labels)
+
+    # keep only posts with at least one reliable downvoter expert
+    mask = df["n_neg_reliable"] > 0 if "n_neg_reliable" in df.columns else pd.Series(True, index=df.index)
+    df_neg = df[mask]
+
+    if len(df_neg) < 50 or df_neg["_label"].nunique() < 2:
+        log.info("  Neg predictor: insufficient data (%d posts) — skipped.", len(df_neg))
+        return None, None
+
+    X = df_neg[neg_feat_cols].values.astype(float)
+    y = df_neg["_label"].values.astype(int)
+
+    counts  = {c: (y == c).sum() for c in np.unique(y)}
+    max_cnt = max(counts.values())
+    sw      = np.array([max_cnt / counts[yi] for yi in y])
+
+    scaler = StandardScaler()
+    X_s    = scaler.fit_transform(X)
+
+    clf = LogisticRegression(
+        penalty="l2", C=0.1, class_weight="balanced",
+        max_iter=1000, solver="lbfgs",
+    )
+    clf.fit(X_s, y)
+    log.info("  Neg predictor: trained on %d posts (%d remove, %d approve)",
+             len(y), (y==-1).sum(), (y==1).sum())
+    return clf, scaler, neg_feat_cols
+
+
+def apply_neg_predictor(
+    feat_df:        pd.DataFrame,
+    item_ids:       List[str],
+    neg_clf:        Optional[Any],
+    neg_scaler:     Optional[StandardScaler],
+    neg_feat_cols:  Optional[List[str]],
+) -> Dict[str, float]:
+    """
+    Returns {item_id: proba_remove} for posts with reliable downvoter experts.
+    Returns 0.5 (neutral) for posts without.
+    """
+    result = {iid: 0.5 for iid in item_ids}
+    if neg_clf is None or neg_feat_cols is None:
+        return result
+
+    df = feat_df.set_index("item_id")
+    # only predict for posts with at least one reliable neg expert
+    eligible = [iid for iid in item_ids
+                if iid in df.index and df.loc[iid, "n_neg_reliable"] > 0]
+    if not eligible:
+        return result
+
+    X   = df.loc[eligible, neg_feat_cols].values.astype(float)
+    X_s = neg_scaler.transform(X)
+    # proba of class -1 (remove)
+    neg_class_idx = list(neg_clf.classes_).index(-1)
+    probas        = neg_clf.predict_proba(X_s)[:, neg_class_idx]
+    for iid, p in zip(eligible, probas):
+        result[iid] = float(p)
+    return result
 
 
 def predict_meta_model(
     feat_df:   pd.DataFrame,
     item_ids:  List[str],
-    clf:       GradientBoostingClassifier,
+    clf:       Any,
     scaler:    StandardScaler,
     feat_cols: List[str],
 ) -> Dict[str, Tuple[int, float]]:
-    """V6-4: batch prediction — single clf call instead of per-post loop."""
+    """Batch prediction — single clf call. Works for Ridge, GBT, XGB."""
     df = feat_df.set_index("item_id")
     pos_class_idx = list(clf.classes_).index(1)
 
-    known = [iid for iid in item_ids if iid in df.index]
+    known  = [iid for iid in item_ids if iid in df.index]
     result: Dict[str, Tuple[int, float]] = {iid: (1, 0.5) for iid in item_ids}
-
     if not known:
         return result
 
-    X     = df.loc[known, feat_cols].values.astype(float)
-    X_s   = scaler.transform(X)
-    preds = clf.predict(X_s)
-    probas= clf.predict_proba(X_s)[:, pos_class_idx]
-
+    X      = df.loc[known, feat_cols].values.astype(float)
+    X_s    = scaler.transform(X)
+    preds  = clf.predict(X_s)
+    probas = clf.predict_proba(X_s)[:, pos_class_idx]
     for iid, pred, proba in zip(known, preds, probas):
         result[iid] = (int(pred), float(proba))
     return result
@@ -966,16 +1224,24 @@ def grid_search_hyperparams(
 # ===========================================================================
 
 def predict_fold(
-    test_ids:   List[str],
-    vote_df:    pd.DataFrame,
-    weights_df: pd.DataFrame,
-    feat_df:    pd.DataFrame,
-    feat_cols:  List[str],
-    clf:        GradientBoostingClassifier,
-    scaler:     StandardScaler,
-    thresholds: Dict[Optional[str], float],
-    top_t:      int,
+    test_ids:       List[str],
+    vote_df:        pd.DataFrame,
+    weights_df:     pd.DataFrame,
+    feat_df:        pd.DataFrame,
+    feat_cols:      List[str],
+    clf:            Any,
+    scaler:         StandardScaler,
+    thresholds:     Dict[Optional[str], float],
+    top_t:          int,
+    neg_clf:        Optional[Any]           = None,
+    neg_scaler:     Optional[StandardScaler] = None,
+    neg_feat_cols:  Optional[List[str]]     = None,
 ) -> pd.DataFrame:
+    """
+    V7-1: injects neg_expert_proba into feat_df before meta-model prediction.
+    The neg predictor's probability of 'remove' becomes a feature so the
+    main model can learn how to weight it.
+    """
     labels = (
         vote_df[vote_df["item_id"].isin(test_ids)]
         .drop_duplicates("item_id")[["item_id", "label"]]
@@ -984,6 +1250,11 @@ def predict_fold(
         vote_df[vote_df["item_id"].isin(test_ids)]
         .drop_duplicates("item_id").set_index("item_id")["community"].to_dict()
     )
+
+    # V7-1: compute neg predictor probabilities and inject into feat_df
+    neg_probas = apply_neg_predictor(feat_df, test_ids, neg_clf, neg_scaler, neg_feat_cols)
+    feat_df = feat_df.copy()
+    feat_df["neg_expert_proba"] = feat_df["item_id"].map(neg_probas).fillna(0.5)
 
     meta_preds = predict_meta_model(feat_df, test_ids, clf, scaler, feat_cols)
     wv         = _compute_weighted_votes(test_ids, vote_df, weights_df, top_t)
@@ -998,12 +1269,13 @@ def predict_fold(
         meta_pred, meta_proba = meta_preds.get(item_id, (None, None))
         predicted = meta_pred if meta_pred is not None else (1 if score >= thr else -1)
         rows.append({
-            "item_id":       item_id,
-            "weighted_vote": score,
-            "meta_proba":    meta_proba if meta_proba is not None else 0.5,
-            "predicted":     predicted,
-            "used_fallback": fallback,
-            "subreddit":     sub,
+            "item_id":        item_id,
+            "weighted_vote":  score,
+            "meta_proba":     meta_proba if meta_proba is not None else 0.5,
+            "neg_expert_proba": neg_probas.get(item_id, 0.5),
+            "predicted":      predicted,
+            "used_fallback":  fallback,
+            "subreddit":      sub,
         })
 
     pred_df = pd.DataFrame(rows)
@@ -1042,7 +1314,181 @@ def evaluate_fold(decisions: pd.DataFrame) -> Dict:
 
 
 # ===========================================================================
-# 12. KFOLD
+# 12. SINGLE-SPLIT EVALUATION  (core logic, reused by K-fold and multi-split)
+# ===========================================================================
+
+def run_single_split(
+    train_ids:      set,
+    val_ids:        Optional[set],
+    test_ids:       set,
+    vote_df:        pd.DataFrame,
+    post_emb:       np.ndarray,
+    post_id2idx:    Dict[str, int],
+    user_emb:       np.ndarray,
+    user_id2idx:    Dict[str, int],
+    faiss_index:    faiss.Index,
+    default_k:      int,
+    default_t:      int,
+    default_alpha:  float,
+    default_beta:   float,
+    min_coverage:   int,
+    do_grid_search: bool = True,
+    split_label:    str = "",
+) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame]:
+    """
+    Core train/val/test evaluation for one split, factored out so it can be
+    reused both by:
+
+      - run_kfold(): the legacy random K-fold benchmark. It calls this with
+        val_ids=None, in which case a validation sample is carved out of
+        train_ids internally (same behaviour as before this refactor).
+
+      - step_multi_split(): the new benchmark that uses the REAL train/val/
+        test split produced by prepare_data_step1. Grid search and threshold
+        calibration use the split's actual val_ids when non-empty; if val_ids
+        is empty (e.g. windowed_folds at w=100%, where the whole pool goes to
+        train), this falls back to carving a validation sample out of train
+        — the same graceful fallback used by the legacy K-fold, so that
+        split still produces a result instead of being skipped outright.
+
+    Returns (metrics | None, decisions_df, weights_df). metrics is None if
+    the test set ends up with a single class (nothing to evaluate).
+    """
+    train_vote_df = vote_df[vote_df["item_id"].isin(train_ids)]
+    prec_df       = precompute_vote_precision(train_vote_df, LAMBDA_SMOOTH, min_coverage)
+    base_rates    = compute_subreddit_base_rates(train_vote_df)
+    log.info("  [%s] train=%d val=%d test=%d | reliable users (>=%d votes): %d",
+             split_label, len(train_ids), len(val_ids or []), len(test_ids),
+             min_coverage, prec_df["username"].nunique())
+
+    # ── hyperparameter selection: use real val if we have one, else carve from train ─
+    if val_ids:
+        val_grid_ids = list(val_ids)
+        train_grid   = train_ids
+    else:
+        train_list   = list(train_ids)
+        np.random.shuffle(train_list)
+        val_grid_ids = train_list[:min(VAL_GRID_SAMPLE, len(train_list))]
+        train_grid   = set(train_list[min(VAL_GRID_SAMPLE, len(train_list)):])
+
+    if do_grid_search and val_grid_ids:
+        k, t, alpha, beta = grid_search_hyperparams(
+            val_grid_ids, train_grid, vote_df, prec_df,
+            post_emb, post_id2idx, user_emb, user_id2idx,
+            faiss_index, LAMBDA_SMOOTH,
+        )
+    else:
+        k, t, alpha, beta = default_k, default_t, default_alpha, default_beta
+
+    # ── expert weights for the TEST set (weighted using TRAIN-only precision) ─
+    test_id_list = list(test_ids)
+    weights_df = compute_expert_weights(
+        test_id_list, train_ids, vote_df, prec_df,
+        post_emb, post_id2idx, user_emb, user_id2idx,
+        faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
+    )
+
+    # ── training sample for the meta-model (subsampled from TRAIN only) ────
+    train_sample = list(train_ids)
+    np.random.shuffle(train_sample)
+    train_sample = train_sample[:min(CAL_SAMPLE, len(train_sample))]
+
+    weights_train_sample = compute_expert_weights(
+        train_sample, train_ids - set(train_sample), vote_df, prec_df,
+        post_emb, post_id2idx, user_emb, user_id2idx,
+        faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
+    )
+
+    # ── threshold calibration: on real VAL if available, else on train_sample ─
+    if val_ids:
+        cal_ids     = list(val_ids)
+        weights_cal = compute_expert_weights(
+            cal_ids, train_ids, vote_df, prec_df,
+            post_emb, post_id2idx, user_emb, user_id2idx,
+            faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
+        )
+    else:
+        cal_ids     = train_sample
+        weights_cal = weights_train_sample
+    thresholds = calibrate_thresholds_per_subreddit(cal_ids, vote_df, weights_cal, t)
+
+    log.info("  [%s] Extracting features for meta-model …", split_label)
+    train_feat_df = extract_post_features(train_sample, vote_df, weights_train_sample, base_rates)
+    feat_cols     = get_meta_feature_cols(train_feat_df)
+    train_labels  = (
+        vote_df[vote_df["item_id"].isin(train_sample)]
+        .drop_duplicates("item_id").set_index("item_id")["label"].to_dict()
+    )
+
+    # V7-1: train negative predictor on training sample only
+    neg_result = train_neg_predictor(train_feat_df, train_labels, feat_cols)
+    if len(neg_result) == 3:
+        neg_clf, neg_scaler, neg_feat_cols = neg_result
+    else:
+        neg_clf, neg_scaler, neg_feat_cols = None, None, None
+
+    if neg_clf is not None:
+        neg_probas_train = apply_neg_predictor(
+            train_feat_df, train_sample, neg_clf, neg_scaler, neg_feat_cols
+        )
+        train_feat_df = train_feat_df.copy()
+        train_feat_df["neg_expert_proba"] = \
+            train_feat_df["item_id"].map(neg_probas_train).fillna(0.5)
+        feat_cols = get_meta_feature_cols(train_feat_df)
+
+    # V7-2: model selection, trained only on TRAIN
+    clf, scaler, model_name = train_meta_model(train_feat_df, train_labels, feat_cols)
+
+    test_feat_df = extract_post_features(test_id_list, vote_df, weights_df, base_rates)
+
+    decisions = predict_fold(
+        test_id_list, vote_df, weights_df,
+        test_feat_df, feat_cols, clf, scaler, thresholds, t,
+        neg_clf=neg_clf, neg_scaler=neg_scaler, neg_feat_cols=neg_feat_cols,
+    )
+    decisions["split"] = split_label
+    decisions["k"]     = k
+    decisions["top_t"] = t
+    decisions["alpha"] = alpha
+    decisions["beta"]  = beta
+
+    if decisions["label"].nunique() < 2:
+        log.warning("  [%s] single class in test — skipped.", split_label)
+        return None, decisions, weights_df
+
+    metrics = evaluate_fold(decisions)
+    metrics.update({
+        "split":             split_label,
+        "k":                 k,
+        "top_t":             t,
+        "alpha":             alpha,
+        "beta":              beta,
+        "gamma":             1.0 - alpha - beta,
+        "threshold":         thresholds.get(None, 0.0),
+        "n_train_items":     len(train_ids),
+        "n_val_items":       len(val_ids) if val_ids else 0,
+        "n_test":            len(decisions),
+        "fallback_pct":      float(decisions["used_fallback"].mean()),
+        "model_name":        model_name,
+        "has_neg_predictor": int(neg_clf is not None),
+    })
+
+    log.info(
+        "  [%s] macro_f1=%.4f  roc_auc=%.4f  f1_pos=%.4f  f1_neg=%.4f  "
+        "model=%s  neg_pred=%s  alpha=%.2f  beta=%.2f  gamma=%.2f",
+        split_label, metrics["macro_f1"], metrics["roc_auc"],
+        metrics["f1_pos"], metrics["f1_neg"],
+        model_name, "yes" if neg_clf is not None else "no",
+        alpha, beta, 1.0 - alpha - beta,
+    )
+
+    weights_df = weights_df.copy()
+    weights_df["split"] = split_label
+    return metrics, decisions, weights_df
+
+
+# ===========================================================================
+# 12b. KFOLD  (legacy: random split, val carved out of train per fold)
 # ===========================================================================
 
 def run_kfold(
@@ -1058,7 +1504,7 @@ def run_kfold(
     default_beta:   float,
     min_coverage:   int,
     do_grid_search: bool = True,
-) -> Tuple[List[Dict], List[pd.DataFrame]]:
+) -> Tuple[List[Dict], List[pd.DataFrame], List[pd.DataFrame]]:
     global post_ids_ordered
     post_ids_ordered = post_id_list
 
@@ -1079,98 +1525,164 @@ def run_kfold(
     for fold_idx, (train_val_idx, test_idx) in enumerate(kf.split(labeled_items)):
         log.info("--- Fold %d / %d ---", fold_idx + 1, N_FOLDS)
 
-        train_ids    = set(labeled_items.iloc[train_val_idx]["item_id"].tolist())
-        test_ids     = set(labeled_items.iloc[test_idx]["item_id"].tolist())
-        log.info("  train=%d  test=%d", len(train_ids), len(test_ids))
+        train_ids = set(labeled_items.iloc[train_val_idx]["item_id"].tolist())
+        test_ids  = set(labeled_items.iloc[test_idx]["item_id"].tolist())
 
-        train_vote_df = vote_df[vote_df["item_id"].isin(train_ids)]
-        prec_df       = precompute_vote_precision(train_vote_df, LAMBDA_SMOOTH, min_coverage)
-        base_rates    = compute_subreddit_base_rates(train_vote_df)
-        log.info("  reliable users (>=%d votes): %d", min_coverage, prec_df["username"].nunique())
-
-        if do_grid_search:
-            train_list   = list(train_ids)
-            np.random.shuffle(train_list)
-            val_grid_ids = train_list[:min(VAL_GRID_SAMPLE, len(train_list))]
-            train_grid   = set(train_list[min(VAL_GRID_SAMPLE, len(train_list)):])
-            k, t, alpha, beta = grid_search_hyperparams(
-                val_grid_ids, train_grid, vote_df, prec_df,
-                post_emb, post_id2idx, user_emb, user_id2idx,
-                faiss_index, LAMBDA_SMOOTH,
-            )
-        else:
-            k, t, alpha, beta = default_k, default_t, default_alpha, default_beta
-
-        test_id_list = list(test_ids)
-        weights_df   = compute_expert_weights(
-            test_id_list, train_ids, vote_df, prec_df,
-            post_emb, post_id2idx, user_emb, user_id2idx,
-            faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
+        metrics, decisions, weights_df = run_single_split(
+            train_ids, None, test_ids,
+            vote_df, post_emb, post_id2idx, user_emb, user_id2idx, faiss_index,
+            default_k, default_t, default_alpha, default_beta,
+            min_coverage, do_grid_search, split_label=f"fold{fold_idx}",
         )
-
-        train_sample = list(train_ids)
-        np.random.shuffle(train_sample)
-        train_sample = train_sample[:min(CAL_SAMPLE, len(train_sample))]
-
-        weights_cal = compute_expert_weights(
-            train_sample, train_ids - set(train_sample), vote_df, prec_df,
-            post_emb, post_id2idx, user_emb, user_id2idx,
-            faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
-        )
-        thresholds = calibrate_thresholds_per_subreddit(train_sample, vote_df, weights_cal, t)
-
-        log.info("  Extracting features for meta-model …")
-        train_feat_df = extract_post_features(train_sample, vote_df, weights_cal, base_rates)
-        feat_cols     = get_meta_feature_cols(train_feat_df)
-        train_labels  = (
-            vote_df[vote_df["item_id"].isin(train_sample)]
-            .drop_duplicates("item_id").set_index("item_id")["label"].to_dict()
-        )
-        clf, scaler = train_meta_model(train_feat_df, train_labels, feat_cols)
-
-        test_feat_df = extract_post_features(test_id_list, vote_df, weights_df, base_rates)
-
-        decisions = predict_fold(
-            test_id_list, vote_df, weights_df,
-            test_feat_df, feat_cols, clf, scaler, thresholds, t,
-        )
-        decisions["fold"]  = fold_idx
-        decisions["k"]     = k
-        decisions["top_t"] = t
-        decisions["alpha"] = alpha
-        decisions["beta"]  = beta
-
-        if decisions["label"].nunique() < 2:
-            log.warning("Fold %d: single class in test — skipped.", fold_idx + 1)
+        if metrics is None:
             continue
 
-        metrics = evaluate_fold(decisions)
-        metrics.update({
-            "fold":         fold_idx,
-            "k":            k,
-            "top_t":        t,
-            "alpha":        alpha,
-            "beta":         beta,
-            "gamma":        1.0 - alpha - beta,
-            "threshold":    thresholds.get(None, 0.0),
-            "n_test":       len(decisions),
-            "fallback_pct": float(decisions["used_fallback"].mean()),
-        })
-
-        log.info(
-            "  macro_f1=%.4f  roc_auc=%.4f  f1_pos=%.4f  f1_neg=%.4f  "
-            "fallback=%.1f%%  alpha=%.2f  beta=%.2f  gamma=%.2f",
-            metrics["macro_f1"], metrics["roc_auc"],
-            metrics["f1_pos"],   metrics["f1_neg"],
-            100 * metrics["fallback_pct"], alpha, beta, 1.0 - alpha - beta,
-        )
+        metrics["fold"]    = fold_idx
+        decisions["fold"]  = fold_idx
+        weights_df["fold"] = fold_idx
 
         fold_metrics.append(metrics)
         fold_item_scores.append(decisions)
-        weights_df["fold"] = fold_idx
         fold_weights.append(weights_df)
 
     return fold_metrics, fold_item_scores, fold_weights
+
+
+# ===========================================================================
+# 12c. MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
+# ===========================================================================
+
+def step_multi_split(
+    votes_dir:      Path,
+    output_dir:     Path,
+    post_emb:       np.ndarray,
+    post_id_list:   List[str],
+    user_emb:       np.ndarray,
+    user_id_list:   List[str],
+    faiss_index:    faiss.Index,
+    default_k:      int,
+    default_t:      int,
+    default_alpha:  float,
+    default_beta:   float,
+    min_coverage:   int,
+    do_grid_search: bool = True,
+) -> Dict[str, Dict]:
+    """
+    Run the Semantic Expert Finder on every split directory found under
+    votes_dir (splits/, splits_full/, splits_intersection/, and every window
+    under windowed_folds_full/ and windowed_folds_intersection/).
+
+    For each split, the vote_df used is the concatenation of that split's own
+    train/val/test votes only (not the full 73k-vote CSV), so no vote from
+    outside the split's item population leaks in. Precision tables and
+    subreddit base rates come from TRAIN only; hyperparameter grid search and
+    threshold calibration use VAL; the meta-model and negative predictor are
+    trained on TRAIN; final metrics are computed on TEST.
+
+    Results are saved under output_dir/<split_label>/, mirroring the
+    directory layout produced by prepare_data_step1:
+
+      output_dir/
+        splits/{item_scores,weights}.parquet + metrics.json
+        splits_full/...
+        splits_intersection/...
+        windowed_folds_full/w020/...
+        ...
+        windowed_folds_intersection/w020/...
+        ...
+        all_splits_summary.json   <- metrics for every split, for comparison
+    """
+    global post_ids_ordered
+    post_ids_ordered = post_id_list
+    post_id2idx = {pid: i for i, pid in enumerate(post_id_list)}
+    user_id2idx = {uid: i for i, uid in enumerate(user_id_list)}
+
+    splits = discover_splits(votes_dir)
+    if not splits:
+        log.warning("No split directories found under %s "
+                    "(expected splits/, splits_full/, splits_intersection/, "
+                    "windowed_folds_full/w*, windowed_folds_intersection/w*)", votes_dir)
+        return {}
+
+    log.info("Found %d split(s): %s", len(splits), list(splits.keys()))
+    summary: Dict[str, Dict] = {}
+
+    for split_name, split_path in splits.items():
+        log.info("--- split: %s ---", split_name)
+
+        train_votes = _load_split_votes(split_path / "train_votes.parquet")
+        val_votes   = _load_split_votes(split_path / "val_votes.parquet")
+        test_votes  = _load_split_votes(split_path / "test_votes.parquet")
+
+        # this split's own votes only — never mixes in votes from outside it
+        split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
+
+        train_ids = set(train_votes["item_id"].unique())
+        val_ids   = set(val_votes["item_id"].unique())
+        test_ids  = set(test_votes["item_id"].unique())
+
+        if not test_ids:
+            log.warning("  [%s] empty test set — skipped.", split_name)
+            continue
+
+        metrics, decisions, weights_df = run_single_split(
+            train_ids, val_ids, test_ids,
+            split_vote_df, post_emb, post_id2idx, user_emb, user_id2idx, faiss_index,
+            default_k, default_t, default_alpha, default_beta,
+            min_coverage, do_grid_search, split_label=split_name,
+        )
+        if metrics is None:
+            continue
+
+        # "splits_full" only: for items where compute_expert_weights found no
+        # expert (used_fallback=True), weighted_vote already equals the raw
+        # net vote (see _compute_weighted_votes' fallback branch). Force the
+        # final decision for those items to follow that net vote directly,
+        # instead of the meta-model's prediction on a degenerate/zero-padded
+        # feature vector — this measures how much performance degrades when
+        # every item must get a decision, using the simplest possible signal
+        # for items with no real expert coverage.
+        if split_name == "splits_full" and decisions["used_fallback"].any():
+            fb = decisions["used_fallback"]
+            n_fallback = int(fb.sum())
+            decisions = decisions.copy()
+            decisions.loc[fb, "predicted"]   = np.where(decisions.loc[fb, "weighted_vote"] >= 0, 1, -1)
+            decisions.loc[fb, "meta_proba"]  = np.clip((decisions.loc[fb, "weighted_vote"] + 1) / 2, 0.0, 1.0)
+            metrics.update(evaluate_fold(decisions))  # overwrite macro_f1/roc_auc/etc, keep k/alpha/model_name/...
+            metrics.update({
+                "split": split_name, "n_test": len(decisions),
+                "fallback_pct": float(decisions["used_fallback"].mean()),
+                "used_net_vote_fallback": True,
+                "n_fallback_items": n_fallback,
+            })
+            log.info("  [%s] net-vote fallback forced on %d/%d items -> "
+                     "macro_f1=%.4f  roc_auc=%.4f",
+                     split_name, n_fallback, len(decisions),
+                     metrics["macro_f1"], metrics["roc_auc"])
+
+        split_out_dir = output_dir / split_name
+        split_out_dir.mkdir(parents=True, exist_ok=True)
+        decisions.to_parquet(split_out_dir / "item_scores.parquet", index=False)
+        weights_df.to_parquet(split_out_dir / "weights.parquet", index=False)
+        with open(split_out_dir / "metrics.json", "w") as fh:
+            json.dump(metrics, fh, indent=2)
+        log.info("  [%s] Saved → %s", split_name, split_out_dir)
+
+        summary[split_name] = metrics
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "all_splits_summary.json"
+    with open(summary_path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    log.info("Summary of all splits saved → %s", summary_path)
+
+    if summary:
+        log.info("=== Cross-split comparison ===")
+        for name, m in summary.items():
+            log.info("  %-35s macro_F1=%.4f  AUC=%.4f  n_test=%d  model=%s",
+                     name, m["macro_f1"], m["roc_auc"], m["n_test"], m["model_name"])
+
+    return summary
 
 
 # ===========================================================================
@@ -1203,12 +1715,20 @@ def save_outputs(
         agg[f"{key}_std"]      = float(np.std(vals))  if vals else float("nan")
         agg[f"{key}_per_fold"] = vals
 
-    agg["best_k_per_fold"]     = [m.get("k")     for m in fold_metrics]
-    agg["best_t_per_fold"]     = [m.get("top_t") for m in fold_metrics]
-    agg["best_alpha_per_fold"] = [m.get("alpha") for m in fold_metrics]
-    agg["best_beta_per_fold"]  = [m.get("beta")  for m in fold_metrics]
-    agg["best_gamma_per_fold"] = [m.get("gamma") for m in fold_metrics]
+    agg["best_k_per_fold"]     = [m.get("k")          for m in fold_metrics]
+    agg["best_t_per_fold"]     = [m.get("top_t")       for m in fold_metrics]
+    agg["best_alpha_per_fold"] = [m.get("alpha")       for m in fold_metrics]
+    agg["best_beta_per_fold"]  = [m.get("beta")        for m in fold_metrics]
+    agg["best_gamma_per_fold"] = [m.get("gamma")       for m in fold_metrics]
+    agg["model_per_fold"]      = [m.get("model_name")  for m in fold_metrics]
+    agg["neg_pred_per_fold"]   = [m.get("has_neg_predictor") for m in fold_metrics]
     agg["fallback_pct"]        = float(np.mean([m.get("fallback_pct", 0) for m in fold_metrics]))
+
+    # model selection summary
+    from collections import Counter
+    model_counts = Counter(agg["model_per_fold"])
+    agg["model_wins"] = dict(model_counts)
+    log.info("  Model wins: %s", model_counts)
 
     with open(output_dir / "metrics.json", "w") as fh:
         json.dump(agg, fh, indent=2)
@@ -1227,7 +1747,7 @@ def save_outputs(
 # ===========================================================================
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Semantic Expert Finder v4")
+    parser = argparse.ArgumentParser(description="Semantic Expert Finder v7")
     parser.add_argument("--k-neighbors",    type=int,   default=K_NEIGHBORS)
     parser.add_argument("--top-t",          type=int,   default=TOP_T)
     parser.add_argument("--alpha",          type=float, default=ALPHA)
@@ -1236,15 +1756,26 @@ def main() -> None:
     parser.add_argument("--output-dir",     type=Path,  default=OUTPUT_DIR)
     parser.add_argument("--no-grid-search", action="store_true")
     parser.add_argument("--input-csv",      type=Path,  default=None)
+    parser.add_argument("--votes-dir",      type=Path,  default=STEP1_DIR,
+                         help="Directory with the splits produced by prepare_data_step1 "
+                              "(splits/, splits_full/, splits_intersection/, windowed_folds_*)")
+    parser.add_argument("--steps", nargs="+", default=["kfold", "multi_split"],
+                         choices=["kfold", "multi_split"],
+                         help="kfold = legacy random K-fold benchmark; "
+                              "multi_split = benchmark on every split produced by prepare_data_step1")
+    parser.add_argument("--skip-steps", nargs="+", default=[],
+                         choices=["kfold", "multi_split"])
     args = parser.parse_args()
 
     assert args.alpha + args.beta <= 1.0, \
         f"alpha + beta must be <= 1.0 (got {args.alpha + args.beta:.2f})"
 
+    steps_to_run = [s for s in args.steps if s not in args.skip_steps]
+
     embed_dir = args.output_dir / "embeddings"
 
-    log.info("=== SEF v4 | alpha=%.2f beta=%.2f gamma=%.2f ===",
-             args.alpha, args.beta, 1.0 - args.alpha - args.beta)
+    log.info("=== SEF v7 | alpha=%.2f beta=%.2f gamma=%.2f | steps=%s ===",
+             args.alpha, args.beta, 1.0 - args.alpha - args.beta, steps_to_run)
 
     vote_df    = load_votes(args.input_csv)
     post_texts = load_post_texts()
@@ -1259,22 +1790,40 @@ def main() -> None:
 
     faiss_index = build_faiss_index(post_emb)
 
-    fold_metrics, fold_item_scores, fold_weights = run_kfold(
-        vote_df        = vote_df,
-        post_emb       = post_emb,
-        post_id_list   = post_id_list,
-        user_emb       = user_emb,
-        user_id_list   = user_id_list,
-        faiss_index    = faiss_index,
-        default_k      = args.k_neighbors,
-        default_t      = args.top_t,
-        default_alpha  = args.alpha,
-        default_beta   = args.beta,
-        min_coverage   = args.min_user_votes,
-        do_grid_search = not args.no_grid_search,
-    )
+    if "kfold" in steps_to_run:
+        fold_metrics, fold_item_scores, fold_weights = run_kfold(
+            vote_df        = vote_df,
+            post_emb       = post_emb,
+            post_id_list   = post_id_list,
+            user_emb       = user_emb,
+            user_id_list   = user_id_list,
+            faiss_index    = faiss_index,
+            default_k      = args.k_neighbors,
+            default_t      = args.top_t,
+            default_alpha  = args.alpha,
+            default_beta   = args.beta,
+            min_coverage   = args.min_user_votes,
+            do_grid_search = not args.no_grid_search,
+        )
+        save_outputs(fold_metrics, fold_item_scores, fold_weights, args.output_dir)
 
-    save_outputs(fold_metrics, fold_item_scores, fold_weights, args.output_dir)
+    if "multi_split" in steps_to_run:
+        step_multi_split(
+            votes_dir      = args.votes_dir,
+            output_dir     = args.output_dir / "benchmark_by_split",
+            post_emb       = post_emb,
+            post_id_list   = post_id_list,
+            user_emb       = user_emb,
+            user_id_list   = user_id_list,
+            faiss_index    = faiss_index,
+            default_k      = args.k_neighbors,
+            default_t      = args.top_t,
+            default_alpha  = args.alpha,
+            default_beta   = args.beta,
+            min_coverage   = args.min_user_votes,
+            do_grid_search = not args.no_grid_search,
+        )
+
     log.info("Done.")
 
 
