@@ -1,0 +1,21 @@
+{
+  "threshold": 0.15551839464882944,
+  "macro_f1": 0.6342473148433776,
+  "macro_precision": 0.6238664705506172,
+  "macro_recall": 0.6512966723949383,
+  "f1_pos": 0.8779620853080569,
+  "f1_neg": 0.3905325443786982,
+  "f1_approve": 0.8779620853080569,
+  "f1_remove": 0.3905325443786982,
+  "precision_pos": 0.9003645200486027,
+  "recall_pos": 0.8566473988439306,
+  "precision_neg": 0.3473684210526316,
+  "recall_neg": 0.44594594594594594,
+  "roc_auc": 0.6991212310576472,
+  "n_items": 1013,
+  "split": "windowed_folds_intersection/w020",
+  "n_train_items": 612,
+  "n_val_items": 1020,
+  "n_test_items": 1020,
+  "coverage_test": 0.9931372549019608
+}

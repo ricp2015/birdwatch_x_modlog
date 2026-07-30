@@ -1,9 +1,14 @@
+normvio/
+results/step1/wikipedia*
+results/step1/reddit/csv/history/user_documents.csv
+results/step3_expert/embeddings
+data/raw/user_contributions.zip
+results/step3_expert/*.parquet
+results/step1/reddit/history/*.parquet
+
 .DS_Store
 *.swp
 *.swo
-normvio/
-results/
-communitynotes_main/
 __pycache__/
 *.py[cod]
 *$py.class

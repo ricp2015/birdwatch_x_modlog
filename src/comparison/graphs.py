@@ -2,97 +2,235 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
+import re
 import pandas as pd
-import matplotlib.pyplot as plt
 
-METRICS = [
-    "macro_f1", "roc_auc",
-    "f1_pos", "f1_neg",
-    "macro_precision", "macro_recall",
-    "precision_pos", "recall_pos",
-    "precision_neg", "recall_neg",
-]
+
+def discover_splits(votes_dir: Path) -> Dict[str, Path]:
+    """
+    Find every split directory produced by prepare_data_step1 under votes_dir,
+    i.e. any folder containing train_votes.parquet / val_votes.parquet /
+    test_votes.parquet.
+    """
+    found: Dict[str, Path] = {}
+    for name in ("splits", "splits_full", "splits_intersection"):
+        d = votes_dir / name
+        if (d / "train_votes.parquet").exists():
+            found[name] = d
+    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
+        root = votes_dir / tag
+        if root.exists():
+            for w_dir in sorted(root.glob("w*")):
+                if (w_dir / "train_votes.parquet").exists():
+                    found[f"{tag}/{w_dir.name}"] = w_dir
+    return found
+
+
+def load_split_data(split_dir: Path):
+    train = pd.read_parquet(split_dir / "train_votes.parquet")
+    val   = pd.read_parquet(split_dir / "val_votes.parquet")
+    test  = pd.read_parquet(split_dir / "test_votes.parquet")
+    return train, val, test
+
+
+def subset_stats(df: pd.DataFrame, min_vote_thresholds: List[int] = (5, 10, 20)) -> Dict:
+    """
+    Core stats for one subset (train/val/test/total): population size plus
+    saturation indicators — the fraction of users/user*community pairs that
+    already clear common minimum-vote thresholds. This is the key diagnostic
+    for "why doesn't performance change much between small and large
+    training windows": if most active users already clear the threshold
+    even in the smallest window, per-user statistics were already
+    well-estimated and a flat learning curve is expected, not a bug.
+    """
+    if df.empty:
+        stats = {
+            "n_votes": 0, "n_posts": 0, "n_users": 0, "n_communities": 0,
+            "avg_votes_per_user": 0.0, "avg_votes_per_post": 0.0,
+            "median_votes_per_user": 0.0,
+        }
+        for thr in min_vote_thresholds:
+            stats[f"pct_users_ge_{thr}_votes"] = 0.0
+        return stats
+
+    n_votes  = len(df)
+    n_posts  = df["item_id"].nunique()
+    n_users  = df["username"].nunique()
+    n_comms  = df["community"].nunique() if "community" in df.columns else None
+
+    votes_per_user = df.groupby("username").size()
+    votes_per_post = df.groupby("item_id").size()
+
+    stats = {
+        "n_votes":               n_votes,
+        "n_posts":               n_posts,
+        "n_users":               n_users,
+        "n_communities":         n_comms,
+        "avg_votes_per_user":    float(votes_per_user.mean()),
+        "median_votes_per_user": float(votes_per_user.median()),
+        "avg_votes_per_post":    float(votes_per_post.mean()),
+    }
+    for thr in min_vote_thresholds:
+        stats[f"pct_users_ge_{thr}_votes"] = float((votes_per_user >= thr).mean())
+
+    # user x community saturation — this is the unit TFR/SEF actually key
+    # their per-category / per-subreddit reliability estimates on
+    if "community" in df.columns:
+        uc_counts = df.groupby(["username", "community"]).size()
+        for thr in min_vote_thresholds:
+            stats[f"pct_user_community_pairs_ge_{thr}_votes"] = float((uc_counts >= thr).mean())
+
+    # label balance (approve vs remove), item-level
+    if "label" in df.columns:
+        item_labels = df.drop_duplicates("item_id")["label"]
+        stats["pct_label_approve"] = float((item_labels == 1).mean())
+        stats["pct_label_remove"]  = float((item_labels == -1).mean())
+
+    return stats
+
+
+def render_split_report(split_name: str, train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame) -> str:
+    subsets = {"train": train, "val": val, "test": test,
+               "total": pd.concat([train, val, test], ignore_index=True)}
+
+    all_stats = {name: subset_stats(df) for name, df in subsets.items()}
+    all_keys = list(all_stats["total"].keys())
+
+    lines = [f"SPLIT: {split_name}", "-" * (len(split_name) + 7)]
+
+    col_widths = [max(34, max(len(k) for k in all_keys) + 2)] + [12] * len(subsets)
+    header = ["metric"] + list(subsets.keys())
+    lines.append("  ".join(c.ljust(w) for c, w in zip(header, col_widths)))
+    lines.append("  ".join("-" * w for w in col_widths))
+
+    for key in all_keys:
+        row = [key]
+        for name in subsets:
+            v = all_stats[name].get(key)
+            if v is None:
+                cell = "-"
+            elif isinstance(v, float):
+                cell = f"{v:.3f}" if v < 1000 else f"{v:,.1f}"
+            else:
+                cell = f"{v:,}"
+            row.append(cell)
+        lines.append("  ".join(c.ljust(w) for c, w in zip(row, col_widths)))
+
+    return "\n".join(lines)
+
+
+def render_cross_split_overview(per_split_stats: Dict[str, Dict]) -> str:
+    """
+    One row per split, TRAIN-subset only, focused on the numbers that most
+    directly explain a flat/non-flat learning curve: n_votes, n_users,
+    avg_votes_per_user, and the fraction of users already past common
+    minimum-vote thresholds.
+    """
+    lines = ["CROSS-SPLIT OVERVIEW (TRAIN subset only)", "=" * 90]
+    cols = ["split", "n_votes", "n_posts", "n_users",
+            "avg_votes/user", "pct_users>=5", "pct_users>=10", "pct_users>=20"]
+    widths = [34, 10, 10, 10, 15, 13, 13, 13]
+    lines.append("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
+    lines.append("  ".join("-" * w for w in widths))
+
+    for split_name, stats in per_split_stats.items():
+        t = stats["train"]
+        row = [
+            split_name,
+            f"{t.get('n_votes', 0):,}",
+            f"{t.get('n_posts', 0):,}",
+            f"{t.get('n_users', 0):,}",
+            f"{t.get('avg_votes_per_user', 0):.2f}",
+            f"{t.get('pct_users_ge_5_votes', 0):.1%}",
+            f"{t.get('pct_users_ge_10_votes', 0):.1%}",
+            f"{t.get('pct_users_ge_20_votes', 0):.1%}",
+        ]
+        lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths)))
+
+    return "\n".join(lines)
+
+
+def compare_split_statistics(
+    votes_dir:  Path,
+    output_dir: Optional[Path] = None,
+) -> Dict[str, Dict]:
+    splits = discover_splits(votes_dir)
+    if not splits:
+        print(f"No split directories found under {votes_dir}")
+        return {}
+
+    print(f"Found {len(splits)} split(s): {sorted(splits.keys())}\n")
+
+    per_split_stats: Dict[str, Dict] = {}
+    all_blocks: List[str] = []
+
+    for split_name in sorted(splits.keys()):
+        train, val, test = load_split_data(splits[split_name])
+        block = render_split_report(split_name, train, val, test)
+        print(block)
+        print()
+        all_blocks.append(block)
+
+        per_split_stats[split_name] = {
+            "train": subset_stats(train),
+            "val":   subset_stats(val),
+            "test":  subset_stats(test),
+        }
+
+    overview = render_cross_split_overview(per_split_stats)
+    print(overview)
+    all_blocks.append(overview)
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with open(output_dir / "split_statistics.txt", "w") as fh:
+            fh.write("\n\n".join(all_blocks) + "\n")
+        print(f"\nReport saved -> {output_dir / 'split_statistics.txt'}")
+
+    return per_split_stats
+
+
+# ===========================================================================
+# PERFORMANCE TREND ACROSS WINDOWED FOLDS  (macro_f1 / f1_pos / f1_neg / roc_auc)
+# ===========================================================================
+#
+# Same "*_by_split" discovery logic as compare_methods_text.py, but focused
+# on ONE question: for the windowed_folds_* splits (where train size grows
+# from w020 to w100 while val/test stay fixed), does f1_pos / f1_neg
+# actually move with more training data, or is the whole macro_f1 curve
+# flat because the majority class (approve) was already learned at w020
+# and the minority class (remove) just gets averaged away?
 
 RUN_LABELS = {
-    # legacy single whole-dataset runs (kept for reference / other scripts)
     "reddit_cn":                     "CN",
+    "reddit_cn_inverted":            "CN_inverted",
+    "step3_expert":                  "SEF",
+    "team_formation":                "TeamFormation",
+    "VAR":                            "VAR",
+    "BL1_net_vote":                  "Net",
     "BL1_net_score":                 "Net",
+    "BL2_net_vote_alpha":            "WNet",
     "BL2_weighted_net_score":        "WNet",
+    "BL3_net_vote_alpha_subreddit":  "SubAdj",
     "BL3_subreddit_adjusted":        "SubAdj",
     "BL4_reddit_score":              "RedditScore",
     "BL5_subreddit":                 "RedditScore+Sub",
-    "expertise_ranker_k10":          "ExpertTop10",
-    "team_formation":                "TeamFormation",
-    "embeddings":                     "Embeddings",
-    # new per-split benchmark run keys (see team_formation_ranker.py,
-    # step3_expert_finder.py, CN_wrapper.py, baselines.py, var_baseline.py)
-    "step3_expert":                  "Embeddings",
-    "VAR":                           "ExpertTop10",
-    "BL1_net_vote":                  "Net",
-    "BL2_net_vote_alpha":            "WNet",
-    "BL3_net_vote_alpha_subreddit":  "SubAdj",
 }
 
-COLORS = {
-    "CN":              "#0647b8",
-    "Net":              "#0da25a",
-    "WNet":             "#d8b226",
-    "SubAdj":           "#b541e6",
-    "RedditScore":      "#e67e22",
-    "RedditScore+Sub":  "#c0392b",
-    "ExpertTop10":      "#16a085",
-    "TeamFormation":    "#f39c12",
-    "Embeddings":        "#9b59b6",
-}
-
-# folder-name suffix that marks a "per-split benchmark" root, e.g.
-# .../team_formation/benchmark_by_split/..., .../VAR_by_split/...
 BY_SPLIT_SUFFIX = "_by_split"
-
-# split-name path segments that need 2 path parts instead of 1
-# (windowed_folds_full/w020, windowed_folds_intersection/w100, ...)
 TWO_PART_SPLIT_ROOTS = {"windowed_folds_full", "windowed_folds_intersection"}
 
 
-# load
-def load_metrics(path: Path) -> Dict:
-    with open(path) as f:
-        return json.load(f)
-
-
 def _parse_split_and_run(metrics_path: Path, root: Path) -> Optional[Tuple[str, str]]:
-    """
-    Given the path to a metrics.json produced by one of the multi-split
-    benchmarks (TFR/SEF/CN/baselines/VAR — anything saved under a folder
-    whose name ends in "_by_split"), return (split_name, run_key).
-
-    split_name is e.g. "splits", "splits_full", "splits_intersection",
-    "windowed_folds_full/w020", ...
-
-    run_key identifies the method/baseline and is looked up in RUN_LABELS
-    for a display label. Handles three folder-layout patterns:
-      - <method>/benchmark_by_split/<split>/metrics.json
-            -> run_key = "<method>"                       (e.g. team_formation)
-      - <method>/benchmark_by_split/<split>/<baseline>/metrics.json
-            -> run_key = "<baseline>"                      (e.g. BL1_net_vote)
-      - <METHOD>_by_split/<split>/metrics.json
-            -> run_key = "<METHOD>"                        (e.g. VAR)
-      - benchmark_by_split/<split>/metrics.json  (root IS the method's own dir)
-            -> run_key = root.name                         (e.g. step3_expert)
-
-    Returns None if this metrics.json doesn't belong to a per-split
-    benchmark (e.g. an older single whole-dataset run — those are simply
-    skipped by this script).
-    """
+    """Same parsing logic as compare_methods_text.py — see that file for the
+    full explanation of the three folder-layout patterns it handles."""
     try:
         rel_parts = metrics_path.parent.relative_to(root).parts
     except ValueError:
         return None
-
     for i, part in enumerate(rel_parts):
         if not part.endswith(BY_SPLIT_SUFFIX):
             continue
-
         after = rel_parts[i + 1:]
         if not after:
             return None
@@ -104,7 +242,6 @@ def _parse_split_and_run(metrics_path: Path, root: Path) -> Optional[Tuple[str, 
         else:
             split_name = after[0]
             remainder = after[1:]
-
         if remainder:
             run_key = remainder[0]
         elif i > 0:
@@ -114,25 +251,12 @@ def _parse_split_and_run(metrics_path: Path, root: Path) -> Optional[Tuple[str, 
         else:
             run_key = root.name
         return split_name, run_key
-
     return None
 
 
-def collect_by_split(results_roots: List[Path]) -> Dict[str, pd.DataFrame]:
-    """
-    Walk every directory in results_roots for metrics.json files that belong
-    to a "*_by_split" benchmark tree, and group them into one DataFrame per
-    split (e.g. "splits", "splits_full", "splits_intersection",
-    "windowed_folds_full/w020", ...).
-
-    Files that are NOT inside a "*_by_split" tree (older single whole-dataset
-    runs) are ignored — this script now only compares per-split results.
-
-    Returns {split_name: DataFrame}, each DataFrame with one row per run
-    (method/baseline), sorted by macro_f1 descending.
-    """
-    per_split_rows: Dict[str, List[Dict]] = {}
-
+def collect_metrics_by_split(results_roots: List[Path]) -> Dict[str, Dict[str, Dict]]:
+    """Returns {split_name: {run_label: metrics_dict}}."""
+    out: Dict[str, Dict[str, Dict]] = {}
     for root in results_roots:
         if not root.exists():
             continue
@@ -141,112 +265,97 @@ def collect_by_split(results_roots: List[Path]) -> Dict[str, pd.DataFrame]:
             if parsed is None:
                 continue
             split_name, run_key = parsed
-
-            # ignore wikipedia runs, same convention as before
             all_parts = p.parent.relative_to(root).parts
             if any("wikipedia" in part for part in all_parts):
                 continue
-
-            m = load_metrics(p)
+            with open(p) as fh:
+                m = json.load(fh)
             label = RUN_LABELS.get(run_key, run_key)
-
-            row = {"run": label}
-            for k in METRICS:
-                row[k]          = m.get(k, None)
-                row[k + "_std"] = m.get(k + "_std", None)
-
-            per_split_rows.setdefault(split_name, []).append(row)
-
-    per_split_df: Dict[str, pd.DataFrame] = {}
-    for split_name, rows in per_split_rows.items():
-        df = pd.DataFrame(rows)
-        df = df.sort_values("macro_f1", ascending=False).reset_index(drop=True)
-        per_split_df[split_name] = df
-    return per_split_df
+            out.setdefault(split_name, {})[label] = m
+    return out
 
 
-# print
-def print_summary(df: pd.DataFrame, split_name: str) -> None:
-    print(f"\n=== SUMMARY — split: {split_name} ===\n")
-    print(df[["run", "macro_f1", "roc_auc", "f1_pos", "f1_neg"]])
+def _window_sort_key(split_name: str):
+    """Sort 'windowed_folds_full/w020' etc. by tag, then numeric window size."""
+    match = re.search(r"/w(\d+)$", split_name)
+    w = int(match.group(1)) if match else -1
+    tag = split_name.split("/")[0]
+    return (tag, w)
 
 
-# plot with CI
-def plot_metric(df: pd.DataFrame, metric: str, split_name: str, out_dir: Path) -> None:
-    plt.figure(figsize=(8, 4))
-
-    colors = [COLORS.get(r, "gray") for r in df["run"]]
-
-    y = df[metric]
-    yerr = df.get(metric + "_std")
-
-    # fallback se std non presente
-    if yerr is None or yerr.isna().all():
-        yerr = None
-
-    plt.bar(
-        df["run"],
-        y,
-        color=colors,
-        yerr=yerr,
-        capsize=5,
-        alpha=0.9,
+def render_windowed_performance_trend(
+    per_split_metrics: Dict[str, Dict[str, Dict]],
+    runs: Optional[List[str]] = None,
+    metrics: List[str] = ("macro_f1", "f1_pos", "f1_neg", "roc_auc"),
+) -> str:
+    """
+    One table per metric: rows = windowed_folds_* splits (sorted w020..w100,
+    grouped by full/intersection), columns = runs. Lets you see at a glance
+    whether f1_pos/f1_neg actually move with training-set size, even when
+    macro_f1 looks flat.
+    """
+    windowed_splits = sorted(
+        (s for s in per_split_metrics if s.startswith("windowed_folds_")),
+        key=_window_sort_key,
     )
+    if not windowed_splits:
+        return "No windowed_folds_* splits found among the collected metrics.json files."
 
-    plt.title(f"{metric}")
-    plt.xticks(rotation=20, ha="right")
-    plt.ylim(0, 1)
+    if runs is None:
+        seen = []
+        for s in windowed_splits:
+            for r in per_split_metrics[s]:
+                if r not in seen:
+                    seen.append(r)
+        runs = seen
 
-    offset = 0.03
-    for i, v in enumerate(y):
-        if pd.notna(v):
-            err = 0
-            if yerr is not None and not pd.isna(yerr.iloc[i]):
-                err = yerr.iloc[i]
-            plt.text(i, v + err + offset, f"{v:.2f}", ha="center", fontsize=9)
+    blocks = []
+    for metric in metrics:
+        lines = [f"WINDOWED PERFORMANCE TREND — {metric}", "=" * 60]
+        col_widths = [34] + [14] * len(runs)
+        header = ["split"] + runs
+        lines.append("  ".join(c.ljust(w) for c, w in zip(header, col_widths)))
+        lines.append("  ".join("-" * w for w in col_widths))
+        for split_name in windowed_splits:
+            row = [split_name]
+            for run in runs:
+                v = per_split_metrics[split_name].get(run, {}).get(metric)
+                row.append(f"{v:.4f}" if isinstance(v, (int, float)) else "-")
+            lines.append("  ".join(c.ljust(w) for c, w in zip(row, col_widths)))
+        blocks.append("\n".join(lines))
 
-    plt.tight_layout()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    safe_split = split_name.replace("/", "_")
-    plt.savefig(out_dir / f"{metric}__{safe_split}.png", dpi=1000)
-    plt.close()
+    return "\n\n".join(blocks)
 
 
-# main
-def compare_by_split(
+def compare_windowed_performance(
     results_roots: List[Path],
-    plots_dir:     Path = Path("results/step2/comparison_plots"),
-) -> Dict[str, pd.DataFrame]:
+    runs:          Optional[List[str]] = None,
+    output_dir:    Optional[Path] = None,
+) -> Dict[str, Dict[str, Dict]]:
     """
-    Produce one summary + one set of plots PER SPLIT, across every method
-    that has been benchmarked with the "*_by_split" layout (TFR, SEF, CN,
-    baselines, VAR, ...).
-
-    results_roots should list every top-level results directory that may
-    contain a "*_by_split" tree — by default that's results/step2 (TFR, CN,
-    baselines, VAR all save under here) and results/step3_expert (SEF saves
-    directly under its own step folder).
+    Entry point: collect metrics.json across results_roots and print the
+    f1_pos/f1_neg/macro_f1/roc_auc trend across windowed_folds_* splits.
     """
-    per_split_df = collect_by_split(results_roots)
+    per_split_metrics = collect_metrics_by_split(results_roots)
+    report = render_windowed_performance_trend(per_split_metrics, runs=runs)
+    print(report)
 
-    if not per_split_df:
-        print(
-            "No per-split data found (looked for '*_by_split' folders under: "
-            + ", ".join(str(r) for r in results_roots) + ")"
-        )
-        return {}
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with open(output_dir / "windowed_performance_trend.txt", "w") as fh:
+            fh.write(report + "\n")
+        print(f"\nReport saved -> {output_dir / 'windowed_performance_trend.txt'}")
 
-    print(f"Found {len(per_split_df)} split(s): {sorted(per_split_df.keys())}")
-
-    for split_name, df in sorted(per_split_df.items()):
-        if df.empty:
-            continue
-        print_summary(df, split_name)
-        for metric in ["macro_f1", "roc_auc", "f1_pos", "f1_neg"]:
-            plot_metric(df, metric, split_name, plots_dir)
-
-    return per_split_df
+    return per_split_metrics
 
 
 if __name__ == "__main__":
-    compare_by_split([Path("results/step2"), Path("results/step3_expert")])
+    compare_split_statistics(
+        Path("results/step1/reddit"),
+        output_dir=Path("results/step1/reddit/split_statistics"),
+    )
+    compare_windowed_performance(
+        [Path("results/step2"), Path("results/step3_expert")],
+        runs=["TeamFormation", "Net"],
+        output_dir=Path("results/step1/reddit/split_statistics"),
+    )

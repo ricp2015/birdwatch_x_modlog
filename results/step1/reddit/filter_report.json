@@ -1,0 +1,46 @@
+{
+  "BL_CN": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Iterative density filter: post needs >=5 votes, user needs >=10 votes. Applied until convergence."
+  },
+  "BL4_BL5": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "BL_CN density filter + post must appear in external scores parquet (Arctic Shift Reddit score available). 0 posts excluded for missing external score."
+  },
+  "TFR": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1920,
+    "n_users_dropped": 47,
+    "reason": "No post-level filter (TFR reads the raw pre-density CSV). A user contributes to skill only if they cast >=5 votes in at least one (community) bucket. Posts with zero skilled voters are silently dropped at prediction time (~15% coverage loss at runtime)."
+  },
+  "SEF": {
+    "n_items_kept": 73855,
+    "n_items_dropped": -68680,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Post must have non-null text in post_texts.parquet (required for FAISS embedding). User must have >=10 votes globally to enter prec_df (reliability lookup table)."
+  },
+  "VAR": {
+    "n_items_kept": 5151,
+    "n_items_dropped": 24,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Iterative density filter (min 5 votes/post, 5 votes/user) then community must have >=40 unique users. The community-size filter is the most restrictive across all methods."
+  },
+  "__intersection__": {
+    "n_votes": 58095,
+    "n_items_kept": 5104,
+    "n_items_dropped": 71,
+    "n_users_kept": 1902,
+    "n_users_dropped": 65,
+    "n_communities": 13,
+    "reason": "Intersection of all method-specific valid_item_ids and valid_usernames, followed by a re-applied BL/CN density filter."
+  }
+}

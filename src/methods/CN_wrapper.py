@@ -359,14 +359,36 @@ def analyze_user_polarization(
     return merged
 
 # 8. build user_params table
-def build_user_params(rater_params: pd.DataFrame) -> pd.DataFrame:
-    return rater_params.rename(
+def build_user_params(
+    rater_params: pd.DataFrame,
+    votes_df:     Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    votes_df: the full (train+val+test) vote dataframe passed to run_cn_mf()
+    for this split, i.e. the SAME data the MF was actually fitted on. When
+    given, adds an `n_votes` column (how many of those ratings belong to
+    each rater) — CN's matrix factorization doesn't expose a per-user vote
+    count on its own (user_params only has i_u/f_u), which previously made
+    it impossible to run any low-signal sensitivity check on CN's user
+    scores (a user with i_u fitted from 2 ratings and one from 300 looked
+    identical downstream). Left out (NaN) if votes_df isn't provided, for
+    backwards compatibility with existing call sites.
+    """
+    out = rater_params.rename(
         columns={
             c.raterParticipantIdKey:     "username",
             c.internalRaterInterceptKey: "i_u",
             c.internalRaterFactor1Key:   "f_u",
         }
     )[["username", "i_u", "f_u"]]
+
+    if votes_df is not None:
+        n_votes = votes_df.groupby("username").size().rename("n_votes")
+        out = out.merge(n_votes, on="username", how="left")
+    else:
+        out["n_votes"] = np.nan
+
+    return out
 
 # 9. save model to .npz
 def save_model_npz(
@@ -486,7 +508,7 @@ def run_step2(
         fold_item_scores.append(item_scores)
         fold_cal_dfs.append(cal_df)
 
-    user_params   = build_user_params(rater_params)
+    user_params   = build_user_params(rater_params, all_df)
     user_analysis = analyze_user_polarization(rater_params, step1_dir)
 
     save_outputs(
@@ -647,7 +669,7 @@ def step_multi_split(
         if metrics is None:
             continue
 
-        user_params   = build_user_params(rater_params)
+        user_params   = build_user_params(rater_params, all_df)
         user_analysis = analyze_user_polarization(rater_params, votes_dir)
 
         split_out_dir = output_dir / split_name

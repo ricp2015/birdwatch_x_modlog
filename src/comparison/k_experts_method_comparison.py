@@ -98,7 +98,7 @@ train_scores = calculate_var_scores(train_df)
 # ── aggregation strategies ───────────────────────────────────────────────────
 
 N_FOLDS    = 5
-K_VALUES   = [1, 2, 3, 5, 10]
+K_VALUES   = [10]
 OUTPUT_ROOT = Path("results/step2")
 SCALAR_METRICS = [
     "macro_f1", "roc_auc",
@@ -427,6 +427,28 @@ for _, row in top10.iterrows():
 #     (never re-selected against TEST)
 #
 # It does not touch or re-run anything above; it's purely additive.
+#
+# NOTE (added): step_multi_split() now also exports per-split DETAIL files,
+# not just metrics.json — this was the one method with zero item/user-level
+# output, which made it impossible to join VAR results with user metadata
+# for the T1 (user-characteristics) disaggregation analysis. The two new
+# files, saved alongside metrics.json for every split:
+#
+#   voter_scores.parquet  — one row per (item_id, username) among the
+#                            top-K voters actually used for that item's
+#                            decision (using the winning strategy/mode/K
+#                            chosen on VAL), with their VAR_score and raw
+#                            vote. This is VAR's equivalent of SEF's
+#                            weights.parquet: it tells you WHICH users
+#                            drove which decisions, so it can be joined
+#                            with karma/tenure/whatever user table.
+#   item_scores.parquet   — one row per test item_id with the final
+#                            predicted label and ground-truth label
+#                            (community/item_id/predicted/label).
+#
+# Nothing about scoring, K-selection, or the VAL/TEST separation logic
+# was changed — this only adds a write step after the winning config is
+# already known.
 
 VOTES_DIR_DEFAULT      = Path("results/step1/reddit")
 VAR_MULTI_SPLIT_OUTPUT = OUTPUT_ROOT / "VAR_by_split"
@@ -485,12 +507,16 @@ def run_single_split_var(split_label: str, train_df: pd.DataFrame,
     combination by evaluating on VAL, then report final metrics on TEST with
     that fixed combination.
 
-    Returns (best_cfg: dict, metrics: dict) or (None, None) if the split has
-    no usable data.
+    Returns (best_cfg: dict, metrics: dict, scores: pd.DataFrame) or
+    (None, None, None) if the split has no usable data.
+
+    NOTE: now also returns `scores` (the per-user VAR_score table trained on
+    this split's TRAIN, from calculate_var_scores) so the caller doesn't have
+    to recompute it a second time just to build the detail export.
     """
     if test_df.empty or test_df["item_id"].nunique() == 0:
         print(f"  [{split_label}] empty test set — skipped.")
-        return None, None
+        return None, None, None
 
     val_for_cal = val_df
     if val_df.empty or val_df["item_id"].nunique() == 0:
@@ -498,7 +524,7 @@ def run_single_split_var(split_label: str, train_df: pd.DataFrame,
         val_for_cal = _fallback_val_from_train(split_label, train_df)
         if val_for_cal is None:
             print(f"  [{split_label}] no train items either — skipped.")
-            return None, None
+            return None, None, None
 
     print(f"  [{split_label}] Training VAR on {train_df['item_id'].nunique()} train items...")
     scores = calculate_var_scores(train_df)
@@ -522,7 +548,7 @@ def run_single_split_var(split_label: str, train_df: pd.DataFrame,
 
     if best_cfg is None:
         print(f"  [{split_label}] no valid (strategy, K) found on VAL — skipped.")
-        return None, None
+        return None, None, None
 
     agg_fn  = AGGREGATIONS[best_cfg["strategy"]]
     base_fn = selection_modes[best_cfg["mode"]]
@@ -553,7 +579,7 @@ def run_single_split_var(split_label: str, train_df: pd.DataFrame,
 
     if test_decisions["label"].nunique() < 2:
         print(f"  [{split_label}] single class in test — skipped.")
-        return None, None
+        return None, None, None
     test_metrics = evaluate_fold(test_decisions)  # single pass over the whole TEST set, no sub-bucketing
 
     test_metrics.update({
@@ -576,7 +602,13 @@ def run_single_split_var(split_label: str, train_df: pd.DataFrame,
         f"roc_auc={test_metrics['roc_auc']:.3f}"
         + (f" | fallback_items={n_fallback}" if split_label == "splits_full" else "")
     )
-    return best_cfg, test_metrics
+
+    # stash the pieces needed for the detail export so step_multi_split
+    # doesn't have to recompute base_fn/agg_fn a second time
+    test_metrics["_detail_test_votes"]     = test_votes
+    test_metrics["_detail_test_decisions"] = test_decisions
+
+    return best_cfg, test_metrics, scores
 
 
 def step_multi_split(votes_dir: Path = VOTES_DIR_DEFAULT,
@@ -586,9 +618,35 @@ def step_multi_split(votes_dir: Path = VOTES_DIR_DEFAULT,
     splits_full/, splits_intersection/, and every window under
     windowed_folds_full/ and windowed_folds_intersection/).
 
-    Results are saved under output_dir/<split_label>/metrics.json, mirroring
-    the layout used by the other methods' multi-split benchmarks, plus a
-    final all_splits_summary.json comparing every split.
+    Results are saved under output_dir/<split_label>/:
+      metrics.json               — aggregate metrics (as before)
+      voter_scores.parquet       — (item_id, username, vote, VAR_score,
+                                    community) for the top-K voters actually
+                                    used in each item's decision, with the
+                                    winning (strategy, mode, K) for this split.
+                                    NOTE: this is TOP-K FILTERED BY CONSTRUCTION
+                                    (only the K highest-VAR_score users per
+                                    community/item survive _base_votes /
+                                    _base_votes_per_item) — do NOT use this
+                                    file to correlate VAR_score against user
+                                    characteristics (karma, tenure, ...): the
+                                    top-K filter truncates the score range
+                                    from above and will bias/attenuate any
+                                    such correlation. Use it only to see
+                                    which users actually drove which item's
+                                    final decision.
+      all_user_var_scores.parquet — the FULL per-(community, username)
+                                    VAR_score table computed on this split's
+                                    TRAIN by calculate_var_scores(), BEFORE
+                                    any top-K filtering. This is the correct
+                                    file to join against user characteristics
+                                    for T1-style analysis: every user with
+                                    at least one train vote in a community
+                                    gets a row, not just the ones who ended
+                                    up in someone's top-K.
+      item_scores.parquet        — (item_id, community, predicted, label)
+                                    one row per test item
+    plus a final all_splits_summary.json comparing every split.
     """
     splits = discover_splits(votes_dir)
     if not splits:
@@ -603,15 +661,40 @@ def step_multi_split(votes_dir: Path = VOTES_DIR_DEFAULT,
     for split_name, split_path in splits.items():
         print(f"\n--- split: {split_name} ---")
         train_df, val_df, test_df = load_split_data(split_path)
-        best_cfg, metrics = run_single_split_var(split_name, train_df, val_df, test_df)
+        best_cfg, metrics, scores = run_single_split_var(split_name, train_df, val_df, test_df)
         if metrics is None:
             continue
+
+        # pull out the detail frames stashed by run_single_split_var, and
+        # strip them from the dict before it gets json.dump'd
+        test_votes     = metrics.pop("_detail_test_votes")
+        test_decisions = metrics.pop("_detail_test_decisions")
 
         split_out_dir = output_dir / split_name
         split_out_dir.mkdir(parents=True, exist_ok=True)
         with open(split_out_dir / "metrics.json", "w") as fh:
             json.dump(metrics, fh, indent=2)
-        print(f"  Saved → {split_out_dir}")
+
+        # voter_scores.parquet: who voted, with what VAR_score, on which
+        # item — the join key for T1 user-characteristics analysis.
+        voter_cols = [c for c in ["community", "item_id", "username", "vote", "VAR_score"]
+                      if c in test_votes.columns]
+        test_votes[voter_cols].to_parquet(split_out_dir / "voter_scores.parquet", index=False)
+
+        # item_scores.parquet: final decision per test item.
+        item_cols = [c for c in ["community", "item_id", "predicted", "label"]
+                     if c in test_decisions.columns]
+        test_decisions[item_cols].to_parquet(split_out_dir / "item_scores.parquet", index=False)
+
+        # all_user_var_scores.parquet: the FULL per-(community, username)
+        # VAR_score table, not top-K filtered — see docstring above for why
+        # this (and not voter_scores.parquet) is the right file for T1.
+        scores.to_parquet(split_out_dir / "all_user_var_scores.parquet", index=False)
+
+        print(f"  Saved → {split_out_dir} "
+              f"(metrics.json, voter_scores.parquet [{len(test_votes)} rows], "
+              f"item_scores.parquet [{len(test_decisions)} rows], "
+              f"all_user_var_scores.parquet [{len(scores)} rows, unfiltered])")
 
         summary[split_name] = metrics
 

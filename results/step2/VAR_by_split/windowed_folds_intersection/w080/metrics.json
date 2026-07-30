@@ -1,0 +1,20 @@
+{
+  "macro_f1": 0.6379787576440297,
+  "roc_auc": 0.8088235294117647,
+  "f1_pos": 0.8451882845188284,
+  "f1_neg": 0.4307692307692308,
+  "macro_precision": 0.6331484049930651,
+  "macro_recall": 0.8088235294117647,
+  "precision_pos": 0.9805825242718447,
+  "recall_pos": 0.7426470588235294,
+  "precision_neg": 0.2857142857142857,
+  "recall_neg": 0.875,
+  "split": "windowed_folds_intersection/w080",
+  "strategy": "majority",
+  "mode": "per_community",
+  "k": 3,
+  "val_macro_f1": 0.6926338102808691,
+  "n_train_items": 2451,
+  "n_val_items": 1020,
+  "n_test_items": 1020
+}

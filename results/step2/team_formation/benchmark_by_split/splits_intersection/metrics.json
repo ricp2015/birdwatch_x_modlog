@@ -1,0 +1,21 @@
+{
+  "threshold": 0.3963210702341138,
+  "macro_f1": 0.6598350715498423,
+  "macro_precision": 0.6432675835157514,
+  "macro_recall": 0.6891987431264729,
+  "f1_pos": 0.8986175115207373,
+  "f1_neg": 0.42105263157894735,
+  "f1_approve": 0.8986175115207373,
+  "f1_remove": 0.42105263157894735,
+  "precision_pos": 0.9256329113924051,
+  "recall_pos": 0.8731343283582089,
+  "precision_neg": 0.3609022556390977,
+  "recall_neg": 0.5052631578947369,
+  "roc_auc": 0.7123644933228594,
+  "n_items": 765,
+  "split": "splits_intersection",
+  "n_train_items": 3572,
+  "n_val_items": 765,
+  "n_test_items": 767,
+  "coverage_test": 0.9973924380704041
+}

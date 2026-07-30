@@ -1,0 +1,8 @@
+run,label,macro_f1,roc_auc,f1_pos,f1_neg,macro_precision,macro_recall,precision_pos,recall_pos,precision_neg,recall_neg,alpha,threshold,polarity
+baselines/reddit/BL5_subreddit,BL5_subreddit,0.6788,0.3579,0.9079,0.4498,0.6774,0.6902,0.916,0.901,0.4389,0.4794,,—,✗
+baselines/reddit/BL3_subreddit_adjusted,BL3 Subreddit-adj.,0.6558,0.5621,0.9099,0.4018,0.6962,0.6608,0.9111,0.9147,0.4814,0.4069,1.3789473684210525,—,✗
+reddit_cn,CN MF  (+votes),0.5332,0.5154,0.8761,0.1903,0.5354,0.5337,0.8718,0.8809,0.199,0.1864,—,-0.0812,✓
+baselines/reddit/BL1_net_score,BL1 Net score,0.5294,0.5641,0.8554,0.2034,0.5558,0.5562,0.885,0.8497,0.2266,0.2627,1.0,—,✗
+baselines/reddit/BL2_weighted_net_score,BL2 Weighted,0.5272,0.5621,0.8474,0.207,0.5543,0.5526,0.8841,0.8345,0.2246,0.2706,1.3789473684210525,—,✗
+reddit_cn_inverted,CN MF  (−votes),0.5244,0.4916,0.8691,0.1797,0.5266,0.5264,0.8704,0.8688,0.1829,0.184,—,-0.384,✓
+baselines/reddit/BL4_reddit_score,BL4_reddit_score,0.4773,0.3579,0.9131,0.0416,0.5079,0.4993,0.8625,0.9709,0.1533,0.0277,,—,✗

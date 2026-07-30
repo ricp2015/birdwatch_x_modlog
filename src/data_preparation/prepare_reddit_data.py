@@ -1013,19 +1013,32 @@ def produce_splits(
     """
     Produce and save two independent train/val/test splits:
 
-      splits_full/          — density-filtered dataset (all posts that pass
-                              the BL/CN filter; same population used by the
-                              existing splits/ directory but re-split here
-                              explicitly for parity with splits_intersection)
+      splits_full/          — TRULY UNFILTERED dataset: every vote that
+                              survives only the minimal cleaning in
+                              load_dataset() (valid vote/label, deduped
+                              (username,item_id) pairs) — NOT the density
+                              filter (min votes/post, min votes/user). Every
+                              post is included, even ones with a single
+                              voter; methods are expected to fall back
+                              (e.g. net-vote) when they have no real signal
+                              for an item, instead of silently dropping it.
+                              This is the "how much do performances degrade
+                              when nothing gets filtered out" population.
 
       splits_intersection/  — only posts/users surviving EVERY method's
-                              specific filter; guarantees no method needs
-                              to do further filtering at evaluation time
+                              specific filter (built on top of the
+                              density-filtered dataset); guarantees no
+                              method needs to do further filtering at
+                              evaluation time.
 
     Both splits use the same random, seeded item-level assignment logic
     as chronological_split() (name kept, logic is now random — see there).
+
+    NOTE: df_full here is the RAW (pre-density-filter) dataframe passed in
+    by run_step1 — see the "full (unfiltered)" section there. It is NOT the
+    same `df` used for splits/ or splits_intersection/.
     """
-    log.info("=== Producing splits_full ===")
+    log.info("=== Producing splits_full (unfiltered — every post, fallback expected) ===")
     _chrono_split_to_disk(df_full,         output_dir / "splits_full",         "full")
 
     log.info("=== Producing splits_intersection ===")
@@ -1235,8 +1248,21 @@ def run_step1(
     9.  Identify per-method filters → filter_report.json
     10. Build intersection dataset (posts/users surviving ALL method filters).
     11. Produce splits_full/ and splits_intersection/  (random, seeded, 70/15/15).
+        splits_full/ is built from the RAW, UNFILTERED population (only the
+        minimal load_dataset() cleaning — no density filter): every post is
+        included, even ones with a single voter. splits_intersection/ is
+        built from the density-filtered intersection of every method's
+        specific requirements. Evaluation code is expected to fall back
+        (e.g. net-vote) on splits_full items it has no real signal for,
+        instead of silently dropping them — this measures how much
+        performance degrades when nothing gets filtered out upstream.
     12. Produce windowed_folds_full/ and windowed_folds_intersection/
-        (data-sufficiency analysis, 5 window sizes × fixed 20% random test set).
+        (data-sufficiency analysis, 5 window sizes, fixed random val/test).
+        Both windowed_folds_full/ and windowed_folds_intersection/ use the
+        density-filtered populations (df / df_inter respectively) — same as
+        before. windowed_folds_full/ was briefly switched to the raw
+        unfiltered population, then reverted back on request, to isolate
+        the effect of unfiltering on splits_full alone first.
 
     Parameters
     ----------
@@ -1252,8 +1278,11 @@ def run_step1(
     log.info("=" * 50)
 
     # ── original pipeline ────────────────────────────────────────────────────
-    df = load_dataset(input_path)
-    df = apply_density_filter(df)
+    df_raw = load_dataset(input_path)   # minimal cleaning ONLY (valid vote/label,
+                                          # deduped (username,item_id)) — NO density
+                                          # filter. Kept aside to build the truly
+                                          # unfiltered "full" splits later.
+    df = apply_density_filter(df_raw)
     usernames = df["username"].unique().tolist()
     history_after, history_before = infer_history_window(df)
 
@@ -1277,6 +1306,12 @@ def run_step1(
     df = merge_user_metadata(df, user_meta)
     print_summary(df)
 
+    # same metadata merge applied to the RAW (unfiltered) population — users
+    # who didn't pass the density filter simply get NaN metadata (left join),
+    # exactly the kind of gap the per-method net-vote fallback is meant to
+    # cover at evaluation time.
+    df_raw = merge_user_metadata(df_raw, user_meta)
+
     splits = chronological_split(df)   # now random, seeded — see function docstring
     save_outputs(df, user_meta, history_tables, splits, output_dir)   # writes legacy splits/
 
@@ -1299,7 +1334,12 @@ def run_step1(
     df_inter = build_intersection_dataset(df, filter_report)
 
     save_filter_report(filter_report, df, df_inter, output_dir)
-    produce_splits(df, df_inter, output_dir)
+
+    # NOTE: df_raw (unfiltered) goes into splits_full only, for now — see
+    # discussion with the user: windowed_folds_full/* is reverted back to
+    # the density-filtered df, to isolate what changes when JUST splits_full
+    # becomes unfiltered before extending this further.
+    produce_splits(df_raw, df_inter, output_dir)
 
     produce_windowed_folds(df,       output_dir, tag="full")
     produce_windowed_folds(df_inter, output_dir, tag="intersection")
@@ -1307,6 +1347,7 @@ def run_step1(
     log.info("Step 1 complete.")
     return {
         "filtered_df":        df,
+        "raw_unfiltered_df":  df_raw,
         "intersection_df":    df_inter,
         "user_meta":          user_meta,
         "history_tables":     history_tables,

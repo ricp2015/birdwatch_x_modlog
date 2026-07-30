@@ -1,0 +1,36 @@
+{
+  "splits": {
+    "threshold": -0.05513784461152893,
+    "macro_precision": 0.8742115462187259,
+    "macro_recall": 0.8866287933864319,
+    "macro_f1": 0.8782706424797235,
+    "precision_pos": 0.8116970278044103,
+    "recall_pos": 0.9099312123817713,
+    "f1_pos": 0.8580115536637276,
+    "precision_neg": 0.9367260646330414,
+    "recall_neg": 0.8633263743910925,
+    "f1_neg": 0.8985297312957196,
+    "roc_auc": 0.9451682921152132,
+    "polarity_correct": true,
+    "n_items_test": 11837,
+    "n_items_missing_i_n": 0,
+    "n_bridging_items": 5118,
+    "bridging_pct": 0.4323730675002112,
+    "bridging_accuracy": 0.9462680734661977,
+    "non_bridging_accuracy": 0.832415538026492,
+    "bridging_label_dist": {
+      "-1": 3149,
+      "1": 1969
+    },
+    "bridging_vote_entropy_mean": 0.37935748033819167,
+    "non_bridging_vote_entropy": 0.3836421581397476,
+    "corr_abs_fn_vote_entropy": 0.14837695252901043,
+    "corr_abs_fn_n_voters": -0.05973811285371285,
+    "mean_i_n_approve": 0.35324499011039734,
+    "mean_i_n_remove": -0.27324920892715454,
+    "mean_abs_f_n": 0.5402255058288574,
+    "split": "splits",
+    "n_train_items": 55237,
+    "n_val_items": 11836
+  }
+}
