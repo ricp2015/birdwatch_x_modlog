@@ -1,41 +1,4 @@
-"""
-bandit_dr.py — Opzione 3 (bandit + DR) del team_formation_ideas.md, prototipo
-standalone.
-
-Design scelto (vedi discussione):
-- LinUCB IBRIDO (Li et al. 2010): componente condivisa theta_0 (stimata sulle
-  feature del caso x_c) + componente per-utente theta_i (si affina con le
-  osservazioni di quell'utente). Un utente sparso eredita comunque un punteggio
-  sensato dalla parte condivisa.
-- "Online" = replay in ordine CRONOLOGICO dei voti di TRAIN. Ogni (utente,
-  caso) e' trattato come una pull separata. Reward = il voto di quell'utente
-  concorda con la decisione storica del moderatore (non con l'aggregato
-  y_hat_c, che dipende da pesi ancora in apprendimento -> eviterebbe
-  circolarita').
-- Aggregazione finale per caso: softmax dei trust score -> voto pesato -> segno.
-- Val/Test: NESSUN ulteriore update online. I parametri vengono congelati alla
-  fine del replay di train (stesso protocollo train-only degli altri metodi).
-- Split: usa gli split GIA' pronti (mai generare nuovi split). Ordina
-  cronologicamente train (e, separatamente, val/test per coerenza) prima di
-  qualunque elaborazione.
-- Correzione Doubly Robust: SOLO in fase di valutazione (non guida il
-  training). p_c (propensity) e' approssimato — la probabilita' storica che
-  ESATTAMENTE quell'insieme di votanti V_c si formi e' quasi sempre ~0 (gli
-  insiemi di votanti quasi mai si ripetono identici), quindi p_c viene stimato
-  con un modello di propensity più grezzo: P(azione maggioritaria osservata |
-  community, profilo aggregato di reliability dei votanti). Questo è
-  un'approssimazione dichiarata, non l'esatta definizione letterale del
-  documento originale — da segnalare in tesi.
-
-Uso:
-    python bandit_dr.py --votes-dir data/splits_intersection --out-dir results/bandit_dr/splits_intersection
-
-Assunzioni sullo schema dei file (adatta ai nomi reali se diversi):
-    train_votes.parquet / val_votes.parquet / test_votes.parquet:
-        username, item_id, vote (+1/-1), timestamp, community
-    posts.parquet (o colonna 'label' già dentro i vote file):
-        item_id, label (+1 approve / -1 remove), community
-"""
+"""Hybrid LinUCB with a doubly robust evaluation estimate."""
 
 import argparse
 import json
@@ -47,30 +10,18 @@ from sklearn.linear_model import LogisticRegression
 
 from shared_features import calibrate_thresholds_per_community, apply_thresholds
 
-RIDGE_LAMBDA = 1.0        # regolarizzazione A_0, A_i (I * lambda)
-UCB_ALPHA = 0.6           # peso del termine di confidenza (esplorazione)
-MIN_SUB_SAMPLES = 30      # sotto questa soglia, propensity/model fallback globale
+RIDGE_LAMBDA = 1.0
+UCB_ALPHA = 0.6
+MIN_SUB_SAMPLES = 30
 
-
-# ---------------------------------------------------------------------------
-# Feature per (utente, caso) — phi(i, c) = [x_c || u_{i,s}]
-# Volutamente minimale per il primo prototipo: si estende dopo con lo score
-# di graph propagation (Opzione 1), una volta pronto.
-# ---------------------------------------------------------------------------
 
 def build_context_features(posts: pd.DataFrame, running_stats: dict) -> pd.DataFrame:
-    """x_c: feature del caso, causali (solo statistiche note FINO a quel punto
-    nel replay). running_stats viene aggiornato incrementalmente dal replay,
-    non da tutto il train in blocco, per evitare leakage temporale entro lo
-    stesso split di training."""
-    # placeholder strutturale: il replay aggiorna running_stats per community
-    # (n_posts_visti, approve_rate_visto) e li inietta riga per riga.
+    """Return item features available at the current replay point."""
     return posts
 
 
 def user_feature_vector(user_state: dict, community: str, base_dim: int) -> np.ndarray:
-    """u_{i,s}: stato per-utente-community (reliability corrente, n_voti
-    visti, direzione prevalente). Vettore fisso, zero-padded se nuovo."""
+    """Build the current user-community state vector."""
     key = (user_state.get("username"), community)
     st = user_state["by_user_sub"].get(key)
     if st is None:
@@ -80,13 +31,12 @@ def user_feature_vector(user_state: dict, community: str, base_dim: int) -> np.n
     return np.array([reliability, min(np.log1p(n), 5.0), st["last_vote"]])
 
 
-# ---------------------------------------------------------------------------
-# LinUCB ibrido — replay cronologico
-# ---------------------------------------------------------------------------
-
 class HybridLinUCB:
+    """Maintain shared and per-user parameters for Hybrid LinUCB."""
+
     def __init__(self, d_shared: int, d_user: int, alpha: float = UCB_ALPHA,
                  lam: float = RIDGE_LAMBDA):
+        """Initialize regularized shared and per-user state."""
         self.alpha = alpha
         self.d_shared = d_shared
         self.d_user = d_user
@@ -95,6 +45,7 @@ class HybridLinUCB:
         self.per_user = {}  # username -> dict(A, B, Ainv_cached lazily, b)
 
     def _user_state(self, username: str):
+        """Create or return the parameter state for one user."""
         if username not in self.per_user:
             self.per_user[username] = {
                 "A": RIDGE_LAMBDA * np.eye(self.d_user),
@@ -104,10 +55,7 @@ class HybridLinUCB:
         return self.per_user[username]
 
     def score(self, username: str, z_shared: np.ndarray, x_user: np.ndarray) -> float:
-        """z_shared: feature condivise (stesse per tutti gli utenti sul caso c,
-        cioè x_c). x_user: feature specifiche utente (u_{i,s}) usate come
-        'contesto' del braccio personale, secondo la formulazione ibrida di
-        Li et al. 2010."""
+        """Score a user from shared and user-specific context."""
         st = self._user_state(username)
         A0_inv = np.linalg.inv(self.A0)
         A_inv = np.linalg.inv(st["A"])
@@ -115,7 +63,7 @@ class HybridLinUCB:
         theta = A_inv @ (st["b"] - st["B"] @ beta)
 
         s = float(z_shared @ beta + x_user @ theta)
-        # termine di confidenza (approssimazione standard hybrid-LinUCB)
+        # Standard Hybrid LinUCB confidence term.
         var = (
             x_user @ A_inv @ x_user
             + z_shared @ A0_inv @ z_shared
@@ -126,6 +74,7 @@ class HybridLinUCB:
         return s + self.alpha * np.sqrt(var)
 
     def update(self, username: str, z_shared: np.ndarray, x_user: np.ndarray, reward: float):
+        """Update shared and user parameters from one observed reward."""
         st = self._user_state(username)
         A0_inv = np.linalg.inv(self.A0)
 
@@ -143,15 +92,12 @@ class HybridLinUCB:
             - st["B"].T @ np.linalg.inv(st["A"]) @ st["b"]
 
 
-# ---------------------------------------------------------------------------
-# Replay + aggregazione
-# ---------------------------------------------------------------------------
-
 def replay_train(train_votes: pd.DataFrame, d_shared: int, d_user: int) -> HybridLinUCB:
+    """Fit the bandit by replaying training votes in timestamp order."""
     train_votes = train_votes.sort_values("timestamp").reset_index(drop=True)
     bandit = HybridLinUCB(d_shared, d_user)
 
-    # stato causale per costruire feature senza leakage
+    # Update state after each observation to avoid temporal leakage.
     user_state = {"by_user_sub": {}}
     sub_running = {}  # community -> {n_posts, n_approve}
 
@@ -160,16 +106,16 @@ def replay_train(train_votes: pd.DataFrame, d_shared: int, d_user: int) -> Hybri
         stats = sub_running.setdefault(community, {"n": 0, "approve": 0})
         n_seen = max(stats["n"], 1)
         z_shared = np.array([
-            stats["approve"] / n_seen,          # approve_rate visto finora
-            min(np.log1p(stats["n"]), 5.0),     # log-volume visto finora
-            1.0,                                 # intercetta
+            stats["approve"] / n_seen,
+            min(np.log1p(stats["n"]), 5.0),
+            1.0,
         ])
         x_user = user_feature_vector(
             {"username": row.username, "by_user_sub": user_state["by_user_sub"]},
             community, d_user,
         )
 
-        score = bandit.score(row.username, z_shared, x_user)  # noqa: F841 (non usato nel replay train)
+        score = bandit.score(row.username, z_shared, x_user)  # noqa: F841
         reward = 1.0 if row.vote == row.label else -1.0
         bandit.update(row.username, z_shared, x_user, reward)
 
@@ -179,18 +125,17 @@ def replay_train(train_votes: pd.DataFrame, d_shared: int, d_user: int) -> Hybri
         st["agree"] += 1 if row.vote == row.label else 0
         st["last_vote"] = row.vote
 
-        # aggiorna stato community DOPO aver usato le stats pre-update (causale)
+        # Community statistics are updated last.
         stats["n"] += 1
         stats["approve"] += 1 if row.label == 1 else 0
 
-    bandit._user_state_snapshot = user_state["by_user_sub"]  # per l'inferenza
+    bandit._user_state_snapshot = user_state["by_user_sub"]
     bandit._sub_running_snapshot = sub_running
     return bandit
 
 
 def predict_cases(bandit: HybridLinUCB, votes: pd.DataFrame, d_shared: int, d_user: int) -> pd.DataFrame:
-    """Nessun ulteriore update online qui: parametri congelati. Calcola trust
-    score, aggrega per softmax-weighted majority per ogni item_id."""
+    """Predict with frozen state and softmax-weighted votes."""
     user_state = bandit._user_state_snapshot
     sub_running = bandit._sub_running_snapshot
 
@@ -207,23 +152,18 @@ def predict_cases(bandit: HybridLinUCB, votes: pd.DataFrame, d_shared: int, d_us
     df = pd.DataFrame(rows, columns=["item_id", "username", "vote", "label", "community", "trust"])
 
     def agg(g):
+        """Reduce one item's votes to a trust-weighted score."""
         w = np.exp(g["trust"] - g["trust"].max())
         w = w / w.sum()
-        score = float((w * g["vote"]).sum())  # continuo in [-1, 1], NON ancora sogliato
+        score = float((w * g["vote"]).sum())
         return pd.Series({"label": g["label"].iloc[0], "community": g["community"].iloc[0],
                            "score": score, "n_voters": len(g)})
 
     return df.groupby("item_id").apply(agg).reset_index()
 
 
-# ---------------------------------------------------------------------------
-# Correzione Doubly Robust (solo valutazione)
-# ---------------------------------------------------------------------------
-
 def estimate_propensity(train_preds: pd.DataFrame) -> LogisticRegression:
-    """p_c approssimato: P(l'azione maggioritaria osservata sia 'approve') dato
-    community + n_voters, stimato SOLO su train. Approssimazione dichiarata
-    (non il match esatto dell'insieme di votanti, vedi nota in testa al file)."""
+    """Estimate approval propensity from training data."""
     X = pd.get_dummies(train_preds[["community"]], columns=["community"])
     X["n_voters"] = train_preds["n_voters"]
     y = (train_preds["label"] == 1).astype(int)
@@ -234,12 +174,7 @@ def estimate_propensity(train_preds: pd.DataFrame) -> LogisticRegression:
 
 
 def doubly_robust_value(preds: pd.DataFrame, propensity_model: LogisticRegression) -> float:
-    """preds deve contenere y_hat (post-calibrazione soglia), label, community,
-    n_voters. FIX: self-normalized IPW invece di media semplice — la media
-    semplice esplode quando p_c e' vicino al floor di clipping (visto in
-    pratica: dr_value ~2.09, fuori dal range teorico [-1,1] del reward).
-    Self-normalizzando (dividendo per la somma dei pesi anziche' per N) il
-    risultato resta limitato e interpretabile."""
+    """Compute a self-normalized doubly robust value estimate."""
     X = pd.get_dummies(preds[["community"]], columns=["community"])
     for col in propensity_model._columns:
         if col not in X.columns:
@@ -261,11 +196,8 @@ def doubly_robust_value(preds: pd.DataFrame, propensity_model: LogisticRegressio
     return float(np.mean(r_hat) + correction)
 
 
-# ---------------------------------------------------------------------------
-# Metriche standard (coerenti col resto della pipeline)
-# ---------------------------------------------------------------------------
-
 def compute_metrics(preds: pd.DataFrame) -> dict:
+    """Calculate classification metrics from thresholded item scores."""
     from sklearn.metrics import f1_score, roc_auc_score
 
     y_true = preds["label"]
@@ -283,18 +215,15 @@ def compute_metrics(preds: pd.DataFrame) -> dict:
     return metrics
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-DEFAULT_VOTES_DIR = "data/splits_intersection"
-DEFAULT_OUT_DIR = "results/bandit_dr/splits_intersection"
+DEFAULT_VOTES_DIR = "data/splits/reddit/intersection"
+DEFAULT_OUT_DIR = "results/reddit/intersection/bandit-dr"
 
 
 def main():
+    """Train the bandit, calibrate scores, and save test predictions."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--votes-dir", default=DEFAULT_VOTES_DIR,
-                         help="cartella dello split gia' pronto (default: %(default)s)")
+                         help="Prepared split directory (default: %(default)s)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR,
                          help="default: %(default)s")
     args = parser.parse_args()
@@ -307,17 +236,17 @@ def main():
     val = pd.read_parquet(votes_dir / "val_votes.parquet").sort_values("timestamp")
     test = pd.read_parquet(votes_dir / "test_votes.parquet").sort_values("timestamp")
 
-    d_shared, d_user = 3, 3  # coerente con build_context_features / user_feature_vector sopra
+    d_shared, d_user = 3, 3
 
-    print("Replay LinUCB su train (ordine cronologico)...")
+    print("Replaying training votes...")
     bandit = replay_train(train, d_shared, d_user)
 
-    print("Inferenza su train/val/test (score continuo, non ancora sogliato)...")
+    print("Scoring train, validation, and test sets...")
     train_scores = predict_cases(bandit, train, d_shared, d_user)
     val_scores = predict_cases(bandit, val, d_shared, d_user)
     test_scores = predict_cases(bandit, test, d_shared, d_user)
 
-    print("Calibrazione soglia per-community su VAL...")
+    print("Calibrating community thresholds...")
     thresholds, global_threshold = calibrate_thresholds_per_community(val_scores)
     train_preds = apply_thresholds(train_scores, thresholds, global_threshold)
     val_preds = apply_thresholds(val_scores, thresholds, global_threshold)
@@ -340,7 +269,7 @@ def main():
     test_preds.to_parquet(out_dir / "test_predictions.parquet", index=False)
 
     print(json.dumps(results, indent=2))
-    print(f"\nSalvato in {out_dir}")
+    print(f"\nSaved to {out_dir}")
 
 
 if __name__ == "__main__":

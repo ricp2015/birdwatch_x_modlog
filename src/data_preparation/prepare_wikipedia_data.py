@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-OUTPUT_DIR = Path("results/step1/wikipedia/")
+OUTPUT_DIR = Path("data/interim/wikipedia/standard")
 # density thresholds (Birdwatch)
 MIN_VOTES_PER_DEBATE = 5
 MIN_VOTES_PER_USER   = 10
@@ -15,10 +15,10 @@ MIN_VOTES_PER_USER   = 10
 TRAIN_RATIO = 0.70
 VAL_RATIO   = 0.15
 TEST_RATIO  = 0.15
-# vote-label → binary vote mapping, only keep/delete variants are retained
+# vote-label -> binary vote mapping, only keep/delete variants are retained
 KEEP_LABELS   = {"keep", "keep speedy"}
 DELETE_LABELS = {"delete", "delete speedy"}
-# outcome-label → binary ground truth mapping
+# outcome-label -> binary ground truth mapping
 KEEP_OUTCOMES   = {"keep", "keep speedy"}
 DELETE_OUTCOMES = {"delete", "delete speedy"}
 
@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 # helper functions
 # convert a Wikipedia account creation date to a Unix timestamp
 def _parse_signup(signup: Any) -> Optional[float]:
+    """Parse signup from the supplied input."""
     if signup is None or (isinstance(signup, float) and np.isnan(signup)):
         return np.nan
     try:
@@ -51,12 +52,14 @@ def _parse_signup(signup: Any) -> Optional[float]:
 
 # convert a Unix creation timestamp to account age in days
 def _compute_tenure(created_ts: Any) -> float:
+    """Compute tenure from the supplied data."""
     if created_ts is None or (isinstance(created_ts, float) and np.isnan(created_ts)):
         return np.nan
     return (time.time() - float(created_ts)) / 86400
 
 
 def _shannon_entropy(counts: np.ndarray) -> float:
+    """Calculate Shannon entropy for observed category counts."""
     counts = counts[counts > 0]
     if len(counts) == 0:
         return np.nan
@@ -65,6 +68,7 @@ def _shannon_entropy(counts: np.ndarray) -> float:
 
 # 1. Load ConvoKit corpus and build base dataframes
 def load_corpus() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load corpus from its configured source."""
     try:
         from convokit import Corpus, download
     except ImportError as exc:
@@ -141,11 +145,12 @@ def load_corpus() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return df_speakers, df_utts, df_convs
 
 # 2. Build vote matrix
-# construct the user × debate vote dataframe from the raw utterances
+# construct the user x debate vote dataframe from the raw utterances
 def build_vote_matrix(
     df_utts: pd.DataFrame,
     df_convs: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Build vote matrix from the supplied data."""
     log.info("Building vote matrix...")
     votes = df_utts[df_utts["type"] == "vote"].copy()
     vote_label_lower = votes["vote_label"].str.lower().str.strip()
@@ -229,7 +234,7 @@ def build_vote_matrix(
 
     # alignment diagnostic
     alignment = votes.groupby("label")["vote"].mean()
-    log.info("Vote–label alignment (avg vote per label):\n%s", alignment.to_string())
+    log.info("Vote-label alignment (avg vote per label):\n%s", alignment.to_string())
     if alignment.get(1, 0) < alignment.get(-1, 0):
         log.warning(
             "Polarity check FAILED: avg vote for label=+1 (%.4f) < label=-1 (%.4f)",
@@ -244,17 +249,7 @@ def truncate_to_first_k_votes(
     df: pd.DataFrame,
     k: int,
 ) -> pd.DataFrame:
-    """
-    For each debate (item_id), keep only the first k votes ordered by timestamp.
-
-    This transforms the task from vote-aggregation (tautological on AfD) into
-    early-detection: can CN predict the final admin outcome from the first k
-    votes alone, before the community has reached consensus?
-
-    The truncation happens AFTER binary filtering but BEFORE density filtering,
-    so that the density filter operates on the already-truncated matrix.
-    User and debate coverage will shrink — that is expected.
-    """
+    """Limit to first k votes to the requested size."""
     log.info("Truncating to first %d votes per debate...", k)
     before = len(df)
     df_sorted = df.sort_values(["item_id", "timestamp"])
@@ -265,7 +260,7 @@ def truncate_to_first_k_votes(
         .reset_index(drop=True)
     )
     log.info(
-        "After truncation: %d → %d votes | %d debates | %d users",
+        "After truncation: %d -> %d votes | %d debates | %d users",
         before,
         len(df_truncated),
         df_truncated["item_id"].nunique(),
@@ -279,7 +274,7 @@ def truncate_to_first_k_votes(
         df_truncated["vote"].astype(float), df_truncated["label"].astype(float)
     )[0, 1])
     log.info(
-        "Vote–label Pearson correlation | full votes: %.4f → first-%d votes: %.4f",
+        "Vote-label Pearson correlation | full votes: %.4f -> first-%d votes: %.4f",
         full_corr, k, trunc_corr,
     )
     return df_truncated
@@ -292,6 +287,7 @@ def apply_density_filter(
     min_votes_per_debate: int = MIN_VOTES_PER_DEBATE,
     min_votes_per_user:   int = MIN_VOTES_PER_USER,
 ) -> pd.DataFrame:
+    """Apply density filter to the supplied data."""
 
     log.info(
         "Applying density filter: >=%d votes/debate, >=%d votes/user",
@@ -320,7 +316,7 @@ def apply_density_filter(
 
     # post-filter diagnostics
     corr = float(np.corrcoef(filtered["vote"].astype(float), filtered["label"].astype(float))[0, 1])
-    log.info("Vote–label Pearson correlation (post-filter): %.4f", corr)
+    log.info("Vote-label Pearson correlation (post-filter): %.4f", corr)
     alignment = filtered.groupby("label")["vote"].mean()
     log.info("Avg vote per label (post-filter):\n%s", alignment.to_string())
 
@@ -332,6 +328,7 @@ def build_user_metadata(
     df_speakers: pd.DataFrame,
     df_utts: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Build user metadata from the supplied data."""
     log.info("Building user metadata...")
 
     username_set = set(usernames)
@@ -353,12 +350,14 @@ def build_user_metadata(
     monthly_counts = vote_utts.groupby(["speaker_id", "month"]).size()
 
     def entropy_from_series(s):
+        """Calculate entropy from a pandas series."""
         return _shannon_entropy(s.values.astype(float))
     
     temporal_entropy = monthly_counts.groupby("speaker_id").apply(entropy_from_series)
     agg["temporal_entropy"] = temporal_entropy
 
     def policy_entropy_fn(subdf):
+        """Calculate policy entropy for one user group."""
         counts = {}
         for cit_list in subdf["citations"].dropna():
             if isinstance(cit_list, list):
@@ -383,6 +382,7 @@ def build_user_metadata(
 
 # left-join user metadata onto the vote dataframe
 def merge_user_metadata(df: pd.DataFrame, user_meta: pd.DataFrame) -> pd.DataFrame:
+    """Merge user metadata into the working data."""
     enriched = df.merge(user_meta, on="username", how="left")
     missing = enriched["editcount"].isna().sum()
     log.info(
@@ -401,6 +401,7 @@ def chronological_split(
     val_ratio:   float = VAL_RATIO,
     test_ratio:  float = TEST_RATIO,
 ) -> Dict[str, pd.DataFrame]:
+    """Create item-level train, validation, and test splits."""
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-9, \
         "Split ratios must sum to 1.0"
 
@@ -424,7 +425,7 @@ def chronological_split(
         subset = df_split[df_split["split"] == name].drop(columns="split").copy()
         splits[name] = subset.reset_index(drop=True)
         if len(subset) > 0:
-            # timestamp is already a tz-aware datetime — call .date() directly
+            # timestamp is already a tz-aware datetime - call .date() directly
             log.info(
                 "Split '%s': %d votes | %d users | %d debates | %s -> %s",
                 name,
@@ -440,12 +441,13 @@ def chronological_split(
 
 # 6. Summary
 def print_summary(df: pd.DataFrame) -> None:
+    """Print summary to the console."""
     log.info("--- Dataset summary ---")
     label_dist = df.drop_duplicates("item_id")["label"].value_counts()
     log.info("Debate outcome distribution (post-filter):\n%s", label_dist.to_string())
     vote_dist = df["vote"].value_counts()
     log.info("Vote distribution:\n%s", vote_dist.to_string())
-    # timestamp is already a tz-aware datetime — no re-parsing needed
+    # timestamp is already a tz-aware datetime - no re-parsing needed
     year_dist = df["timestamp"].dt.year.value_counts().sort_index()
     log.info("Votes by year:\n%s", year_dist.to_string())
 
@@ -455,9 +457,11 @@ def save_outputs(
     user_meta:   pd.DataFrame,
     splits:      Dict[str, pd.DataFrame],
     output_dir:  Path = OUTPUT_DIR,
+    splits_dir:  Optional[Path] = None,
 ) -> None:
+    """Write outputs to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    splits_dir = output_dir / "splits"
+    splits_dir = splits_dir or Path("data/splits/wikipedia/standard/random")
     splits_dir.mkdir(exist_ok=True)
 
     filtered_df.to_parquet(output_dir / "filtered_votes.parquet", index=False)
@@ -470,27 +474,12 @@ def save_outputs(
 
 
 # Main function
-def run_step1(
+def prepare_dataset(
     output_dir:           Path         = OUTPUT_DIR,
+    splits_dir:           Optional[Path] = None,
     max_votes_per_debate: Optional[int] = MAX_VOTES_PER_DEBATE,
 ) -> Dict[str, Any]:
-    """
-    1. Load ConvoKit corpus.
-    2. Build binary vote matrix from vote-type utterances.
-    3. (Optional) Truncate to first k votes per debate — early-votes mode.
-    4. Apply Birdwatch density filter.
-    5. Build user metadata from speaker info + vote aggregates.
-    6. Merge metadata onto vote dataframe.
-    7. Print summary.
-    8. Chronological split.
-    9. Save.
-
-    Parameters
-    ----------
-    max_votes_per_debate : int or None
-        If set, keep only the first k votes (by timestamp) per debate before
-        density filtering (early detection).
-    """
+    """Prepare dataset for downstream use."""
     log.info("=" * 50)
     log.info(
         "STEP 1 - DATA PREPARATION  (Wikipedia AfD)  max_votes=%s",
@@ -509,7 +498,7 @@ def run_step1(
     df = merge_user_metadata(df, user_meta)
     print_summary(df)
     splits = chronological_split(df)
-    save_outputs(df, user_meta, splits, output_dir)
+    save_outputs(df, user_meta, splits, output_dir, splits_dir)
     log.info("Step 1 complete.")
     return {
         "filtered_df": df,
@@ -518,14 +507,16 @@ def run_step1(
     }
 
 if __name__ == "__main__":
-    run_step1(
-        output_dir=Path("results/step1/wikipedia"),
+    prepare_dataset(
+        output_dir=Path("data/interim/wikipedia/standard"),
+        splits_dir=Path("data/splits/wikipedia/standard/random"),
         max_votes_per_debate=None,
     )
 
     # early-detection sweep
     for k in [5, 10, 20, 50]:
-        run_step1(
-            output_dir=Path(f"results/step1/wikipedia_early{k}"),
+        prepare_dataset(
+            output_dir=Path(f"data/interim/wikipedia/early/p{k:02d}"),
+            splits_dir=Path(f"data/splits/wikipedia/early/p{k:02d}/random"),
             max_votes_per_debate=k,
         )

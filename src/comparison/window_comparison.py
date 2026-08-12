@@ -1,11 +1,9 @@
-"""
-plot_window_f1.py  — intersection only, legend instead of inline labels
-"""
-
 from __future__ import annotations
 import argparse, json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from src.utils.results import parse_result_path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -63,48 +61,18 @@ METRIC_LABELS = {
 }
 
 BY_SPLIT_SUFFIX      = "_by_split"
-TARGET_FAMILY        = "windowed_folds_intersection"
+TARGET_FAMILY        = "windows/intersection"
 TWO_PART_SPLIT_ROOTS = {"windowed_folds_full", "windowed_folds_intersection"}
 
 
-def _parse_split_and_run(metrics_path: Path, root: Path) -> Optional[Tuple[str, str]]:
-    try:
-        rel_parts = metrics_path.parent.relative_to(root).parts
-    except ValueError:
-        return None
-    for i, part in enumerate(rel_parts):
-        if not part.endswith(BY_SPLIT_SUFFIX):
-            continue
-        after = rel_parts[i + 1:]
-        if not after:
-            return None
-        if after[0] in TWO_PART_SPLIT_ROOTS:
-            if len(after) < 2:
-                return None
-            split_name = f"{after[0]}/{after[1]}"
-            remainder  = after[2:]
-        else:
-            split_name = after[0]
-            remainder  = after[1:]
-        if remainder:
-            run_key = remainder[0]
-        elif i > 0:
-            run_key = rel_parts[i - 1]
-        elif part != "benchmark_by_split":
-            run_key = part[: -len(BY_SPLIT_SUFFIX)]
-        else:
-            run_key = root.name
-        return split_name, run_key
-    return None
-
-
 def collect_windowed(roots: List[Path], metrics: List[str]) -> Dict[str, Dict[str, Dict[int, float]]]:
+    """Collect windowed from the available records."""
     data: Dict[str, Dict[str, Dict[int, float]]] = {m: {} for m in metrics}
     for root in roots:
         if not root.exists():
             continue
         for p in root.rglob("metrics.json"):
-            parsed = _parse_split_and_run(p, root)
+            parsed = parse_result_path(p, root)
             if parsed is None:
                 continue
             split_name, run_key = parsed
@@ -130,9 +98,11 @@ def collect_windowed(roots: List[Path], metrics: List[str]) -> Dict[str, Dict[st
 def _plot_one_axis(ax, method_data: Dict[str, Dict[int, float]],
                    title: str, ylabel: str, show_ylabel: bool,
                    show_legend: bool) -> None:
+    """Plot one axis and save the figure."""
     all_windows = sorted({w for m in method_data.values() for w in m})
 
     def sort_key(label):
+        """Return the numeric window sort key."""
         vals   = list(method_data[label].values())
         spread = max(vals) - min(vals) if vals else 0
         mean   = np.mean(vals) if vals else 0
@@ -185,6 +155,7 @@ def _plot_one_axis(ax, method_data: Dict[str, Dict[int, float]],
 
 def plot_window_metrics(data: Dict[str, Dict[str, Dict[int, float]]],
                         metrics: List[str], out: Path) -> None:
+    """Plot window metrics and save the figure."""
     metrics_present = [m for m in metrics if data.get(m)]
     if not metrics_present:
         print("No windowed intersection data found.")
@@ -208,13 +179,14 @@ def plot_window_metrics(data: Dict[str, Dict[str, Dict[int, float]]],
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Saved → {out}")
+    print(f"Saved -> {out}")
 
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--roots", nargs="+", type=Path,
-                        default=[Path("results/step2"), Path("results/step3_expert")])
+                        default=[Path("results/reddit")])
     parser.add_argument("--metrics", nargs="+", type=str, default=METRICS)
     parser.add_argument("--out", type=Path,
                         default=Path("results/window_metrics_intersection.png"))

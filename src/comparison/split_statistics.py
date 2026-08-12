@@ -2,45 +2,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 import pandas as pd
-
-
-def discover_splits(votes_dir: Path) -> Dict[str, Path]:
-    """
-    Find every split directory produced by prepare_data_step1 under votes_dir,
-    i.e. any folder containing train_votes.parquet / val_votes.parquet /
-    test_votes.parquet.
-    """
-    found: Dict[str, Path] = {}
-    for name in ("splits", "splits_full", "splits_intersection"):
-        d = votes_dir / name
-        if (d / "train_votes.parquet").exists():
-            found[name] = d
-    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
-        root = votes_dir / tag
-        if root.exists():
-            for w_dir in sorted(root.glob("w*")):
-                if (w_dir / "train_votes.parquet").exists():
-                    found[f"{tag}/{w_dir.name}"] = w_dir
-    return found
-
-
-def load_split_data(split_dir: Path):
-    train = pd.read_parquet(split_dir / "train_votes.parquet")
-    val   = pd.read_parquet(split_dir / "val_votes.parquet")
-    test  = pd.read_parquet(split_dir / "test_votes.parquet")
-    return train, val, test
+from src.utils.splits import discover_splits, load_vote_partitions
 
 
 def subset_stats(df: pd.DataFrame, min_vote_thresholds: List[int] = (5, 10, 20)) -> Dict:
-    """
-    Core stats for one subset (train/val/test/total): population size plus
-    saturation indicators — the fraction of users/user*community pairs that
-    already clear common minimum-vote thresholds. This is the key diagnostic
-    for "why doesn't performance change much between small and large
-    training windows": if most active users already clear the threshold
-    even in the smallest window, per-user statistics were already
-    well-estimated and a flat learning curve is expected, not a bug.
-    """
+    """Calculate coverage and density statistics for one split."""
     if df.empty:
         stats = {
             "n_votes": 0, "n_posts": 0, "n_users": 0, "n_communities": 0,
@@ -71,7 +37,7 @@ def subset_stats(df: pd.DataFrame, min_vote_thresholds: List[int] = (5, 10, 20))
     for thr in min_vote_thresholds:
         stats[f"pct_users_ge_{thr}_votes"] = float((votes_per_user >= thr).mean())
 
-    # user x community saturation — this is the unit TFR/SEF actually key
+    # user x community saturation - this is the unit TFR/SEF actually key
     # their per-category / per-subreddit reliability estimates on
     if "community" in df.columns:
         uc_counts = df.groupby(["username", "community"]).size()
@@ -88,6 +54,7 @@ def subset_stats(df: pd.DataFrame, min_vote_thresholds: List[int] = (5, 10, 20))
 
 
 def render_split_report(split_name: str, train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame) -> str:
+    """Render split report as text."""
     subsets = {"train": train, "val": val, "test": test,
                "total": pd.concat([train, val, test], ignore_index=True)}
 
@@ -118,12 +85,7 @@ def render_split_report(split_name: str, train: pd.DataFrame, val: pd.DataFrame,
 
 
 def render_cross_split_overview(per_split_stats: Dict[str, Dict]) -> str:
-    """
-    One row per split, TRAIN-subset only, focused on the numbers that most
-    directly explain a flat/non-flat learning curve: n_votes, n_users,
-    avg_votes_per_user, and the fraction of users already past common
-    minimum-vote thresholds.
-    """
+    """Render cross split overview as text."""
     lines = ["CROSS-SPLIT OVERVIEW (TRAIN subset only)", "=" * 90]
     cols = ["split", "n_votes", "n_posts", "n_users",
             "avg_votes/user", "pct_users>=5", "pct_users>=10", "pct_users>=20"]
@@ -152,6 +114,7 @@ def compare_split_statistics(
     votes_dir:  Path,
     output_dir: Optional[Path] = None,
 ) -> Dict[str, Dict]:
+    """Compare coverage and density across prepared splits."""
     splits = discover_splits(votes_dir)
     if not splits:
         print(f"No split directories found under {votes_dir}")
@@ -163,7 +126,7 @@ def compare_split_statistics(
     all_blocks: List[str] = []
 
     for split_name in sorted(splits.keys()):
-        train, val, test = load_split_data(splits[split_name])
+        train, val, test = load_vote_partitions(splits[split_name])
         block = render_split_report(split_name, train, val, test)
         print(block)
         print()
@@ -190,6 +153,6 @@ def compare_split_statistics(
 
 if __name__ == "__main__":
     compare_split_statistics(
-        Path("results/step1/reddit"),
-        output_dir=Path("results/step1/reddit/split_statistics"),
+        Path("data/splits/reddit"),
+        output_dir=Path("results/diagnostics/split-statistics"),
     )

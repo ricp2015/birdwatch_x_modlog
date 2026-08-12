@@ -1,24 +1,4 @@
-"""
-virtual_ensembles.py — Opzione 2 (virtual team ensembles) del
-team_formation_ideas.md.
-
-Per ogni item, divide i votanti in sotto-team basati su due assi (reliability
-storica train-only, e score PPR di prossimità al moderatore riusato dal
-Componente A / graph_propagation.py):
-    - team 'core'    : reliability alta  + PPR alto
-    - team 'fresh'    : reliability bassa + PPR alto  (occhi nuovi ma ben
-                        collegati nella rete)
-    - team 'niche'    : reliability alta  + PPR basso  (specialisti isolati)
-    - team 'other'    : il resto
-
-Ogni sotto-team produce un verdetto (majority vote pesato per reliability
-interna al team). I quattro verdetti (uno o più possono mancare se il team è
-vuoto per quell'item -> zero-padded) diventano feature di un meta-modello
-(logistic regression) allenato SOLO su train, che produce la decisione finale.
-
-Uso:
-    python virtual_ensembles.py --votes-dir data/splits_intersection --out-dir results/virtual_ensembles/splits_intersection
-"""
+"""Combine votes from reliability- and graph-based voter groups."""
 
 import argparse
 import json
@@ -31,19 +11,20 @@ from sklearn.metrics import f1_score, roc_auc_score
 
 from shared_features import compute_ppr_scores
 
-DEFAULT_VOTES_DIR = "data/splits_intersection"
-DEFAULT_OUT_DIR = "results/virtual_ensembles/splits_intersection"
+DEFAULT_VOTES_DIR = "data/splits/reddit/intersection"
+DEFAULT_OUT_DIR = "results/reddit/intersection/virtual-ensembles"
 RELIABILITY_SEED_THR = 0.6
 
 
 def compute_train_reliability(train: pd.DataFrame) -> dict:
-    """Reliability grezza per utente, SOLO train (accordo col moderatore)."""
+    """Compute training-only user reliability."""
     agree = train["vote"] == train["label"]
     rel = train.assign(agree=agree).groupby("username")["agree"].mean()
     return rel.to_dict()
 
 
 def assign_team(reliability: float, ppr: float, rel_median: float, ppr_median: float) -> str:
+    """Assign a voter to one of four reliability and PageRank groups."""
     if reliability >= rel_median and ppr >= ppr_median:
         return "core"
     if reliability < rel_median and ppr >= ppr_median:
@@ -54,9 +35,7 @@ def assign_team(reliability: float, ppr: float, rel_median: float, ppr_median: f
 
 
 def team_verdict(group: pd.DataFrame) -> float:
-    """Majority vote pesato per reliability interna al sotto-team. Ritorna 0.0
-    (neutro) se il sotto-team è vuoto per quell'item — zero-padding coerente
-    col resto della pipeline (SEF fa lo stesso per gli slot rank mancanti)."""
+    """Return the reliability-weighted vote for one group."""
     if len(group) == 0:
         return 0.0
     w = group["_reliability"].clip(lower=0.01)
@@ -64,7 +43,7 @@ def team_verdict(group: pd.DataFrame) -> float:
 
 
 def build_item_features(votes: pd.DataFrame) -> pd.DataFrame:
-    """Una riga per item_id, con 4 feature (verdetto per team) + label."""
+    """Build one feature row per item."""
     rows = []
     for item_id, g in votes.groupby("item_id"):
         feats = {"item_id": item_id, "label": g["label"].iloc[0], "community": g["community"].iloc[0]}
@@ -78,6 +57,7 @@ def build_item_features(votes: pd.DataFrame) -> pd.DataFrame:
 
 
 def annotate_teams(votes: pd.DataFrame, reliability: dict, ppr_scores: dict) -> pd.DataFrame:
+    """Attach reliability, PageRank, and group labels to each vote."""
     votes = votes.copy()
     rel_default = np.median(list(reliability.values())) if reliability else 0.5
     ppr_default = np.median(list(ppr_scores.values())) if ppr_scores else 0.0
@@ -95,6 +75,7 @@ def annotate_teams(votes: pd.DataFrame, reliability: dict, ppr_scores: dict) -> 
 
 
 def compute_metrics(y_true, y_pred) -> dict:
+    """Calculate classification metrics for one split."""
     metrics = {
         "macro_f1": f1_score(y_true, y_pred, average="macro"),
         "f1_pos": f1_score(y_true, y_pred, pos_label=1),
@@ -109,6 +90,7 @@ def compute_metrics(y_true, y_pred) -> dict:
 
 
 def main():
+    """Train the group-level ensemble and save its test predictions."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--votes-dir", default=DEFAULT_VOTES_DIR)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
@@ -122,11 +104,11 @@ def main():
     val = pd.read_parquet(votes_dir / "val_votes.parquet").sort_values("timestamp")
     test = pd.read_parquet(votes_dir / "test_votes.parquet").sort_values("timestamp")
 
-    print("Reliability train-only + PPR (riuso Componente A)...")
+    print("Computing reliability and PageRank scores...")
     reliability = compute_train_reliability(train)
     ppr_scores = compute_ppr_scores(train, reliability_thr=RELIABILITY_SEED_THR)
 
-    print("Assegnazione sotto-team e costruzione feature per item...")
+    print("Building group features...")
     train_annot = annotate_teams(train, reliability, ppr_scores)
     val_annot = annotate_teams(val, reliability, ppr_scores)
     test_annot = annotate_teams(test, reliability, ppr_scores)
@@ -138,7 +120,7 @@ def main():
     feature_cols = ["verdict_core", "verdict_fresh", "verdict_niche", "verdict_other",
                      "n_core", "n_fresh", "n_niche", "n_other", "n_voters"]
 
-    print("Allenamento meta-modello (stacking dei verdetti di sotto-team) su train...")
+    print("Training the meta-model...")
     meta_model = LogisticRegression(max_iter=500, class_weight="balanced")
     meta_model.fit(train_feats[feature_cols], train_feats["label"])
 
@@ -156,7 +138,7 @@ def main():
     predictions["test"].to_parquet(out_dir / "test_predictions.parquet", index=False)
 
     print(json.dumps(results, indent=2))
-    print(f"\nSalvato in {out_dir}")
+    print(f"\nSaved to {out_dir}")
 
 
 if __name__ == "__main__":

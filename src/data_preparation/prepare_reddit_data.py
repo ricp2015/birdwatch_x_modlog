@@ -11,17 +11,17 @@ import requests
 from tqdm import tqdm
 
 INPUT_PATH = Path("data/processed/final_intersection_dataset.csv")
-OUTPUT_DIR = Path("results/step1/reddit/")
+OUTPUT_DIR = Path("data/interim/reddit")
+SPLITS_DIR = Path("data/splits/reddit")
 
 # birdwatch thresholds
 MIN_VOTES_PER_POST = 5
 MIN_VOTES_PER_USER = 10
-# split ratios (sum to 1) -- now RANDOM, not chronological
+# split ratios (sum to 1)
 TRAIN_RATIO = 0.70
 VAL_RATIO = 0.15
 TEST_RATIO = 0.15
-# fixed seed so the random split is reproducible across runs
-RANDOM_SEED = 42
+RANDOM_SEED = 10
 # API docs: https://github.com/ArthurHeitmann/arctic_shift/tree/master/api
 ARCTIC_SHIFT_BASE = "https://arctic-shift.photon-reddit.com"
 API_TIMEOUT_SEC = 30
@@ -41,7 +41,7 @@ HISTORY_BEFORE = None
 # sleep for the API.
 API_SLEEP_SEC = 0.35
 
-# ── per-method filter thresholds (mirrors constants in each method's source) ─
+# per-method filter thresholds (mirrors constants in each method's source)
 # VAR community filter
 _VAR_MIN_SUB_USERS = 40
 # TFR skill filter: min votes per (user, community) to have any skill entry
@@ -66,11 +66,13 @@ log = logging.getLogger(__name__)
 
 # yield successive sub-lists of length `size` from `lst`
 def _chunk(lst: List[Any], size: int):
+    """Yield fixed-size chunks from a sequence."""
     for i in range(0, len(lst), size):
         yield lst[i : i + size]
 
 # convert a date-like object to ISO date string
 def _parse_date(x: Any) -> Optional[str]:
+    """Parse date from the supplied input."""
     if x is None:
         return None
     if isinstance(x, str):
@@ -83,6 +85,7 @@ def _parse_date(x: Any) -> Optional[str]:
 
 # GET a JSON endpoint with basic retry/backoff handling
 def _safe_request(path: str, params: Optional[Dict[str, Any]] = None, timeout: int = API_TIMEOUT_SEC) -> Any:
+    """Run request with retry and error handling."""
     url = f"{ARCTIC_SHIFT_BASE}{path}"
     params = {k: v for k, v in (params or {}).items() if v is not None}
     last_exc: Optional[Exception] = None
@@ -110,6 +113,7 @@ def _safe_request(path: str, params: Optional[Dict[str, Any]] = None, timeout: i
 
 # convert common Arctic Shift response shapes into a list of dicts
 def _normalize_payload(payload: Any) -> List[Dict]:
+    """Normalize payload into a consistent schema."""
     if payload is None:
         return []
     if isinstance(payload, list):
@@ -133,12 +137,14 @@ def _normalize_payload(payload: Any) -> List[Dict]:
 
 # sanitize text
 def _safe_text(value: Any) -> Optional[str]:
+    """Run text with retry and error handling."""
     if value is None:
         return None
     text = str(value).strip()
     return text if text else None
 
 def _combine_post_text(item: Dict) -> Optional[str]:
+    """Join a post title and body into one text field."""
     title = _safe_text(item.get("title"))
     selftext = _safe_text(item.get("selftext"))
     if title and selftext:
@@ -147,6 +153,7 @@ def _combine_post_text(item: Dict) -> Optional[str]:
 
 # convert a Unix creation timestamp to account age in days
 def _compute_tenure(created_utc: Any) -> float:
+    """Compute tenure from the supplied data."""
     if created_utc is None:
         return np.nan
     return (time.time() - float(created_utc)) / 86400
@@ -154,6 +161,7 @@ def _compute_tenure(created_utc: Any) -> float:
 # 1. Load and clean vote dataset
 # load the pre-intersected dataset from CSV and apply basic cleaning
 def load_dataset(path: Path = INPUT_PATH) -> pd.DataFrame:
+    """Load dataset from its configured source."""
     log.info("Loading dataset from %s", path)
     df = pd.read_csv(path, low_memory=False)
     df["vote"] = pd.to_numeric(df["vote"], errors="coerce")
@@ -186,6 +194,7 @@ def apply_density_filter(
     min_votes_per_post: int = MIN_VOTES_PER_POST,
     min_votes_per_user: int = MIN_VOTES_PER_USER,
 ) -> pd.DataFrame:
+    """Apply density filter to the supplied data."""
     log.info(
         "Applying density filter: >=%d votes/post, >=%d votes/user",
         min_votes_per_post,
@@ -216,6 +225,7 @@ def apply_density_filter(
 # 3. Arctic Shift metadata
 # query the Arctic Shift API for user-level metadata. Skips users if already fetched
 def fetch_user_metadata(usernames: list[str], output_dir: Optional[Path] = None) -> pd.DataFrame:
+    """Fetch user metadata from the remote API."""
     existing = pd.DataFrame()
     if output_dir is not None:
         meta_path = output_dir / "users.parquet"
@@ -246,6 +256,7 @@ def fetch_user_metadata(usernames: list[str], output_dir: Optional[Path] = None)
 
 # fetch aggregate metadata for user via /api/users/search
 def _query_single_user_metadata(uname: str) -> dict:
+    """Query single user metadata from the remote API."""
     try:
         payload = _safe_request("/api/users/search", params={"author": uname, "limit": 1})
         items = _normalize_payload(payload)
@@ -286,6 +297,7 @@ def _query_single_user_metadata(uname: str) -> dict:
 
 # left-join user metadata onto the vote dataframe
 def merge_user_metadata(df: pd.DataFrame, user_meta: pd.DataFrame) -> pd.DataFrame:
+    """Merge user metadata into the working data."""
     enriched = df.merge(user_meta, on="username", how="left")
     missing = enriched["karma"].isna().sum()
     log.info(
@@ -304,6 +316,7 @@ def fetch_user_history(
     before: Optional[str] = HISTORY_BEFORE,
     output_dir: Optional[Path] = None,
 ) -> Dict[str, pd.DataFrame]:
+    """Fetch user history from the remote API."""
     _history_files = {
         "documents":          "user_documents.parquet",
         "subreddit_activity": "user_subreddit_activity.parquet",
@@ -347,6 +360,7 @@ def fetch_user_history(
         time.sleep(API_SLEEP_SEC)
 
     def _concat(existing_df: pd.DataFrame, new_rows: list) -> pd.DataFrame:
+        """Concatenate non-empty data frames."""
         new_df = pd.DataFrame(new_rows) if new_rows else pd.DataFrame()
         if existing_df.empty:
             return new_df
@@ -380,6 +394,7 @@ def _collect_one_user_history(
     after: Optional[str] = None,
     before: Optional[str] = None,
 ) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], Dict]:
+    """Collect one user history from the available records."""
     docs: list[dict] = []
     subreddit_rows: list[dict] = []
     interaction_rows: list[dict] = []
@@ -521,6 +536,7 @@ def _collect_one_user_history(
 
 # 5. Density / history alignment helpers
 def infer_history_window(df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
+    """Infer history window from the available timestamps."""
     if HISTORY_AFTER is not None or HISTORY_BEFORE is not None:
         return HISTORY_AFTER, HISTORY_BEFORE
     after = df["timestamp"].min().date().isoformat()
@@ -536,11 +552,7 @@ def chronological_split(
     test_ratio: float = TEST_RATIO,
     random_state: int = RANDOM_SEED,
 ) -> dict[str, pd.DataFrame]:
-    """
-    NOTE: kept the name `chronological_split` for call-site compatibility
-    (run_step1 calls this function), but the split is now a random,
-    seeded shuffle of item_id, not an ordering by post_time.
-    """
+    """Create item-level train, validation, and test splits."""
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-9, "Split ratios must sum to 1.0"
 
     item_ids = df["item_id"].unique().tolist()   # plain Python list -> safe for rng.shuffle
@@ -580,6 +592,7 @@ def chronological_split(
 # 7. Derived user features
 # shannon entropy (bits) of a discrete distribution given raw counts. Returns NaN if the array is empty or all zeros
 def _shannon_entropy(counts: np.ndarray) -> float:
+    """Calculate Shannon entropy for observed category counts."""
     counts = counts[counts > 0]
     if len(counts) == 0:
         return np.nan
@@ -592,6 +605,7 @@ def _fetch_temporal_entropy(
     after: Optional[str],
     before: Optional[str],
 ) -> float:
+    """Fetch temporal entropy from the remote API."""
     monthly: dict[str, int] = {}
     for content_type in ("posts", "comments"):
         try:
@@ -623,6 +637,7 @@ def compute_user_features(
     output_dir: Path = OUTPUT_DIR,
     compute_temporal: bool = True,
 ) -> pd.DataFrame:
+    """Compute user features from the supplied data."""
     meta_path = output_dir / "users.parquet"
     if not meta_path.exists():
         raise FileNotFoundError(f"users.parquet not found at {meta_path}")
@@ -654,7 +669,7 @@ def compute_user_features(
                 users["active_communities"].notna().sum(), len(users),
             )
         else:
-            log.warning("user_subreddit_activity.parquet not found — skipping subreddit features")
+            log.warning("user_subreddit_activity.parquet not found - skipping subreddit features")
 
     # 2. Interaction-based features (no API)
     need_inter = users["n_interaction_partners"].isna().any()
@@ -675,7 +690,7 @@ def compute_user_features(
                 users["n_interaction_partners"].notna().sum(), len(users),
             )
         else:
-            log.warning("user_interactions.parquet not found — skipping interaction features")
+            log.warning("user_interactions.parquet not found - skipping interaction features")
 
     users.to_parquet(meta_path, index=False)
     log.info("Enriched users.parquet saved to %s", meta_path)
@@ -689,9 +704,11 @@ def save_outputs(
     history_tables: dict[str, pd.DataFrame],
     splits: dict[str, pd.DataFrame],
     output_dir: Path = OUTPUT_DIR,
+    splits_dir: Path = SPLITS_DIR,
 ) -> None:
+    """Write outputs to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    splits_dir = output_dir / "splits"
+    splits_dir = splits_dir / "random"
     history_dir = output_dir / "history"
     splits_dir.mkdir(exist_ok=True)
     history_dir.mkdir(exist_ok=True)
@@ -711,6 +728,7 @@ def save_outputs(
     log.info("All outputs saved to %s", output_dir)
 
 def print_summary(df: pd.DataFrame) -> None:
+    """Print summary to the console."""
     log.info("--- Dataset summary ---")
     label_dist = df.drop_duplicates("item_id")["label"].value_counts()
     log.info("Post label distribution:\n%s", label_dist.to_string())
@@ -720,16 +738,14 @@ def print_summary(df: pd.DataFrame) -> None:
     log.info("Top 5 communities by post count:\n%s", top_communities.to_string())
 
 
-# ===========================================================================
-# 9. FILTER IDENTIFICATION  — which posts/users each method would exclude
-# ===========================================================================
+# 9. FILTER IDENTIFICATION  - which posts/users each method would exclude
 
 def _iterative_density_filter(
     data: pd.DataFrame,
     min_post_votes: int,
     min_user_votes: int,
 ) -> Tuple[set, set]:
-    """Return (valid_item_ids, valid_usernames) after iterative density pruning."""
+    """Remove sparse users and items until the data stabilizes."""
     d = data.copy()
     for _ in range(100):
         prev = len(d)
@@ -747,23 +763,12 @@ def identify_method_filters(
     external_scores_path: Optional[Path] = None,
     post_texts_path: Optional[Path]      = None,
 ) -> Dict[str, Dict]:
-    """
-    For each method, compute which posts and users its internal filters would
-    exclude.  Returns a dict keyed by method name; each value contains:
-
-      valid_item_ids  – set[str]  posts that survive this method's filters
-      valid_usernames – set[str]  users that survive this method's filters
-      n_items_kept / n_items_dropped
-      n_users_kept / n_users_dropped
-      reason          – plain-text description of the filter logic
-
-    These sets are used downstream by build_intersection_dataset().
-    """
+    """Find the items and users retained by each method."""
     all_items = set(df["item_id"].unique())
     all_users = set(df["username"].unique())
     report: Dict[str, Dict] = {}
 
-    # ── BL1-BL3 / CN  (Birdwatch iterative density filter) ──────────────────
+    # BL1-BL3 / CN  (Birdwatch iterative density filter)
     items_bl, users_bl = _iterative_density_filter(df, MIN_VOTES_PER_POST, MIN_VOTES_PER_USER)
     report["BL_CN"] = {
         "valid_item_ids":  items_bl,
@@ -778,7 +783,7 @@ def identify_method_filters(
         ),
     }
 
-    # ── BL4 / BL5  (same density filter + external Reddit score required) ────
+    # BL4 / BL5  (same density filter + external Reddit score required)
     if external_scores_path is not None and external_scores_path.exists():
         ext       = pd.read_parquet(external_scores_path)[["item_id"]]
         items_ext = items_bl & set(ext["item_id"].unique())
@@ -786,7 +791,7 @@ def identify_method_filters(
     else:
         items_ext   = items_bl
         missing_ext = 0
-        log.warning("identify_method_filters: external scores not found at %s — "
+        log.warning("identify_method_filters: external scores not found at %s - "
                     "BL4/BL5 item filter approximated as BL_CN", external_scores_path)
     report["BL4_BL5"] = {
         "valid_item_ids":  items_ext,
@@ -802,8 +807,8 @@ def identify_method_filters(
         ),
     }
 
-    # ── TFR  (no post-level filter; user needs >= _TFR_MIN_SKILL_VOTES votes
-    #          in at least one (community) to have a usable skill entry) ───────
+    # TFR  (no post-level filter; user needs >= _TFR_MIN_SKILL_VOTES votes
+    #          in at least one community to have a usable skill entry)
     votes_per_user_comm = (
         df.groupby(["username", "community"])["item_id"]
         .count()
@@ -829,13 +834,13 @@ def identify_method_filters(
         ),
     }
 
-    # ── SEF  (post needs non-null text; user needs >= _SEF_MIN_USER_VOTES votes)
+    # SEF  (post needs non-null text; user needs >= _SEF_MIN_USER_VOTES votes)
     if post_texts_path is not None and post_texts_path.exists():
         pt        = pd.read_parquet(post_texts_path)[["item_id", "text"]]
         items_sef = set(pt[pt["text"].notna()]["item_id"].unique())
     else:
         items_sef = all_items
-        log.warning("identify_method_filters: post_texts not found at %s — "
+        log.warning("identify_method_filters: post_texts not found at %s - "
                     "SEF item filter not applied", post_texts_path)
     users_sef = set(
         df[df["username"].isin(
@@ -856,7 +861,7 @@ def identify_method_filters(
         ),
     }
 
-    # ── VAR  (own iterative density min_user=5 + community needs >=40 users) ─
+    # VAR  (own iterative density min_user=5 + community needs >=40 users)
     items_var_tmp, users_var_tmp = _iterative_density_filter(df, MIN_VOTES_PER_POST, 5)
     df_var = df[
         df["item_id"].isin(items_var_tmp) &
@@ -884,7 +889,7 @@ def identify_method_filters(
         ),
     }
 
-    # ── print summary table ──────────────────────────────────────────────────
+    # print summary table
     log.info("=== Per-method filter summary ===")
     log.info("%-10s  %10s  %13s  %10s  %13s",
              "Method", "items_kept", "items_dropped", "users_kept", "users_dropped")
@@ -897,22 +902,13 @@ def identify_method_filters(
     return report
 
 
-# ===========================================================================
 # 10. INTERSECTION DATASET
-# ===========================================================================
 
 def build_intersection_dataset(
     df: pd.DataFrame,
     filter_report: Dict[str, Dict],
 ) -> pd.DataFrame:
-    """
-    Keep only posts and users that survive ALL method-specific filters, then
-    re-apply the BL/CN density filter to guarantee the minimum-votes
-    invariant still holds after the intersection shrinks the matrix.
-
-    The resulting dataset is the most conservative common ground: every
-    method can run on it without any further internal filtering.
-    """
+    """Build intersection dataset from the supplied data."""
     item_intersection: Optional[set] = None
     user_intersection: Optional[set] = None
 
@@ -954,9 +950,7 @@ def build_intersection_dataset(
     return df_inter.reset_index(drop=True)
 
 
-# ===========================================================================
 # 11. TWO MAIN SPLITS  (full and intersection)
-# ===========================================================================
 
 def _chrono_split_to_disk(
     df: pd.DataFrame,
@@ -967,15 +961,7 @@ def _chrono_split_to_disk(
     test_ratio:  float = TEST_RATIO,
     random_state: int = RANDOM_SEED,
 ) -> None:
-    """
-    Randomly split df (item-level, fixed seed) and write train/val/test
-    parquets to out_dir.
-
-    NOTE: function name kept as `_chrono_split_to_disk` for call-site
-    compatibility (produce_splits calls this), but items are now assigned
-    to train/val/test via a seeded random shuffle, not by first-vote
-    timestamp order. No post straddles two splits (split is per item_id).
-    """
+    """Create item-level train, validation, and test splits."""
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-9
 
     item_ids = df["item_id"].unique().tolist()   # plain Python list -> safe for rng.shuffle
@@ -1010,46 +996,17 @@ def produce_splits(
     df_intersection: pd.DataFrame,
     output_dir:      Path,
 ) -> None:
-    """
-    Produce and save two independent train/val/test splits:
-
-      splits_full/          — TRULY UNFILTERED dataset: every vote that
-                              survives only the minimal cleaning in
-                              load_dataset() (valid vote/label, deduped
-                              (username,item_id) pairs) — NOT the density
-                              filter (min votes/post, min votes/user). Every
-                              post is included, even ones with a single
-                              voter; methods are expected to fall back
-                              (e.g. net-vote) when they have no real signal
-                              for an item, instead of silently dropping it.
-                              This is the "how much do performances degrade
-                              when nothing gets filtered out" population.
-
-      splits_intersection/  — only posts/users surviving EVERY method's
-                              specific filter (built on top of the
-                              density-filtered dataset); guarantees no
-                              method needs to do further filtering at
-                              evaluation time.
-
-    Both splits use the same random, seeded item-level assignment logic
-    as chronological_split() (name kept, logic is now random — see there).
-
-    NOTE: df_full here is the RAW (pre-density-filter) dataframe passed in
-    by run_step1 — see the "full (unfiltered)" section there. It is NOT the
-    same `df` used for splits/ or splits_intersection/.
-    """
-    log.info("=== Producing splits_full (unfiltered — every post, fallback expected) ===")
-    _chrono_split_to_disk(df_full,         output_dir / "splits_full",         "full")
+    """Create and save splits."""
+    log.info("=== Producing splits_full (unfiltered - every post, fallback expected) ===")
+    _chrono_split_to_disk(df_full,         output_dir / "full",         "full")
 
     log.info("=== Producing splits_intersection ===")
-    _chrono_split_to_disk(df_intersection, output_dir / "splits_intersection",  "intersection")
+    _chrono_split_to_disk(df_intersection, output_dir / "intersection",  "intersection")
 
     log.info("Both split sets saved under %s", output_dir)
 
 
-# ===========================================================================
 # 12. WINDOWED FOLDS  (data-sufficiency / learning-curve analysis)
-# ===========================================================================
 
 def produce_windowed_folds(
     df: pd.DataFrame,
@@ -1060,53 +1017,8 @@ def produce_windowed_folds(
     tag: str = "full",
     random_state: int = RANDOM_SEED,
 ) -> None:
-    """
-    Data-sufficiency analysis: one fold per training-window size.
-
-    Motivation
-    ----------
-    Different methods need different amounts of data to reach acceptable
-    performance. This analysis answers:
-
-      "If only a random w% subset of the TRAINABLE pool were available for
-       training, how well would method X perform, holding validation and
-       test completely fixed?"
-
-    A method that saturates at w=0.4 is usable with 40% of the trainable
-    pool; one that keeps improving up to w=1.0 needs all of it.
-
-    Structure  (fixed 2024 redesign — see note below)
-    ---------------------------------------------------
-    Items are randomly shuffled once (fixed seed).
-
-    Fixed test set        = a random test_frac of items — IDENTICAL across
-                             every window size w.
-    Fixed validation set  = a random val_frac of items, disjoint from test —
-                             ALSO IDENTICAL across every window size w.
-    Trainable pool        = the remaining (1 - test_frac - val_frac) items,
-                             in a fixed random order.
-
-    For each w ∈ window_sizes:
-      training set = first floor(w × |trainable_pool|) items from the pool.
-      validation set and test set are the SAME data for every w — only the
-      amount of training data changes.
-
-    NOTE ON A PREVIOUS BUG: an earlier version of this function derived the
-    validation set as "whatever remains of the pool after taking the first
-    w fraction as train" — so validation shrank as training grew, and
-    became EMPTY at w=1.0 (train = entire pool). That conflated two
-    different things (training-set size vs. validation-set size) and made
-    downstream comparisons across w not isolate the effect of training data
-    alone. This version fixes that: validation and test are carved out
-    ONCE, before iterating over w, and never change.
-
-    Saved under output_dir/windowed_folds_{tag}/:
-      w{w*100:03d}/train_votes.parquet  ← size varies with w
-      w{w*100:03d}/val_votes.parquet    ← IDENTICAL for every w
-      w{w*100:03d}/test_votes.parquet   ← IDENTICAL for every w
-      manifest.json                     ← sizes and random seed per window
-    """
-    out_root = output_dir / f"windowed_folds_{tag}"
+    """Create and save windowed folds."""
+    out_root = output_dir / "windows" / tag
     out_root.mkdir(parents=True, exist_ok=True)
 
     assert test_frac + val_frac < 1.0, "test_frac + val_frac must leave room for a trainable pool"
@@ -1120,7 +1032,7 @@ def produce_windowed_folds(
     n_test  = int(n_items * test_frac)
     n_val   = int(n_items * val_frac)
 
-    # fixed test/val slices, carved out ONCE — never touched inside the w loop
+    # fixed test/val slices, carved out ONCE - never touched inside the w loop
     test_ids = set(shuffled_ids[: n_test]) if n_test > 0 else set()
     val_ids  = set(shuffled_ids[n_test: n_test + n_val]) if n_val > 0 else set()
     trainable_pool = shuffled_ids[n_test + n_val:]   # fixed random order
@@ -1179,12 +1091,10 @@ def produce_windowed_folds(
 
     with open(out_root / "manifest.json", "w") as fh:
         json.dump(manifest, fh, indent=2, default=str)
-    log.info("  Saved → %s", out_root)
+    log.info("  Saved -> %s", out_root)
 
 
-# ===========================================================================
-# 13. FILTER REPORT  — JSON-serialisable summary
-# ===========================================================================
+# 13. FILTER REPORT  - JSON-serialisable summary
 
 def save_filter_report(
     filter_report: Dict[str, Dict],
@@ -1192,7 +1102,7 @@ def save_filter_report(
     df_inter:      pd.DataFrame,
     output_dir:    Path,
 ) -> None:
-    """Persist a JSON with per-method filter stats and the intersection summary."""
+    """Write filter report to disk."""
     serialisable: Dict[str, Any] = {}
     for name, r in filter_report.items():
         serialisable[name] = {
@@ -1216,70 +1126,26 @@ def save_filter_report(
     path = output_dir / "filter_report.json"
     with open(path, "w") as fh:
         json.dump(serialisable, fh, indent=2)
-    log.info("Filter report saved → %s", path)
+    log.info("Filter report saved -> %s", path)
 
 
-# ===========================================================================
 # Main function
-# ===========================================================================
 
-def run_step1(
+def prepare_dataset(
     input_path:           Path          = INPUT_PATH,
     output_dir:           Path          = OUTPUT_DIR,
+    splits_dir:           Path          = SPLITS_DIR,
     external_scores_path: Optional[Path] = None,
     post_texts_path:      Optional[Path] = None,
 ) -> dict[str, Any]:
-    """
-    Full data-preparation pipeline.
-
-    Original steps (unchanged, split logic now random instead of chronological)
-    ----------------------------------------------------------------------------
-    1. Load and clean dataset.
-    2. Apply density filter.
-    3. Collect user metadata (Arctic Shift API).
-    4. Collect user history tables (Arctic Shift API).
-    5. Merge metadata onto votes.
-    6. Print summary.
-    7. Random split (seeded) → splits/  (legacy, kept for backwards-compatibility).
-    8. Save all artefacts.
-
-    New steps
-    ---------
-    9.  Identify per-method filters → filter_report.json
-    10. Build intersection dataset (posts/users surviving ALL method filters).
-    11. Produce splits_full/ and splits_intersection/  (random, seeded, 70/15/15).
-        splits_full/ is built from the RAW, UNFILTERED population (only the
-        minimal load_dataset() cleaning — no density filter): every post is
-        included, even ones with a single voter. splits_intersection/ is
-        built from the density-filtered intersection of every method's
-        specific requirements. Evaluation code is expected to fall back
-        (e.g. net-vote) on splits_full items it has no real signal for,
-        instead of silently dropping them — this measures how much
-        performance degrades when nothing gets filtered out upstream.
-    12. Produce windowed_folds_full/ and windowed_folds_intersection/
-        (data-sufficiency analysis, 5 window sizes, fixed random val/test).
-        Both windowed_folds_full/ and windowed_folds_intersection/ use the
-        density-filtered populations (df / df_inter respectively) — same as
-        before. windowed_folds_full/ was briefly switched to the raw
-        unfiltered population, then reverted back on request, to isolate
-        the effect of unfiltering on splits_full alone first.
-
-    Parameters
-    ----------
-    external_scores_path : path to moderated_posts_scores.parquet
-        Used to identify which posts have an external Reddit score (BL4/BL5).
-        If None or missing, BL4/BL5 filter falls back to the BL_CN filter.
-    post_texts_path : path to post_texts.parquet
-        Used to identify which posts have non-null text (SEF embedding filter).
-        If None or missing, the SEF item filter is not applied.
-    """
+    """Prepare dataset for downstream use."""
     log.info("=" * 50)
     log.info("STEP 1 - DATA PREPARATION (Reddit)")
     log.info("=" * 50)
 
-    # ── original pipeline ────────────────────────────────────────────────────
+    # original pipeline
     df_raw = load_dataset(input_path)   # minimal cleaning ONLY (valid vote/label,
-                                          # deduped (username,item_id)) — NO density
+                                          # deduped (username,item_id)) - NO density
                                           # filter. Kept aside to build the truly
                                           # unfiltered "full" splits later.
     df = apply_density_filter(df_raw)
@@ -1306,25 +1172,25 @@ def run_step1(
     df = merge_user_metadata(df, user_meta)
     print_summary(df)
 
-    # same metadata merge applied to the RAW (unfiltered) population — users
+    # same metadata merge applied to the RAW (unfiltered) population - users
     # who didn't pass the density filter simply get NaN metadata (left join),
     # exactly the kind of gap the per-method net-vote fallback is meant to
     # cover at evaluation time.
     df_raw = merge_user_metadata(df_raw, user_meta)
 
-    splits = chronological_split(df)   # now random, seeded — see function docstring
-    save_outputs(df, user_meta, history_tables, splits, output_dir)   # writes legacy splits/
+    splits = chronological_split(df)   # now random, seeded - see function docstring
+    save_outputs(df, user_meta, history_tables, splits, output_dir, splits_dir)
 
-    # ── new: multi-split and windowed folds ──────────────────────────────────
+    # new: multi-split and windowed folds
     log.info("=" * 50)
-    log.info("STEP 1 — multi-split & windowed folds")
+    log.info("STEP 1 - multi-split & windowed folds")
     log.info("=" * 50)
 
     # resolve default paths if caller did not supply them
     if external_scores_path is None:
         external_scores_path = output_dir / "moderated_posts_scores.parquet"
     if post_texts_path is None:
-        post_texts_path = Path("results/step3_expert/post_texts.parquet")
+        post_texts_path = Path("data/interim/reddit/post_texts.parquet")
 
     filter_report = identify_method_filters(
         df,
@@ -1335,14 +1201,14 @@ def run_step1(
 
     save_filter_report(filter_report, df, df_inter, output_dir)
 
-    # NOTE: df_raw (unfiltered) goes into splits_full only, for now — see
+    # NOTE: df_raw (unfiltered) goes into splits_full only, for now - see
     # discussion with the user: windowed_folds_full/* is reverted back to
     # the density-filtered df, to isolate what changes when JUST splits_full
     # becomes unfiltered before extending this further.
-    produce_splits(df_raw, df_inter, output_dir)
+    produce_splits(df_raw, df_inter, splits_dir)
 
-    produce_windowed_folds(df,       output_dir, tag="full")
-    produce_windowed_folds(df_inter, output_dir, tag="intersection")
+    produce_windowed_folds(df,       splits_dir, tag="full")
+    produce_windowed_folds(df_inter, splits_dir, tag="intersection")
 
     log.info("Step 1 complete.")
     return {
@@ -1357,4 +1223,4 @@ def run_step1(
 
 
 if __name__ == "__main__":
-    run_step1(input_path=INPUT_PATH, output_dir=OUTPUT_DIR)
+    prepare_dataset(input_path=INPUT_PATH, output_dir=OUTPUT_DIR, splits_dir=SPLITS_DIR)

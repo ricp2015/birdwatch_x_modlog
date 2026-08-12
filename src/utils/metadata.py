@@ -1,6 +1,4 @@
 """
-metadata_filter_search.py
-==========================
 Grid search over metadata-based vote filtering thresholds.
 
 For each combination of (min_tenure_days, min_karma) we:
@@ -8,17 +6,6 @@ For each combination of (min_tenure_days, min_karma) we:
   2. Rerun step C (skill extraction) and step D (ranking + eval)
   3. Record macro_F1, AUC, f1_neg, coverage
 
-This tests whether excluding low-quality accounts (new accounts,
-low-karma accounts, likely bots or throwaway accounts) improves
-the skill signal and downstream ranking performance.
-
-Note: step B output (post_violation_scores.parquet) is reused as-is.
-
-Usage
------
-    python metadata_filter_search.py
-    python metadata_filter_search.py --alpha 1.0  # use pure mod-agreement skill
-    python metadata_filter_search.py --out_dir results/step2/team_formation_filter_search
 """
 
 from __future__ import annotations
@@ -36,9 +23,7 @@ from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from sklearn.model_selection import KFold
 from tqdm import tqdm
 
-# ---------------------------------------------------------------------------
 # Grid to search
-# ---------------------------------------------------------------------------
 MIN_TENURE_GRID = [0, 30, 90, 180, 365]       # days since account creation
 MIN_KARMA_GRID  = [0, 10, 100, 500, 1000]     # total karma
 
@@ -55,14 +40,13 @@ CATEGORIES = [
 
 ORIGINAL_CSV   = Path("data/processed/final_intersection_dataset.csv")
 METADATA_PATH  = Path("data/processed/user_metadata.csv")
-SCORES_PATH_DEFAULT = Path("results/step2/team_formation/post_violation_scores.parquet")
+SCORES_PATH_DEFAULT = Path("results/reddit/random/team-formation/post_violation_scores.parquet")
 
 
-# ---------------------------------------------------------------------------
 # Data loading
-# ---------------------------------------------------------------------------
 
 def load_all_votes() -> pd.DataFrame:
+    """Load all votes from its configured source."""
     votes = pd.read_csv(ORIGINAL_CSV)
     votes["vote"] = votes["vote"].astype(float)
     if "label" not in votes.columns:
@@ -71,6 +55,7 @@ def load_all_votes() -> pd.DataFrame:
 
 
 def load_metadata() -> pd.DataFrame:
+    """Load metadata from its configured source."""
     meta = pd.read_csv(METADATA_PATH)
     meta = meta[meta["is_suspended"] != True].copy()
     meta["account_created_utc"] = pd.to_numeric(
@@ -83,26 +68,25 @@ def load_metadata() -> pd.DataFrame:
 
 def filter_votes(votes: pd.DataFrame, meta: pd.DataFrame,
                  min_tenure: int, min_karma: int) -> pd.DataFrame:
-    """Keep only votes from users meeting both thresholds."""
+    """Filter votes using the selected metadata thresholds."""
     if min_tenure == 0 and min_karma == 0:
         return votes
     eligible = meta[
         (meta["tenure_days"] >= min_tenure) &
         (meta["total_karma"] >= min_karma)
     ]["username"]
-    # always keep users not in metadata (unknown → don't filter them out)
+    # always keep users not in metadata (unknown -> don't filter them out)
     unknown = set(votes["username"].unique()) - set(meta["username"].unique())
     keep    = set(eligible) | unknown
     return votes[votes["username"].isin(keep)].copy()
 
 
-# ---------------------------------------------------------------------------
 # Skill extraction (simplified, mod-agreement only for speed)
-# ---------------------------------------------------------------------------
 
 def compute_skill(votes: pd.DataFrame, scores: pd.DataFrame,
                   min_votes: int, alpha: float,
                   meta: pd.DataFrame) -> pd.DataFrame:
+    """Compute skill from the supplied data."""
     merged = votes.merge(
         scores[["item_id", "top_violation_category"]], on="item_id", how="inner"
     ).dropna(subset=["label", "top_violation_category"])
@@ -147,12 +131,11 @@ def compute_skill(votes: pd.DataFrame, scores: pd.DataFrame,
     return pd.DataFrame(records)
 
 
-# ---------------------------------------------------------------------------
 # Scoring + evaluation
-# ---------------------------------------------------------------------------
 
 def compute_item_scores(votes: pd.DataFrame, scores: pd.DataFrame,
                         skills: pd.DataFrame) -> pd.DataFrame:
+    """Compute item scores from the supplied data."""
     votes_scores = votes.merge(
         scores[["item_id", "top_violation_category"]], on="item_id", how="left"
     )
@@ -192,8 +175,9 @@ def compute_item_scores(votes: pd.DataFrame, scores: pd.DataFrame,
 
 
 def evaluate_kfold(item_scores: pd.DataFrame, n_folds: int = N_FOLDS) -> Dict:
+    """Evaluate kfold and return its metrics."""
     labeled = item_scores.dropna(subset=["label"]).reset_index(drop=True)
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=10)
     fold_metrics = []
     for val_idx, test_idx in kf.split(labeled):
         val_ids  = labeled.iloc[val_idx]["item_id"].values
@@ -234,11 +218,10 @@ def evaluate_kfold(item_scores: pd.DataFrame, n_folds: int = N_FOLDS) -> Dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Main grid search
-# ---------------------------------------------------------------------------
 
 def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
+    """Run the configured analysis workflow."""
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Loading data (alpha={alpha})...")
     all_votes = load_all_votes()
@@ -249,7 +232,7 @@ def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
     n_total_posts = all_votes["item_id"].nunique()
     print(f"Total users: {n_total_users:,} | Total posts: {n_total_posts:,}")
     print(f"Metadata available for: {meta['username'].nunique():,} users")
-    print(f"\nGrid: {len(MIN_TENURE_GRID)} tenure × {len(MIN_KARMA_GRID)} karma "
+    print(f"\nGrid: {len(MIN_TENURE_GRID)} tenure x {len(MIN_KARMA_GRID)} karma "
           f"= {len(MIN_TENURE_GRID)*len(MIN_KARMA_GRID)} combinations\n")
 
     results = []
@@ -266,8 +249,8 @@ def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
         coverage    = len(item_scores) / n_total_posts
 
         if len(item_scores) < 100:
-            print(f"  tenure≥{min_tenure:4d}d  karma≥{min_karma:5d}  "
-                  f"→ too few items ({len(item_scores)}), skipping")
+            print(f"  tenure>={min_tenure:4d}d  karma>={min_karma:5d}  "
+                  f"-> too few items ({len(item_scores)}), skipping")
             continue
 
         metrics = evaluate_kfold(item_scores)
@@ -285,7 +268,7 @@ def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
             "roc_auc":         round(metrics["roc_auc"],  4),
         }
         results.append(row)
-        print(f"  tenure≥{min_tenure:4d}d  karma≥{min_karma:5d}  "
+        print(f"  tenure>={min_tenure:4d}d  karma>={min_karma:5d}  "
               f"users={pct_users:5.1f}%  "
               f"F1={metrics['macro_f1']:.4f}  "
               f"AUC={metrics['roc_auc']:.4f}  "
@@ -295,14 +278,14 @@ def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
     df = pd.DataFrame(results)
     out_csv = out_dir / f"filter_search_alpha{alpha:.1f}.csv"
     df.to_csv(out_csv, index=False)
-    print(f"\nResults saved → {out_csv}")
+    print(f"\nResults saved -> {out_csv}")
 
     # summary: best by each metric
     for metric in ("macro_f1", "roc_auc", "f1_neg"):
         best = df.loc[df[metric].idxmax()]
         print(f"\nBest {metric}: {best[metric]:.4f}  "
-              f"(tenure≥{int(best['min_tenure_days'])}d, "
-              f"karma≥{int(best['min_karma'])}, "
+              f"(tenure>={int(best['min_tenure_days'])}d, "
+              f"karma>={int(best['min_karma'])}, "
               f"users={best['pct_users_kept']}%)")
 
     # save as JSON too for easy loading
@@ -311,9 +294,10 @@ def run(scores_path: Path, out_dir: Path, alpha: float) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse args from the supplied input."""
     p = argparse.ArgumentParser()
     p.add_argument("--scores_path", default=str(SCORES_PATH_DEFAULT))
-    p.add_argument("--out_dir",     default="results/step2/team_formation_filter_search")
+    p.add_argument("--out_dir",     default="results/diagnostics/team-formation-filter-search")
     p.add_argument("--alpha",       type=float, default=1.0,
                    help="Skill combination weight (1.0=pure mod agreement)")
     return p.parse_args()

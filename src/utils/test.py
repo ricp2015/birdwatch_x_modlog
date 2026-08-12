@@ -1,6 +1,4 @@
 """
-normvio_pairplot.py
-===================
 Disaggregated analysis of NormVio scores vs moderator decisions.
 Produces:
   1. Pairplot: score distributions per category, coloured by label
@@ -8,17 +6,13 @@ Produces:
   3. Barplot: mean score difference (removed - approved) per category
 
 Reads:
-    results/step2/team_formation/post_violation_scores.parquet
+    results/reddit/random/team-formation/post_violation_scores.parquet
     data/processed/final_intersection_dataset.csv
 
 Output:
-    results/step2/team_formation/normvio_pairplot.png
-    results/step2/team_formation/normvio_boxplot.png
-    results/step2/team_formation/normvio_barplot.png
-
-Usage:
-    python normvio_pairplot.py
-    pip install matplotlib seaborn  (if missing)
+    results/diagnostics/team-formation/normvio_pairplot.png
+    results/diagnostics/team-formation/normvio_boxplot.png
+    results/diagnostics/team-formation/normvio_barplot.png
 """
 
 from __future__ import annotations
@@ -28,9 +22,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-SCORES_PATH = Path("results/step2/team_formation/post_violation_scores.parquet")
+SCORES_PATH = Path("results/reddit/random/team-formation/post_violation_scores.parquet")
 CSV_PATH    = Path("data/processed/final_intersection_dataset.csv")
-OUT_DIR     = Path("results/step2/team_formation")
+OUT_DIR     = Path("results/diagnostics/team-formation")
 
 CATEGORIES = [
     "spam", "meta-rules", "content", "doxxing",
@@ -43,6 +37,7 @@ PLOT_CATS = ["spam", "content", "hatespeech", "off-topic", "incivility", "harass
 
 
 def load_data() -> pd.DataFrame:
+    """Load data from its configured source."""
     scores = pd.read_parquet(SCORES_PATH)
     labels = (
         pd.read_csv(CSV_PATH)[["item_id", "label"]]
@@ -57,17 +52,17 @@ def load_data() -> pd.DataFrame:
 
 
 def make_pairplot(df: pd.DataFrame, out_path: Path) -> None:
-    """Scatter matrix of NormVio scores, coloured by moderation label."""
+    """Create pairplot from the supplied data."""
     rename_map = {f"score_{c}": c for c in PLOT_CATS}
     plot_df = df[["label_str"] + [f"score_{c}" for c in PLOT_CATS]].copy()
     plot_df = plot_df.rename(columns=rename_map)
 
-    # sample down — pairplot on 140k points is very slow
+    # sample down - pairplot on 140k points is very slow
     # sample each group separately then concat to preserve label_str column
     approved = plot_df[plot_df["label_str"] == "approved"].sample(
-        min((plot_df["label_str"] == "approved").sum(), 3000), random_state=42)
+        min((plot_df["label_str"] == "approved").sum(), 3000), random_state=10)
     removed  = plot_df[plot_df["label_str"] == "removed"].sample(
-        min((plot_df["label_str"] == "removed").sum(),  3000), random_state=42)
+        min((plot_df["label_str"] == "removed").sum(),  3000), random_state=10)
     sample = pd.concat([approved, removed], ignore_index=True)
 
     palette = {"approved": "#2196F3", "removed": "#F44336"}
@@ -90,7 +85,7 @@ def make_pairplot(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def make_boxplot(df: pd.DataFrame, out_path: Path) -> None:
-    """Boxplot of scores for all 10 categories, split by approved/removed."""
+    """Create boxplot from the supplied data."""
     rows = []
     for cat in CATEGORIES:
         col = f"score_{cat}"
@@ -126,7 +121,7 @@ def make_boxplot(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def make_barplot(df: pd.DataFrame, out_path: Path) -> None:
-    """Mean score per category x label, and their difference."""
+    """Create barplot from the supplied data."""
     means = []
     for cat in CATEGORIES:
         col = f"score_{cat}"
@@ -169,10 +164,7 @@ def make_barplot(df: pd.DataFrame, out_path: Path) -> None:
     print(f"Barplot saved -> {out_path}")
 
 def make_violinplot(df: pd.DataFrame, out_path: Path) -> None:
-    """
-    Distribution of each classifier score conditional on moderator decision.
-    Useful to inspect which classifiers separate approved vs removed content.
-    """
+    """Create violinplot from the supplied data."""
 
     rows = []
 
@@ -235,6 +227,7 @@ def make_violinplot(df: pd.DataFrame, out_path: Path) -> None:
     print(f"Violin plot saved -> {out_path}")
 
 def main():
+    """Run the command-line workflow."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     df = load_data()
     make_pairplot(df, OUT_DIR / "normvio_pairplot.png")

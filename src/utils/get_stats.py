@@ -8,6 +8,7 @@ MIN_VOTES_PER_USER = 10
 
 
 def load(path):
+    """Load the configured dataset."""
     df = pd.read_csv(path, low_memory=False)
     df["vote"]  = pd.to_numeric(df["vote"],  errors="coerce")
     df["label"] = pd.to_numeric(df["label"], errors="coerce")
@@ -18,6 +19,7 @@ def load(path):
 
 
 def density_filter(df):
+    """Remove users and items below the density thresholds."""
     f = df.copy()
     for _ in range(100):
         prev = len(f)
@@ -34,10 +36,12 @@ def density_filter(df):
 
 
 def row(label, raw, filt):
+    """Format one summary row."""
     return f"  {label:<10} {raw:>10,}  ->  {filt:>10,}    {100*filt/raw:.1f}% retained"
 
 
 def describe_votes(series):
+    """Summarize votes for inspection."""
     return {
         "mean": series.mean(),
         "median": series.median(),
@@ -47,6 +51,7 @@ def describe_votes(series):
 
 
 def print_distribution_stats(name, raw_series, filt_series):
+    """Print distribution stats to the console."""
     raw_stats = describe_votes(raw_series)
     filt_stats = describe_votes(filt_series)
 
@@ -57,8 +62,9 @@ def print_distribution_stats(name, raw_series, filt_series):
         print(f"  {k:<8} {raw_stats[k]:>10.2f} {filt_stats[k]:>10.2f}")
 
 
-# 🆕 NEW: outcome distribution
+# NEW NEW: outcome distribution
 def print_outcome_stats(name, raw_series, filt_series):
+    """Print outcome stats to the console."""
     raw_counts = raw_series.value_counts().sort_index()
     filt_counts = filt_series.value_counts().sort_index()
 
@@ -73,6 +79,7 @@ def print_outcome_stats(name, raw_series, filt_series):
         print(f"  {val:<8} {r:>10,} {f:>10,}   ({perc:.1f}%)")
 
 def print_label_by_posts(name, raw_df, filt_df):
+    """Print label by posts to the console."""
     # Post unici prima del filtro: per ogni item_id, prendiamo la label (assumendo sia univoca)
     raw_posts = raw_df[["item_id", "label"]].drop_duplicates(subset=["item_id"])
     # Post unici dopo il filtro
@@ -92,44 +99,45 @@ def print_label_by_posts(name, raw_df, filt_df):
         print(f"  {val:<8} {r:>10,} {f:>10,}   ({perc:.1f}%)")
 
 
-# ---- RUN ----
+# RUN
 raw = load(INPUT_PATH)
 fil = density_filter(raw)
 
 print(f"\nFilter: >= {MIN_VOTES_PER_POST} votes/post, >= {MIN_VOTES_PER_USER} votes/user\n")
 
-# --- base counts ---
+# base counts
 print(f"{'':12} {'before':>10} {'after':>10}")
 print(f"{'-'*36}")
 print(row("votes",  len(raw),                 len(fil)))
 print(row("posts",  raw['item_id'].nunique(), fil['item_id'].nunique()))
 print(row("users",  raw['username'].nunique(), fil['username'].nunique()))
 
-# --- outcome stats ---
+# outcome stats
 print_outcome_stats("Label", raw["label"], fil["label"])
 print_outcome_stats("Vote", raw["vote"], fil["vote"])
 
-# --- votes per user ---
+# votes per user
 raw_user_votes = raw.groupby("username").size()
 fil_user_votes = fil.groupby("username").size()
 
 print_distribution_stats("Votes per user", raw_user_votes, fil_user_votes)
 
-# --- votes per post ---
+# votes per post
 raw_post_votes = raw.groupby("item_id").size()
 fil_post_votes = fil.groupby("item_id").size()
 
 print_distribution_stats("Votes per post", raw_post_votes, fil_post_votes)
 
-# --- density ---
+# density
 def density(df):
+    """Calculate matrix density statistics."""
     return len(df) / (df["username"].nunique() * df["item_id"].nunique())
 
 print("\nMatrix density (user-item):")
 print(f"  before: {density(raw):.6f}")
 print(f"  after : {density(fil):.6f}")
 
-# --- sparsity reduction ---
+# sparsity reduction
 print("\nSparsity reduction:")
 print(f"  removed votes: {len(raw) - len(fil):,}")
 print(f"  removed users: {raw['username'].nunique() - fil['username'].nunique():,}")

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+from src.utils.splits import discover_splits, load_split_data
 from sklearn.metrics import (
     precision_recall_curve,
     precision_recall_fscore_support,
@@ -21,7 +22,7 @@ THRESHOLD_GRID    = np.linspace(-200, 200, 800)
 ALPHA_GRID        = np.linspace(1.0, 5.0, 20)
 MIN_SUB_VAL_ITEMS = 10
 N_FOLDS           = 5
-REDDIT_SCORES_PATH = Path("results/step1/reddit/moderated_posts_scores.parquet")
+REDDIT_SCORES_PATH = Path("data/interim/reddit/moderated_posts_scores.parquet")
 
 # minimum calibration sample size when falling back from an empty val split
 MIN_CAL_FALLBACK_ITEMS = 50
@@ -29,7 +30,8 @@ MIN_CAL_FALLBACK_ITEMS = 50
 
 # 1. load full vote dataset (all splits merged)
 def load_all_votes(step1_dir: Path) -> pd.DataFrame:
-    splits_dir = step1_dir / "splits"
+    """Load all votes from its configured source."""
+    splits_dir = step1_dir / "random"
     dfs = []
     for name in ("train_votes", "val_votes", "test_votes"):
         df = pd.read_parquet(splits_dir / f"{name}.parquet")
@@ -42,47 +44,12 @@ def load_all_votes(step1_dir: Path) -> pd.DataFrame:
     return all_votes
 
 
-def discover_splits(votes_dir: Path) -> Dict[str, Path]:
-    """
-    Find every split directory produced by prepare_data_step1 under votes_dir,
-    i.e. any folder containing train_votes.parquet / val_votes.parquet /
-    test_votes.parquet.
-
-    Returns a dict: split_label -> directory Path, where split_label is
-    e.g. "splits", "splits_full", "splits_intersection",
-    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
-    """
-    found: Dict[str, Path] = {}
-
-    for name in ("splits", "splits_full", "splits_intersection"):
-        d = votes_dir / name
-        if (d / "train_votes.parquet").exists():
-            found[name] = d
-
-    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
-        root = votes_dir / tag
-        if root.exists():
-            for w_dir in sorted(root.glob("w*")):
-                if (w_dir / "train_votes.parquet").exists():
-                    found[f"{tag}/{w_dir.name}"] = w_dir
-
-    return found
-
-
-def load_split_data(split_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load one split's train/val/test parquets and their concatenation."""
-    train = pd.read_parquet(split_dir / "train_votes.parquet")
-    val   = pd.read_parquet(split_dir / "val_votes.parquet")
-    test  = pd.read_parquet(split_dir / "test_votes.parquet")
-    all_data = pd.concat([train, val, test], ignore_index=True)
-    return all_data, train, val, test
-
-
-# 2. compute score(n) =  n_up - α * n_down. With alpha=1 this is the plain net score (upvotes - downvotes)
+# 2. compute score(n) =  n_up - alpha * n_down. With alpha=1 this is the plain net score (upvotes - downvotes)
 def compute_net_scores(
     votes_df: pd.DataFrame,
     alpha:    float = 1.0,
 ) -> pd.DataFrame:
+    """Compute net scores from the supplied data."""
     agg = votes_df.groupby("item_id").agg(
         community = ("community", "first"),
         n_up      = ("vote", lambda x: (x == 1).sum()),
@@ -95,17 +62,13 @@ def compute_net_scores(
 
 # 3. label lookup
 def get_item_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Return item labels for the supplied input."""
     return df.drop_duplicates("item_id")[["item_id", "label"]].copy()
 
 
 # 4. chronological k-fold split at item level
 def make_chrono_folds(all_votes: pd.DataFrame, n_folds: int = N_FOLDS) -> List[pd.DataFrame]:
-    """
-    Sort items by their earliest vote timestamp, divide into n_folds equal
-    buckets, return a list of n_folds DataFrames each containing the votes
-    for the items in that bucket.
-    Chronological order is preserved so earlier items are always in earlier folds.
-    """
+    """Create chrono folds from the supplied data."""
     item_times = (
         all_votes.groupby("item_id")["timestamp"]
         .min()
@@ -123,7 +86,7 @@ def make_chrono_folds(all_votes: pd.DataFrame, n_folds: int = N_FOLDS) -> List[p
         fold_votes = all_votes[all_votes["item_id"].isin(fold_items)].copy()
         folds.append(fold_votes)
         log.info(
-            "Fold %d: %d items | %d votes | %s → %s",
+            "Fold %d: %d items | %d votes | %s -> %s",
             k, len(fold_items), len(fold_votes),
             fold_votes["timestamp"].min().date() if "timestamp" in fold_votes.columns else "?",
             fold_votes["timestamp"].max().date() if "timestamp" in fold_votes.columns else "?",
@@ -137,6 +100,7 @@ def calibrate_global_threshold(
     val_labels: pd.DataFrame,
     grid:       np.ndarray = THRESHOLD_GRID,
 ) -> Tuple[float, pd.DataFrame]:
+    """Calibrate global threshold on validation data."""
     merged = val_labels.merge(scores_df[["item_id", "score"]], on="item_id", how="left")
     merged["score"] = merged["score"].fillna(0.0)
     y_true = merged["label"].values
@@ -154,21 +118,14 @@ def calibrate_global_threshold(
     return best_thr, cal_df
 
 
-# 6. alpha selection using inner train→val hold-out
+# 6. alpha selection using inner train->val hold-out
 def select_alpha(
     train_df:   pd.DataFrame,
     val_df:     pd.DataFrame,
     alpha_grid: np.ndarray = ALPHA_GRID,
     thr_grid:   np.ndarray = THRESHOLD_GRID,
 ) -> float:
-    """
-    For each alpha, calibrate threshold on train labels, evaluate on val.
-    Returns the alpha that maximises val macro F1.
-
-    Works equally well whether train_df/val_df come from an artificial 80/20
-    carve-out of a K-fold training fold (legacy run_baseline_kfold) or from
-    a split's real train_votes.parquet / val_votes.parquet (step_multi_split).
-    """
+    """Select alpha using validation data."""
     train_labels = get_item_labels(train_df)
     val_labels   = get_item_labels(val_df)
     best_alpha_f1, best_alpha = -1.0, 1.0
@@ -209,6 +166,7 @@ def calibrate_per_subreddit(
     grid:             np.ndarray = THRESHOLD_GRID,
     min_items:        int        = MIN_SUB_VAL_ITEMS,
 ) -> Dict[str, float]:
+    """Calibrate per subreddit on validation data."""
     merged = val_labels_full.merge(
         scores_df[["item_id", "score"]], on="item_id", how="left"
     )
@@ -243,14 +201,7 @@ def evaluate_fold(
     predictions:     np.ndarray,
     fallback_scores: Optional[Dict[str, float]] = None,
 ) -> Dict:
-    """
-    fallback_scores: optional {item_id: net_vote_score} used ONLY for items
-    missing from scores_df (e.g. BL4/BL5 items with no external Reddit
-    score). When given, those items get score = fallback_scores[item_id]
-    instead of the blanket 0.0 default — used by the "splits_full"
-    multi-split benchmark to force full test coverage via a net-vote
-    fallback. Items present in scores_df are never touched.
-    """
+    """Evaluate fold and return its metrics."""
     test_labels = get_item_labels(test_df)
     items_test  = test_labels.merge(scores_df, on="item_id", how="left")
     n_missing_score = int(items_test["score"].isna().sum())
@@ -304,8 +255,9 @@ def evaluate_fold(
     }
 
 
-# 9. aggregate fold metrics into mean ± std
+# 9. aggregate fold metrics into mean +/- std
 def aggregate_fold_metrics(fold_results: List[Dict], baseline_name: str, alpha: float) -> Dict:
+    """Aggregate fold metrics across groups."""
     scalar_keys = [
         "macro_precision", "macro_recall", "macro_f1",
         "precision_pos", "recall_pos", "f1_pos",
@@ -328,7 +280,7 @@ def aggregate_fold_metrics(fold_results: List[Dict], baseline_name: str, alpha: 
         for r in fold_results
     ]
     log.info(
-        "%s | macro F1 %.4f ± %.4f | AUC %.4f ± %.4f",
+        "%s | macro F1 %.4f +/- %.4f | AUC %.4f +/- %.4f",
         baseline_name,
         agg["macro_f1"], agg["macro_f1_std"],
         agg["roc_auc"],  agg["roc_auc_std"],
@@ -343,6 +295,7 @@ def save_outputs(
     fold_details:  List[Dict],
     baseline_name: str,
 ) -> None:
+    """Write outputs to disk."""
     d = output_dir / baseline_name
     d.mkdir(parents=True, exist_ok=True)
     # strip pr curves from fold_details before saving parquet (too large for columnar storage)
@@ -353,7 +306,7 @@ def save_outputs(
     with open(d / "metrics.json", "w") as fh:
         json.dump(metrics, fh, indent=2)
     pd.DataFrame(fold_rows).to_parquet(d / "fold_details.parquet", index=False)
-    log.info("Baseline '%s' outputs → %s", baseline_name, d)
+    log.info("Baseline '%s' outputs -> %s", baseline_name, d)
 
 
 # 11. run one baseline across all folds
@@ -364,6 +317,7 @@ def run_baseline_kfold(
     use_alpha:     bool = False,
     use_subreddit: bool = False,
 ) -> Tuple[Dict, List[Dict]]:
+    """Run the baseline kfold workflow."""
     fold_results  = []
     fold_details  = []
     chosen_alphas = []
@@ -435,6 +389,7 @@ def run_baseline_kfold(
 
 # 12. load pre-fetched Reddit scores from Arctic Shift (item_id + score)
 def load_external_scores(path: Path) -> pd.DataFrame:
+    """Load external scores from its configured source."""
     df = pd.read_parquet(path)[["item_id", "score"]].copy()
     df["score"] = pd.to_numeric(df["score"], errors="coerce")
     log.info(
@@ -448,13 +403,7 @@ def run_bl4_kfold(
     external_scores: pd.DataFrame,
     baseline_name:  str,
 ) -> Tuple[Dict, List[Dict]]:
-    """
-    BL4 – Score esterno Arctic Shift, una sola soglia globale.
-    Preprocessing: compressione log simmetrica (fissa, non fold-specifica) per
-    ridurre l'influenza dei post virali con score molto elevato. La griglia di
-    threshold è la stessa usata dalle altre baseline per garantire confrontabilità.
-    Non si inverte la polarità né si usano soglie multiple.
-    """
+    """Run the bl4 kfold workflow."""
     fold_results = []
     fold_details  = []
 
@@ -500,14 +449,11 @@ def run_bl5_kfold(
     baseline_name:  str,
     min_sub_items:  int = MIN_SUB_VAL_ITEMS,
 ) -> Tuple[Dict, List[Dict]]:
-    """
-    BL5 – Score esterno Arctic Shift con soglie per subreddit.
-    Preprocessing identico a BL4, ma in più calibra soglie dedicate per comunità.
-    """
+    """Run the bl5 kfold workflow."""
     fold_results = []
     fold_details  = []
 
-    # stessa compressione log fissa di BL4
+    # Use the same fixed log compression as BL4.
     scores_df = external_scores[["item_id"]].copy()
     raw = pd.to_numeric(external_scores["score"], errors="coerce").fillna(0.0)
     scores_df["score"] = np.sign(raw) * np.log1p(np.abs(raw))
@@ -521,10 +467,10 @@ def run_bl5_kfold(
         ].copy()
         train_labels = train_labels_full[["item_id", "label"]].copy()
 
-        # Soglia globale
+        # Global threshold.
         threshold_global, _ = calibrate_global_threshold(scores_df, train_labels, grid=THRESHOLD_GRID)
 
-        # Soglie per subreddit
+        # Community thresholds.
         sub_thr = calibrate_per_subreddit(
             scores_df,
             train_labels_full,
@@ -533,7 +479,7 @@ def run_bl5_kfold(
             min_items=min_sub_items,
         )
 
-        # Predizione con soglia per comunità
+        # Apply the matching community threshold.
         test_items = get_item_labels(val_fold).merge(
             val_fold.drop_duplicates("item_id")[["item_id", "community"]],
             on="item_id",
@@ -552,7 +498,7 @@ def run_bl5_kfold(
         fold_details.append(fold_metric)
 
         log.info(
-            "  BL5 Fold %d | macro F1 %.4f | AUC %.4f | thr_glob=%.4f | subreddit soglie attive=%d",
+            "  BL5 Fold %d | macro F1 %.4f | AUC %.4f | global_thr=%.4f | community thresholds=%d",
             k,
             fold_metric["macro_f1"],
             fold_metric["roc_auc"],
@@ -570,8 +516,9 @@ def run_baselines(
     output_dir: Path,
     n_folds:    int = N_FOLDS,
 ) -> Dict[str, Dict]:
+    """Run the baselines workflow."""
     log.info("=" * 60)
-    log.info("BASELINES (k-fold, k=%d) — %s", n_folds, step1_dir.name)
+    log.info("BASELINES (k-fold, k=%d) - %s", n_folds, step1_dir.name)
     log.info("=" * 60)
 
     all_votes = load_all_votes(step1_dir)
@@ -586,7 +533,7 @@ def run_baselines(
     save_outputs(output_dir, metrics_bl4, details_bl4, "BL4_reddit_score")
     results["BL4_reddit_score"] = metrics_bl4
 
-    log.info("--- BL5: external score (Arctic Shift) – soglie per subreddit ---")
+    log.info("BL5: external score with community thresholds")
     metrics_bl5, details_bl5 = run_bl5_kfold(folds, external_scores, "BL5_subreddit")
     save_outputs(output_dir, metrics_bl5, details_bl5, "BL5_subreddit")
     results["BL5_subreddit"] = metrics_bl5
@@ -595,20 +542,18 @@ def run_baselines(
     return results
 
 
-# ===========================================================================
 # MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
-# ===========================================================================
 #
 # All baselines here (net-vote and external-score) are transductive: the
 # score itself has no fitted parameters that could leak labels (net-vote is
 # just an aggregate over votes; the external Reddit score is pre-fetched and
-# split-independent). The only things that must respect a strict train →
-# calibrate-on-val → evaluate-on-test separation are:
+# split-independent). The only things that must respect a strict train ->
+# calibrate-on-val -> evaluate-on-test separation are:
 #   - alpha selection (net-vote only): chosen using TRAIN to fit a threshold
 #     and VAL to score it (select_alpha() already does exactly this).
 #   - the (global / per-subreddit) decision threshold: calibrated on VAL
 #     here, NOT on TRAIN as the legacy run_baseline_kfold()/run_bl4/5_kfold()
-#     do — this keeps the three-way split honest and consistent with the
+#     do - this keeps the three-way split honest and consistent with the
 #     other methods' multi-split benchmarks (TFR, SEF, CN).
 # Scores themselves are computed over each split's own votes only (train+
 # val+test), never mixing in votes from another split/window.
@@ -619,23 +564,19 @@ def _fallback_val_from_train(
     train_df:      pd.DataFrame,
     val_df:        pd.DataFrame,
 ) -> Optional[pd.DataFrame]:
-    """
-    Returns val_df if non-empty, else a labelled sample carved out of TRAIN
-    (used for calibration only — never touches TEST). Returns None if there
-    is no usable data at all (caller should skip the split/baseline).
-    """
+    """Create val from train when validation data is unavailable."""
     if not val_df.empty and val_df["item_id"].nunique() > 0:
         return val_df
 
     log.warning(
-        "  [%s/%s] empty val split — falling back to a sample carved from TRAIN.",
+        "  [%s/%s] empty val split - falling back to a sample carved from TRAIN.",
         split_label, baseline_name,
     )
     train_items = train_df.drop_duplicates("item_id")["item_id"].values
     if len(train_items) == 0:
-        log.warning("  [%s/%s] no train items either — skipped.", split_label, baseline_name)
+        log.warning("  [%s/%s] no train items either - skipped.", split_label, baseline_name)
         return None
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(10)
     sample_size = min(len(train_items), max(MIN_CAL_FALLBACK_ITEMS, int(0.2 * len(train_items))))
     sample_ids  = rng.choice(train_items, size=sample_size, replace=False)
     return train_df[train_df["item_id"].isin(sample_ids)]
@@ -651,14 +592,9 @@ def run_single_split_baseline(
     use_alpha:     bool = False,
     use_subreddit: bool = False,
 ) -> Tuple[Optional[Dict], pd.DataFrame]:
-    """
-    Net-vote baseline (score = n_up - alpha*n_down), evaluated on ONE split
-    produced by prepare_data_step1 instead of the legacy internal
-    chronological K-fold. See module-level note above for the calibration
-    design (threshold on VAL, alpha selection via TRAIN→VAL).
-    """
+    """Run the single split baseline workflow."""
     if test_df.empty or test_df["item_id"].nunique() == 0:
-        log.warning("  [%s/%s] empty test set — skipped.", split_label, baseline_name)
+        log.warning("  [%s/%s] empty test set - skipped.", split_label, baseline_name)
         return None, pd.DataFrame()
 
     val_for_cal = _fallback_val_from_train(split_label, baseline_name, train_df, val_df)
@@ -714,14 +650,9 @@ def run_single_split_external(
     baseline_name:   str,
     use_subreddit:   bool = False,
 ) -> Tuple[Optional[Dict], pd.DataFrame]:
-    """
-    BL4/BL5 external-score baseline, evaluated on ONE split. The score itself
-    doesn't depend on the split (it's pre-fetched from Arctic Shift and
-    already log-compressed by the caller) — only threshold calibration (VAL)
-    and final evaluation (TEST) do.
-    """
+    """Run the single split external workflow."""
     if test_df.empty or test_df["item_id"].nunique() == 0:
-        log.warning("  [%s/%s] empty test set — skipped.", split_label, baseline_name)
+        log.warning("  [%s/%s] empty test set - skipped.", split_label, baseline_name)
         return None, pd.DataFrame()
 
     val_for_cal = _fallback_val_from_train(split_label, baseline_name, train_df, val_df)
@@ -783,6 +714,7 @@ def _save_split_baseline_outputs(
     metric:        Dict,
     item_scores:   pd.DataFrame,
 ) -> None:
+    """Write split baseline outputs to disk."""
     d = split_out_dir / baseline_name
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "metrics.json", "w") as fh:
@@ -790,37 +722,12 @@ def _save_split_baseline_outputs(
     item_scores.to_parquet(d / "item_scores.parquet", index=False)
 
 
-def step_multi_split(
+def evaluate_splits(
     votes_dir:            Path,
     output_dir:           Path,
     external_scores_path: Path = REDDIT_SCORES_PATH,
 ) -> Dict[str, Dict[str, Dict]]:
-    """
-    Run every baseline — net-vote plain (BL1), net-vote with tuned alpha
-    (BL2), net-vote with tuned alpha + per-subreddit thresholds (BL3), and
-    the external-score BL4/BL5 — on every split directory found under
-    votes_dir (splits/, splits_full/, splits_intersection/, and every window
-    under windowed_folds_full/ and windowed_folds_intersection/).
-
-    Results are saved under output_dir/<split_label>/<baseline_name>/,
-    mirroring the layout produced by prepare_data_step1 and used by the
-    other methods' multi-split benchmarks:
-
-      output_dir/
-        splits/BL1_net_vote/{metrics.json, item_scores.parquet}
-        splits/BL2_net_vote_alpha/...
-        splits/BL3_net_vote_alpha_subreddit/...
-        splits/BL4_reddit_score/...
-        splits/BL5_subreddit/...
-        splits_full/...
-        splits_intersection/...
-        windowed_folds_full/w020/...
-        ...
-        windowed_folds_intersection/w020/...
-        ...
-        all_splits_summary.json   <- every baseline x every split, for comparison
-                                      (PR-curve arrays stripped for brevity)
-    """
+    """Evaluate splits and return its metrics."""
     splits = discover_splits(votes_dir)
     if not splits:
         log.warning(
@@ -840,7 +747,7 @@ def step_multi_split(
         external_scores_compressed["score"] = np.sign(raw) * np.log1p(np.abs(raw))
     else:
         log.warning(
-            "External scores not found at %s — BL4/BL5 will be skipped for every split.",
+            "External scores not found at %s - BL4/BL5 will be skipped for every split.",
             external_scores_path,
         )
 
@@ -849,7 +756,7 @@ def step_multi_split(
     for split_name, split_path in splits.items():
         log.info("--- split: %s ---", split_name)
         all_df, train_df, val_df, test_df = load_split_data(split_path)
-        split_out_dir = output_dir / split_name
+        split_out_dir = output_dir / split_name / "baselines"
         summary[split_name] = {}
 
         baseline_configs = [
@@ -892,7 +799,7 @@ def step_multi_split(
     summary_path = output_dir / "all_splits_summary.json"
     with open(summary_path, "w") as fh:
         json.dump(summary_slim, fh, indent=2)
-    log.info("Summary of all splits saved → %s", summary_path)
+    log.info("Summary of all splits saved -> %s", summary_path)
 
     if summary_slim:
         log.info("=== Cross-split / cross-baseline comparison ===")
@@ -906,10 +813,10 @@ def step_multi_split(
 
 if __name__ == "__main__":
     run_baselines(
-        step1_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/baselines/reddit"),
+        step1_dir  = Path("data/splits/reddit"),
+        output_dir = Path("results/reddit/random/baselines"),
     )
-    step_multi_split(
-        votes_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/baselines/reddit/benchmark_by_split"),
+    evaluate_splits(
+        votes_dir  = Path("data/splits/reddit"),
+        output_dir = Path("results/reddit"),
     )

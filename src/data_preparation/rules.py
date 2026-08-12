@@ -1,31 +1,15 @@
 """
-scrape_subreddit_rules.py
---------------------------
 Scrapes subreddit rules using Reddit's public JSON endpoint.
-No API credentials, no PRAW, no account required.
 
-Usage
------
-    pip install requests pandas pyarrow tqdm
 
-    python scrape_subreddit_rules.py \
-        --votes data/processed/final_intersection_dataset.csv \
-        --out_dir data/raw \
-        [--delay 2.0]
+Input: CSV or parquet with a column named `community` or `subreddit`.
 
-Input
------
-CSV or parquet with a column named `community` or `subreddit`.
-Values like "leagueoflegends", "r/leagueoflegends" are all handled.
-
-Output
-------
+Output:
 data/raw/subreddit_rules.parquet     one row per rule
 data/raw/subreddit_rules.jsonl       same, for easy manual inspection
 data/raw/subreddit_rules_errors.csv  subreddits that failed (banned/private/404)
 
-Output schema
--------------
+Output schema: 
 subreddit    str   e.g. "AskReddit"
 rule_index   int   0-based position in the subreddit rule list
 short_name   str   rule title
@@ -64,11 +48,10 @@ HEADERS = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Load subreddit list from dataset
-# ---------------------------------------------------------------------------
 
 def load_subreddit_list(votes_path: Path) -> List[str]:
+    """Load subreddit list from its configured source."""
     p = Path(votes_path)
     if p.suffix == ".parquet":
         df = pd.read_parquet(p)
@@ -99,11 +82,10 @@ def load_subreddit_list(votes_path: Path) -> List[str]:
     return cleaned
 
 
-# ---------------------------------------------------------------------------
 # Fetch rules for a single subreddit (no auth)
-# ---------------------------------------------------------------------------
 
 def fetch_rules(subreddit: str, session: requests.Session) -> List[Dict]:
+    """Fetch rules from the remote API."""
     url = f"https://www.reddit.com/r/{subreddit}/about/rules.json"
     resp = session.get(url, headers=HEADERS, timeout=15)
 
@@ -112,7 +94,7 @@ def fetch_rules(subreddit: str, session: requests.Session) -> List[Dict]:
     if resp.status_code == 403:
         raise ValueError(f"Private or banned (403): r/{subreddit}")
     if resp.status_code == 429:
-        raise RuntimeError("Rate limited (429) — increase --delay")
+        raise RuntimeError("Rate limited (429) - increase --delay")
     resp.raise_for_status()
 
     rules_raw = resp.json().get("rules", [])
@@ -129,9 +111,7 @@ def fetch_rules(subreddit: str, session: requests.Session) -> List[Dict]:
     return rows
 
 
-# ---------------------------------------------------------------------------
 # Main scraping loop with resume support
-# ---------------------------------------------------------------------------
 
 def scrape_all(
     subreddits: List[str],
@@ -139,11 +119,12 @@ def scrape_all(
     delay:      float = DEFAULT_DELAY,
     resume:     bool  = True,
 ) -> pd.DataFrame:
+    """Collect all from the remote source."""
     out_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path  = out_dir / "subreddit_rules.jsonl"
     errors_path = out_dir / "subreddit_rules_errors.csv"
 
-    # --- resume: find already-processed subreddits ---
+    # resume: find already-processed subreddits
     done: set[str] = set()
     if resume and jsonl_path.exists():
         with open(jsonl_path, encoding="utf-8") as fh:
@@ -170,7 +151,7 @@ def scrape_all(
             try:
                 rows = fetch_rules(sub, session)
 
-                # subreddit exists but has no rules → write sentinel row
+                # subreddit exists but has no rules -> write sentinel row
                 if not rows:
                     rows = [{
                         "subreddit":   sub,
@@ -186,7 +167,7 @@ def scrape_all(
 
             except RuntimeError:
                 # rate-limit: back off 30 s and retry once
-                log.warning("Rate limited — sleeping 30 s then retrying r/%s", sub)
+                log.warning("Rate limited - sleeping 30 s then retrying r/%s", sub)
                 time.sleep(30)
                 try:
                     rows = fetch_rules(sub, session)
@@ -203,12 +184,12 @@ def scrape_all(
 
             time.sleep(delay)
 
-    # --- save errors ---
+    # save errors
     if errors:
         pd.DataFrame(errors).drop_duplicates("subreddit").to_csv(errors_path, index=False)
         log.info("%d failures logged to %s", len(errors), errors_path)
 
-    # --- consolidate JSONL → parquet ---
+    # consolidate JSONL -> parquet
     all_rows: List[Dict] = []
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
@@ -227,19 +208,18 @@ def scrape_all(
 
     n_ok = df.loc[df["has_rules"], "subreddit"].nunique()
     log.info(
-        "Saved %d rules across %d subreddits → %s",
+        "Saved %d rules across %d subreddits -> %s",
         int(df["has_rules"].sum()), n_ok, parquet_path,
     )
     return df
 
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse args from the supplied input."""
     p = argparse.ArgumentParser(
-        description="Scrape subreddit rules — no API credentials needed"
+        description="Scrape subreddit rules - no API credentials needed"
     )
     p.add_argument(
         "--votes",
@@ -262,6 +242,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run the command-line workflow."""
     args = parse_args()
     subs = load_subreddit_list(Path(args.votes))
     df   = scrape_all(

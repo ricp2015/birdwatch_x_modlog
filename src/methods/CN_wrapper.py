@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+from src.utils.splits import discover_splits, load_split_data
 from sklearn.metrics import (
     precision_recall_curve,
     precision_recall_fscore_support,
@@ -14,11 +15,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import KFold
 import sys
 from pathlib import Path
-_SCORING_ROOT = Path(__file__).parent.parent.parent / "communitynotes_main/scoring/src"
+_SCORING_ROOT = Path(__file__).parent.parent.parent / "external/community-notes/scoring/src"
 if not _SCORING_ROOT.exists():
     raise ImportError(
         f"Cannot find the 'scoring' package at {_SCORING_ROOT}. "
-        "Place the unzipped twitter/communitynotes scoring/ folder next to this file."
+        "Expected the Community Notes dependency under external/community-notes/."
     )
 if str(_SCORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCORING_ROOT))
@@ -52,8 +53,9 @@ MIN_CAL_FALLBACK_ITEMS = 50
 
 
 # 1. load data
-def load_all_data(step1_dir: Path) -> pd.DataFrame:
-    splits_dir = step1_dir / "splits"
+def load_all_data(dataset_dir: Path) -> pd.DataFrame:
+    """Load all data from its configured source."""
+    splits_dir = dataset_dir / "random"
     train = pd.read_parquet(splits_dir / "train_votes.parquet")
     val   = pd.read_parquet(splits_dir / "val_votes.parquet")
     test  = pd.read_parquet(splits_dir / "test_votes.parquet")
@@ -62,46 +64,11 @@ def load_all_data(step1_dir: Path) -> pd.DataFrame:
     return all_data
 
 
-def discover_splits(votes_dir: Path) -> Dict[str, Path]:
-    """
-    Find every split directory produced by prepare_data_step1 under votes_dir,
-    i.e. any folder containing train_votes.parquet / val_votes.parquet /
-    test_votes.parquet.
-
-    Returns a dict: split_label -> directory Path, where split_label is
-    e.g. "splits", "splits_full", "splits_intersection",
-    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
-    """
-    found: Dict[str, Path] = {}
-
-    for name in ("splits", "splits_full", "splits_intersection"):
-        d = votes_dir / name
-        if (d / "train_votes.parquet").exists():
-            found[name] = d
-
-    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
-        root = votes_dir / tag
-        if root.exists():
-            for w_dir in sorted(root.glob("w*")):
-                if (w_dir / "train_votes.parquet").exists():
-                    found[f"{tag}/{w_dir.name}"] = w_dir
-
-    return found
-
-
-def load_split_data(split_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load one split's train/val/test parquets and their concatenation."""
-    train = pd.read_parquet(split_dir / "train_votes.parquet")
-    val   = pd.read_parquet(split_dir / "val_votes.parquet")
-    test  = pd.read_parquet(split_dir / "test_votes.parquet")
-    all_data = pd.concat([train, val, test], ignore_index=True)
-    return all_data, train, val, test
-
-
 # 2. mapping between string item_ids (e.g. 't3_dxlv9b') and contiguous int64 indices required by CN's noteIdKey
 def build_item_id_map(
     *dfs: pd.DataFrame,
 ) -> Tuple[Dict[str, int], Dict[int, str]]:
+    """Build item id map from the supplied data."""
     all_ids = pd.concat([df["item_id"] for df in dfs]).unique()
     str2int = {sid: i for i, sid in enumerate(all_ids)}
     int2str = {i: sid for sid, i in str2int.items()}
@@ -112,6 +79,7 @@ def to_cn_ratings(
     str2int: Dict[str, int],
     vote_sign: int = 1,
 ) -> pd.DataFrame:
+    """Convert cn ratings to the required schema."""
     note_ids = df["item_id"].map(str2int)
     n_unknown = note_ids.isna().sum()
     if n_unknown:
@@ -132,6 +100,7 @@ def to_cn_ratings(
 def compute_item_vote_features(
     all_df: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Compute item vote features from the supplied data."""
     agg = all_df.groupby("item_id").agg(
         n_voters    =("username", "nunique"),
         vote_mean   =("vote",     "mean"),
@@ -148,6 +117,7 @@ def run_cn_mf(
     all_df:    pd.DataFrame,
     vote_sign: int = 1,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, float]:
+    """Run the cn mf workflow."""
     str2int, int2str = build_item_id_map(all_df)
     ratings = to_cn_ratings(all_df, str2int, vote_sign)
     print(f"CN MF | {len(ratings)} ratings | {ratings[c.noteIdKey].nunique()} unique notes | {ratings[c.raterParticipantIdKey].nunique()} unique raters")
@@ -179,6 +149,7 @@ def calibrate_threshold(
     val_df:      pd.DataFrame,
     grid:        np.ndarray = THRESHOLD_GRID,
 ) -> Tuple[float, pd.DataFrame]:
+    """Calibrate threshold on validation data."""
     items_val = val_df.drop_duplicates("item_id")[["item_id", "label"]].copy()
     lookup = note_params.set_index("item_id")
     items_val["i_n"] = items_val["item_id"].map(lookup[c.internalNoteInterceptKey]).fillna(0.0)
@@ -209,14 +180,7 @@ def evaluate(
     item_vote_feats:  Optional[pd.DataFrame] = None,
     fallback_scores:  Optional[Dict[str, float]] = None,
 ) -> Tuple[Dict, pd.DataFrame]:
-    """
-    fallback_scores: optional {item_id: net_vote_score} used ONLY for items
-    missing from note_params (i.e. the MF produced no i_n for them). When
-    given, those items get i_n = fallback_scores[item_id] instead of the
-    blanket 0.0 default — used by the "splits_full" multi-split benchmark to
-    force full test coverage via a net-vote fallback rather than a neutral
-    score. Items present in note_params are never touched.
-    """
+    """Calculate predictions and metrics for one evaluation set."""
     items_test = test_df.drop_duplicates("item_id")[["item_id", "label"]].copy()
     lookup = note_params.set_index("item_id")
     raw_i_n = items_test["item_id"].map(lookup[c.internalNoteInterceptKey])
@@ -338,9 +302,10 @@ def analyze_user_polarization(
     rater_params: pd.DataFrame,
     step1_dir:    Path,
 ) -> pd.DataFrame:
+    """Analyze user polarization and return summary statistics."""
     users_path = step1_dir / "users.parquet"
     if not users_path.exists():
-        log.warning("users.parquet not found — skipping polarisation analysis")
+        log.warning("users.parquet not found - skipping polarisation analysis")
         return pd.DataFrame()
     users  = pd.read_parquet(users_path)
     merged = rater_params.rename(
@@ -363,17 +328,7 @@ def build_user_params(
     rater_params: pd.DataFrame,
     votes_df:     Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    """
-    votes_df: the full (train+val+test) vote dataframe passed to run_cn_mf()
-    for this split, i.e. the SAME data the MF was actually fitted on. When
-    given, adds an `n_votes` column (how many of those ratings belong to
-    each rater) — CN's matrix factorization doesn't expose a per-user vote
-    count on its own (user_params only has i_u/f_u), which previously made
-    it impossible to run any low-signal sensitivity check on CN's user
-    scores (a user with i_u fitted from 2 ratings and one from 300 looked
-    identical downstream). Left out (NaN) if votes_df isn't provided, for
-    backwards compatibility with existing call sites.
-    """
+    """Build user params from the supplied data."""
     out = rater_params.rename(
         columns={
             c.raterParticipantIdKey:     "username",
@@ -397,6 +352,7 @@ def save_model_npz(
     global_intercept: Optional[float],
     path:             Path,
 ) -> None:
+    """Write model npz to disk."""
     np.savez(
         path,
         mu  = np.array([global_intercept or 0.0]),
@@ -420,6 +376,7 @@ def save_outputs(
     fold_cal_dfs:     List[pd.DataFrame],
     user_analysis:    Optional[pd.DataFrame] = None,
 ) -> None:
+    """Write outputs to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
     all_item_scores = pd.concat(
         [df.assign(fold=i) for i, df in enumerate(fold_item_scores)], ignore_index=True
@@ -469,16 +426,17 @@ def save_outputs(
 
 
 # main
-def run_step2(
-    step1_dir:  Path,
+def evaluate_cn(
+    dataset_dir: Path,
     output_dir: Path,
     vote_sign:  int = 1,
 ) -> Dict:
+    """Evaluate cn and return its metrics."""
     log.info(
         "STEP 2: Community Notes(%s) vote_sign=%+d",
-        step1_dir.name, vote_sign,
+        dataset_dir.name, vote_sign,
     )
-    all_df = load_all_data(step1_dir)
+    all_df = load_all_data(dataset_dir)
     item_vote_feats = compute_item_vote_features(all_df)
 
     note_params, rater_params, global_intercept = run_cn_mf(all_df, vote_sign)
@@ -490,7 +448,7 @@ def run_step2(
         .dropna(subset=["label"])
         .reset_index(drop=True)
     )
-    kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
+    kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=10)
 
     fold_metrics:     List[Dict]         = []
     fold_item_scores: List[pd.DataFrame] = []
@@ -509,7 +467,7 @@ def run_step2(
         fold_cal_dfs.append(cal_df)
 
     user_params   = build_user_params(rater_params, all_df)
-    user_analysis = analyze_user_polarization(rater_params, step1_dir)
+    user_analysis = analyze_user_polarization(rater_params, dataset_dir)
 
     save_outputs(
         output_dir,
@@ -517,7 +475,7 @@ def run_step2(
         fold_item_scores, user_params, fold_metrics, fold_cal_dfs, user_analysis,
     )
 
-    log.info("Step 2 complete: %s", step1_dir.name)
+    log.info("CN evaluation complete: %s", dataset_dir.name)
     scalar_keys = [k for k, v in fold_metrics[0].items() if isinstance(v, (int, float, bool))]
     agg_metrics = {k: float(np.mean([m[k] for m in fold_metrics if isinstance(m[k], (int, float))])) for k in scalar_keys}
     return {
@@ -528,9 +486,7 @@ def run_step2(
     }
 
 
-# ===========================================================================
 # MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
-# ===========================================================================
 #
 # CN's matrix factorization is transductive: it factorizes the (item, user,
 # vote) matrix and never sees ground-truth labels during fitting. So, unlike
@@ -548,24 +504,9 @@ def run_single_split_cn(
     test_df:     pd.DataFrame,
     vote_sign:   int = 1,
 ) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[float]]:
-    """
-    Fit CN's MF on this split's own votes (train+val+test — MF never sees
-    labels, so this is not a label-leakage risk, only a "keep this window's
-    item population self-contained" guarantee), calibrate the decision
-    threshold on this split's VAL labels, evaluate on this split's TEST
-    labels.
-
-    If VAL is empty (e.g. windowed_folds at w=100%, where the whole pool
-    goes to train), falls back to calibrating on a labelled sample carved
-    out of TRAIN instead of skipping the split outright — MF itself never
-    used those labels, so using them for calibration only is safe.
-
-    Returns (metrics | None, item_scores, cal_df, note_params, rater_params,
-    global_intercept). metrics is None (and the rest empty/None) if the
-    split has no usable test set.
-    """
+    """Run the single split cn workflow."""
     if test_df.empty or test_df["item_id"].nunique() == 0:
-        log.warning("  [%s] empty test set — skipped.", split_label)
+        log.warning("  [%s] empty test set - skipped.", split_label)
         return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
     item_vote_feats = compute_item_vote_features(all_df)
@@ -579,15 +520,15 @@ def run_single_split_cn(
 
     if val_df.empty or val_df["item_id"].nunique() == 0:
         log.warning(
-            "  [%s] empty val split — falling back to a calibration sample "
+            "  [%s] empty val split - falling back to a calibration sample "
             "carved from TRAIN labels (MF itself never used those labels).",
             split_label,
         )
         train_items = train_df.drop_duplicates("item_id")["item_id"].values
         if len(train_items) == 0:
-            log.warning("  [%s] no train items either — skipped.", split_label)
+            log.warning("  [%s] no train items either - skipped.", split_label)
             return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
-        rng = np.random.RandomState(42)
+        rng = np.random.RandomState(10)
         sample_size = min(len(train_items), max(MIN_CAL_FALLBACK_ITEMS, int(0.2 * len(train_items))))
         sample_ids  = rng.choice(train_items, size=sample_size, replace=False)
         cal_source_df = train_df[train_df["item_id"].isin(sample_ids)]
@@ -621,31 +562,13 @@ def run_single_split_cn(
     return metrics, item_scores, cal_df, note_params, rater_params, global_intercept
 
 
-def step_multi_split(
+def evaluate_splits(
     votes_dir:  Path,
     output_dir: Path,
     vote_sign:  int = 1,
+    method_name: str = "cn",
 ) -> Dict[str, Dict]:
-    """
-    Run Community Notes' MF on every split directory found under votes_dir
-    (splits/, splits_full/, splits_intersection/, and every window under
-    windowed_folds_full/ and windowed_folds_intersection/).
-
-    Results are saved under output_dir/<split_label>/, mirroring the
-    directory layout produced by prepare_data_step1:
-
-      output_dir/
-        splits/{item_scores,user_params,val_calibration}.parquet
-               + model_params.npz + metrics.json [+ user_analysis.parquet]
-        splits_full/...
-        splits_intersection/...
-        windowed_folds_full/w020/...
-        ...
-        windowed_folds_intersection/w020/...
-        ...
-        all_splits_summary.json   <- metrics for every split, for comparison
-                                      (PR-curve arrays stripped for brevity)
-    """
+    """Evaluate splits and return its metrics."""
     splits = discover_splits(votes_dir)
     if not splits:
         log.warning(
@@ -672,7 +595,7 @@ def step_multi_split(
         user_params   = build_user_params(rater_params, all_df)
         user_analysis = analyze_user_polarization(rater_params, votes_dir)
 
-        split_out_dir = output_dir / split_name
+        split_out_dir = output_dir / split_name / method_name
         split_out_dir.mkdir(parents=True, exist_ok=True)
         item_scores.to_parquet(split_out_dir / "item_scores.parquet", index=False)
         user_params.to_parquet(split_out_dir / "user_params.parquet", index=False)
@@ -682,7 +605,7 @@ def step_multi_split(
             json.dump(metrics, fh, indent=2)
         if user_analysis is not None and not user_analysis.empty:
             user_analysis.to_parquet(split_out_dir / "user_analysis.parquet", index=False)
-        log.info("  [%s] Saved → %s", split_name, split_out_dir)
+        log.info("  [%s] Saved -> %s", split_name, split_out_dir)
 
         summary[split_name] = metrics
 
@@ -697,7 +620,7 @@ def step_multi_split(
     summary_path = output_dir / "all_splits_summary.json"
     with open(summary_path, "w") as fh:
         json.dump(summary_slim, fh, indent=2)
-    log.info("Summary of all splits saved → %s", summary_path)
+    log.info("Summary of all splits saved -> %s", summary_path)
 
     if summary_slim:
         log.info("=== Cross-split comparison ===")
@@ -710,29 +633,30 @@ def step_multi_split(
 
 
 if __name__ == "__main__":
-    run_step2(
-        step1_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/reddit_cn"),
+    evaluate_cn(
+        dataset_dir = Path("data/splits/reddit"),
+        output_dir  = Path("results/reddit/random/cn"),
     )
-    step_multi_split(
-        votes_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/reddit_cn/benchmark_by_split"),
+    evaluate_splits(
+        votes_dir  = Path("data/splits/reddit"),
+        output_dir = Path("results/reddit"),
     )
-    run_step2(
-        step1_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/reddit_cn_inverted"),
+    evaluate_cn(
+        dataset_dir = Path("data/splits/reddit"),
+        output_dir  = Path("results/reddit/random/cn-inverted"),
         vote_sign  = -1,
     )
-    step_multi_split(
-        votes_dir  = Path("results/step1/reddit"),
-        output_dir = Path("results/step2/reddit_cn_inverted/benchmark_by_split"),
+    evaluate_splits(
+        votes_dir  = Path("data/splits/reddit"),
+        output_dir = Path("results/reddit"),
         vote_sign  = -1,
+        method_name = "cn-inverted",
     )
-    run_step2(
-        step1_dir=Path("results/step1/wikipedia"),
-        output_dir=Path("results/step2/wikipedia"),
+    evaluate_cn(
+        dataset_dir=Path("data/splits/wikipedia/standard"),
+        output_dir=Path("results/wikipedia/standard/random/cn"),
     )
-    step_multi_split(
-        votes_dir  = Path("results/step1/wikipedia"),
-        output_dir = Path("results/step2/wikipedia/benchmark_by_split"),
+    evaluate_splits(
+        votes_dir  = Path("data/splits/wikipedia/standard"),
+        output_dir = Path("results/wikipedia/standard"),
     )

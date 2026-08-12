@@ -1,39 +1,3 @@
-"""
-step3_expert_finder.py  (v7)
-============================
-Semantic Expert Finder — changes vs v6:
-
-  V7-1  Asymmetric negative predictor.
-        For posts with at least MIN_NEG_EXPERTS reliable downvoter experts,
-        a dedicated binary classifier is trained to predict "remove" using
-        only downvoter-expert features. Its output probability is added as
-        a feature to the main meta-model (neg_expert_proba).
-        This directly implements the supervisor suggestion to restrict
-        ranking to downvotes for the negative class.
-
-  V7-2  Model selection: Ridge, XGBoost, GradientBoosting are all trained
-        on each fold's training data and evaluated via cross-validation.
-        The best model is selected per fold and used for prediction.
-        Winner is logged per fold and aggregated in metrics.json.
-
-  V7-3  Additional features for the negative predictor:
-        wv_neg_only    (weighted vote of downvoter experts only)
-        n_neg_reliable (number of downvoter experts with reliability > 0.1)
-        neg_expert_coverage (fraction of downvoters that are reliable experts)
-
-  V7-4  Multi-split benchmark (run_single_split / step_multi_split).
-        The per-fold logic used by the legacy random K-fold (run_kfold) is
-        factored out into run_single_split(train_ids, val_ids, test_ids, ...),
-        so it can be reused with the REAL train/val/test splits produced by
-        prepare_data_step1 (splits/, splits_full/, splits_intersection/,
-        windowed_folds_full/*, windowed_folds_intersection/*), instead of a
-        random sklearn KFold. Hyperparameter grid search and threshold
-        calibration now use the split's actual VAL set (when available);
-        the meta-model and negative predictor are trained only on TRAIN;
-        metrics are reported on TEST. Results are saved per split, mirroring
-        the folder layout produced by prepare_data_step1.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -47,6 +11,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import faiss
 import numpy as np
 import pandas as pd
+from src.utils.splits import discover_splits
 import subprocess
 import sys
 import tempfile
@@ -62,26 +27,22 @@ try:
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
-    log_msg = "xgboost not installed — skipping XGB. Run: pip install xgboost"
+    log_msg = "xgboost not installed - skipping XGB. Run: pip install xgboost"
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
-STEP1_DIR    = Path("results/step1/reddit")
-FETCH_DIR    = Path("results/step3_expert")
-OUTPUT_DIR   = Path("results/step3_expert")
+STEP1_DIR    = Path("data/interim/reddit")
+SPLITS_DIR   = Path("data/splits/reddit")
+FETCH_DIR    = Path("data/interim/reddit")
+OUTPUT_DIR   = Path("results/reddit")
+CACHE_DIR    = Path("cache/embeddings")
 ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")
 
-# ---------------------------------------------------------------------------
 # Embedding model
-# ---------------------------------------------------------------------------
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM   = 384
 BATCH_SIZE      = 64
 
-# ---------------------------------------------------------------------------
 # Hyperparameter defaults
-# ---------------------------------------------------------------------------
 K_NEIGHBORS    = 5
 MIN_USER_VOTES = 10
 ALPHA          = 0.5
@@ -98,9 +59,7 @@ RANK_N = 5
 MIN_NEG_EXPERTS = 1
 NEG_RELIABILITY_THR = 0.1   # minimum reliability to count as "reliable"
 
-# ---------------------------------------------------------------------------
 # Grid search
-# ---------------------------------------------------------------------------
 GRID_K     = [5, 10]
 GRID_T     = [1, 3, 5]
 GRID_ALPHA = [0.2, 0.3, 0.4, 0.5, 0.6]
@@ -108,14 +67,10 @@ GRID_BETA  = [0.2, 0.3, 0.4, 0.5, 0.6]
 # valid combos: alpha+beta <= 1.0
 VAL_GRID_SAMPLE = 3000
 
-# ---------------------------------------------------------------------------
 # Meta-model feature T values
-# ---------------------------------------------------------------------------
 TOP_T_LIST = [1, 3, 5, 20]          # mirrors grid T values
 
-# ---------------------------------------------------------------------------
 # Evaluation
-# ---------------------------------------------------------------------------
 N_FOLDS = 5
 SCALAR_METRICS = [
     "macro_f1", "roc_auc",
@@ -135,11 +90,10 @@ log = logging.getLogger(__name__)
 post_ids_ordered: List[str] = []
 
 
-# ===========================================================================
 # 1. DATA LOADING
-# ===========================================================================
 
 def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
+    """Load votes from its configured source."""
     for csv_path in [p for p in [input_csv, ORIGINAL_CSV] if p is not None]:
         if csv_path.exists():
             df = pd.read_csv(csv_path, low_memory=False)
@@ -157,15 +111,15 @@ def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
             )
             return df
 
-    log.warning("CSV not found — falling back to parquet.")
+    log.warning("CSV not found - falling back to parquet.")
     path = STEP1_DIR / "filtered_votes.parquet"
     if path.exists():
         df = pd.read_parquet(path)
     else:
         dfs = [
-            pd.read_parquet(STEP1_DIR / "splits" / f"{s}_votes.parquet")
+            pd.read_parquet(SPLITS_DIR / "random" / f"{s}_votes.parquet")
             for s in ("train", "val", "test")
-            if (STEP1_DIR / "splits" / f"{s}_votes.parquet").exists()
+            if (SPLITS_DIR / "random" / f"{s}_votes.parquet").exists()
         ]
         df = pd.concat(dfs, ignore_index=True)
     df = df.dropna(subset=["item_id", "username", "vote", "label"])
@@ -177,12 +131,7 @@ def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
 
 
 def _load_split_votes(path: Path) -> pd.DataFrame:
-    """
-    Load one train/val/test parquet produced by prepare_data_step1.
-    Unlike load_votes() this keeps ALL columns present in the parquet
-    (timestamp, any merged metadata, ...) — it only enforces the dtypes
-    and non-null constraints the rest of this module relies on.
-    """
+    """Load split votes from its configured source."""
     df = pd.read_parquet(path)
     df = df.dropna(subset=["item_id", "username", "vote", "label"])
     df["vote"]  = df["vote"].astype(int)
@@ -190,34 +139,8 @@ def _load_split_votes(path: Path) -> pd.DataFrame:
     return df
 
 
-def discover_splits(votes_dir: Path) -> Dict[str, Path]:
-    """
-    Find every split directory produced by prepare_data_step1 under votes_dir,
-    i.e. any folder containing train_votes.parquet / val_votes.parquet /
-    test_votes.parquet.
-
-    Returns a dict: split_label -> directory Path, where split_label is
-    e.g. "splits", "splits_full", "splits_intersection",
-    "windowed_folds_full/w020", "windowed_folds_intersection/w100", ...
-    """
-    found: Dict[str, Path] = {}
-
-    for name in ("splits", "splits_full", "splits_intersection"):
-        d = votes_dir / name
-        if (d / "train_votes.parquet").exists():
-            found[name] = d
-
-    for tag in ("windowed_folds_full", "windowed_folds_intersection"):
-        root = votes_dir / tag
-        if root.exists():
-            for w_dir in sorted(root.glob("w*")):
-                if (w_dir / "train_votes.parquet").exists():
-                    found[f"{tag}/{w_dir.name}"] = w_dir
-
-    return found
-
-
 def load_post_texts() -> pd.DataFrame:
+    """Load post texts from its configured source."""
     path = FETCH_DIR / "post_texts.parquet"
     if not path.exists():
         raise FileNotFoundError(f"Post texts not found at {path}.")
@@ -229,9 +152,10 @@ def load_post_texts() -> pd.DataFrame:
 
 
 def load_user_documents() -> pd.DataFrame:
+    """Load user documents from its configured source."""
     path = FETCH_DIR / "user_documents.parquet"
     if not path.exists():
-        log.warning("User documents not found — Signal C will be 0.")
+        log.warning("User documents not found - Signal C will be 0.")
         return pd.DataFrame(columns=["username", "text"])
     df = pd.read_parquet(path)
     df = df[df["text"].notna()].copy()
@@ -239,11 +163,10 @@ def load_user_documents() -> pd.DataFrame:
     return df
 
 
-# ===========================================================================
 # 2. EMBEDDINGS
-# ===========================================================================
 
 def _get_model() -> str:
+    """Return model for the supplied input."""
     return EMBEDDING_MODEL
 
 
@@ -253,6 +176,7 @@ def _encode_texts(
     normalize:  bool = True,
     batch_size: int  = BATCH_SIZE,
 ) -> np.ndarray:
+    """Encode text batches with the configured embedding model."""
     import pickle
     helper = Path(__file__).parent / "embed_helper.py"
     if not helper.exists():
@@ -271,7 +195,7 @@ def _encode_texts(
         ]
         if normalize:
             cmd.append("--normalize")
-        log.info("Encoding %d texts …", len(texts))
+        log.info("Encoding %d texts ...", len(texts))
         subprocess.run(cmd, check=True)
         vecs = np.load(out_path).astype(np.float32)
     return vecs
@@ -283,12 +207,13 @@ def build_post_embeddings(
     model:      Optional[Any] = None,
     chunk_size: int = 1000,
 ) -> Tuple[np.ndarray, List[str]]:
+    """Build post embeddings from the supplied data."""
     emb_path    = embed_dir / "post_embeddings.npy"
     ids_path    = embed_dir / "post_ids.json"
     partial_dir = embed_dir / "post_chunks"
 
     if emb_path.exists() and ids_path.exists():
-        log.info("Loading cached post embeddings …")
+        log.info("Loading cached post embeddings ...")
         return np.load(emb_path), json.load(open(ids_path))
 
     model_name = model if model is not None else _get_model()
@@ -321,16 +246,17 @@ def build_user_embeddings(
     model:      Optional[Any] = None,
     chunk_size: int = 1000,
 ) -> Tuple[np.ndarray, List[str]]:
+    """Build user embeddings from the supplied data."""
     emb_path    = embed_dir / "user_embeddings.npy"
     ids_path    = embed_dir / "user_ids.json"
     partial_dir = embed_dir / "user_chunks"
 
     if emb_path.exists() and ids_path.exists():
-        log.info("Loading cached user embeddings …")
+        log.info("Loading cached user embeddings ...")
         return np.load(emb_path), json.load(open(ids_path))
 
     if user_docs.empty:
-        log.warning("No user docs — user embeddings empty.")
+        log.warning("No user docs - user embeddings empty.")
         embed_dir.mkdir(parents=True, exist_ok=True)
         np.save(emb_path, np.zeros((0, EMBEDDING_DIM), dtype=np.float32))
         json.dump([], open(ids_path, "w"))
@@ -371,36 +297,24 @@ def build_user_embeddings(
     return user_matrix, usernames
 
 
-# ===========================================================================
 # 3. FAISS INDEX
-# ===========================================================================
 
 def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
+    """Build faiss index from the supplied data."""
     index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
     log.info("FAISS index: %d vectors", index.ntotal)
     return index
 
 
-# ===========================================================================
 # 4. SIGNAL COMPUTATION
-# ===========================================================================
 
 def precompute_vote_precision(
     train_votes:    pd.DataFrame,
     lambda_smooth:  float,
     min_user_votes: int,
 ) -> pd.DataFrame:
-    """
-    Per-user, per-direction precision with Laplace smoothing.
-
-    V5-1: adds two columns:
-      reliability  = |prec - 0.5|   (how far from random, regardless of direction)
-      bias_sign    = sign(prec - 0.5)  (+1 if user tends to agree with mods,
-                                        -1 if user tends to systematically disagree)
-    Users with bias_sign=-1 are contrarian — their votes will be flipped in
-    compute_expert_weights so that systematic disagreement becomes useful signal.
-    """
+    """Precompute vote precision for reuse."""
     tv = train_votes.copy()
     tv["correct"] = (tv["vote"] == tv["label"]).astype(int)
 
@@ -431,14 +345,7 @@ def precompute_vote_precision(
 
 
 def compute_subreddit_base_rates(train_votes: pd.DataFrame) -> Dict[str, Dict[str, float]]:
-    """
-    V5-2: richer subreddit context features.
-    Returns dict {subreddit: {approve_rate, approve_rate_text, approve_std, n_posts}}.
-      approve_rate      — overall historical approval rate
-      approve_rate_text — approval rate for text-only posts (selftext not null/empty)
-      approve_std       — std of monthly approval rates (temporal variance)
-      n_posts           — log(1 + n_posts) as subreddit size signal
-    """
+    """Compute subreddit base rates from the supplied data."""
     # per-post label (one row per item)
     posts = train_votes.drop_duplicates("item_id").copy()
 
@@ -498,14 +405,8 @@ def compute_expert_weights(
     beta:           float,
     lambda_smooth:  float,
 ) -> pd.DataFrame:
-    """
-    Vectorized expert weight computation (V6-2).
-    expert_weight = alpha*A + beta*B + gamma*C
-      A = local reliability on FAISS neighbours (sim-weighted, Bayesian shrinkage)
-      B = subreddit-level reliability
-      C = signal_c_directed (direction-aware topical similarity)
-    """
-    # ── lookup tables ────────────────────────────────────────────────────────
+    """Compute expert weights from the supplied data."""
+    # lookup tables
     global_map: Dict[tuple, tuple] = {}
     sub_map:    Dict[tuple, tuple] = {}
     for row in prec_df.itertuples(index=False):
@@ -518,7 +419,7 @@ def compute_expert_weights(
     laplace_default = lambda_smooth / (2 * lambda_smooth)
     gamma = 1.0 - alpha - beta
 
-    # ── training vote lookup: {item_id: {username: [(vote, correct)]}} ───────
+    # training vote lookup: {item_id: {username: [(vote, correct)]}}
     train_votes = vote_df[vote_df["item_id"].isin(train_item_ids)].copy()
     train_votes["correct"] = (train_votes["vote"] == train_votes["label"]).astype(np.int8)
     train_lookup: Dict[str, Dict[str, List[Tuple[int, float]]]] = {}
@@ -542,7 +443,7 @@ def compute_expert_weights(
     for row in vote_df[vote_df["item_id"].isin(valid_ids)][["item_id","username","vote"]].itertuples(index=False):
         test_votes_by_post.setdefault(row.item_id, []).append((row.username, int(row.vote)))
 
-    # ── V6-2a: batch FAISS ───────────────────────────────────────────────────
+    # V6-2a: batch FAISS
     post_indices = [post_id2idx[iid] for iid in valid_ids]
     batch_sims, batch_idxs = faiss_index.search(post_emb[post_indices], k_neighbors + 1)
 
@@ -567,7 +468,7 @@ def compute_expert_weights(
         if not voters:
             continue
 
-        # ── V6-2b: Signal C for all voters at once ────────────────────────────
+        # V6-2b: Signal C for all voters at once
         known = [(i, u) for i, (u, _) in enumerate(voters) if u in user_id2idx]
         sig_c_map: Dict[str, float] = {}
         if known and user_emb.shape[0] > 0:
@@ -622,9 +523,7 @@ def compute_expert_weights(
         ])
     return pd.DataFrame(rows)
 
-# ===========================================================================
 # 5. FEATURE EXTRACTION  (V4-2 early fusion + V5-2 subreddit + V5-3 per-rank)
-# ===========================================================================
 
 def extract_post_features(
     item_ids:   List[str],
@@ -634,20 +533,7 @@ def extract_post_features(
     top_t_list: List[int] = TOP_T_LIST,
     rank_n:     int = RANK_N,
 ) -> pd.DataFrame:
-    """
-    Feature vector per post for the meta-model.
-
-    V5-2: richer subreddit features (approve_rate, approve_rate_text,
-          approve_std, n_posts) instead of a single approve_rate scalar.
-
-    V5-3: per-rank disaggregated expert features (supervisor suggestion).
-          Instead of top-N mean/std, the meta-model receives individual
-          weight, local_prec, global_prec, reliability, signal_c_directed,
-          effective_vote for rank-1 through rank-RANK_N experts,
-          separately for pos and neg directions. Missing slots are 0-padded.
-
-    V4-2: direction-disaggregated aggregates kept for complementarity.
-    """
+    """Extract post features from the supplied records."""
     raw_votes = vote_df[vote_df["item_id"].isin(item_ids)][["item_id", "username", "vote"]]
     post_sub  = (
         vote_df[vote_df["item_id"].isin(item_ids)]
@@ -666,14 +552,14 @@ def extract_post_features(
 
         feats: Dict[str, float] = {}
 
-        # --- raw vote stats ---
+        # raw vote stats
         feats["raw_vote_mean"] = float(rv.mean()) if len(rv) > 0 else 0.0
         feats["raw_vote_std"]  = float(rv.std())  if len(rv) > 1 else 0.0
         feats["n_voters"]      = float(len(rv))
         feats["n_upvoters"]    = float((rv ==  1).sum())
         feats["n_downvoters"]  = float((rv == -1).sum())
 
-        # --- weighted vote at multiple T ---
+        # weighted vote at multiple T
         for t in top_t_list:
             wv = _compute_weighted_votes([item_id], vote_df, weights_df, t)
             feats[f"wv_top{t}"] = wv.get(item_id, feats["raw_vote_mean"])
@@ -681,7 +567,7 @@ def extract_post_features(
         min_t = min(top_t_list)
         feats["expert_crowd_divergence"] = feats[f"wv_top{min_t}"] - feats["raw_vote_mean"]
 
-        # --- V5-2: subreddit context features ---
+        # V5-2: subreddit context features
         sr = base_rates.get(sub, default_sub)
         feats["sub_approve_rate"]      = sr["approve_rate"]
         feats["sub_approve_rate_text"] = sr["approve_rate_text"]
@@ -779,7 +665,7 @@ def extract_post_features(
             feats["neg_expert_coverage"] = 0.0
             feats["wv_neg_only"]         = 0.0
 
-        # placeholder for neg predictor proba — filled later in run_kfold / run_single_split
+        # placeholder for neg predictor proba - filled later in run_kfold / run_single_split
         feats["neg_expert_proba"] = 0.5
 
         rows.append(feats)
@@ -788,40 +674,41 @@ def extract_post_features(
 
 
 def get_meta_feature_cols(feat_df: pd.DataFrame) -> List[str]:
+    """Return meta feature cols for the supplied input."""
     return [c for c in feat_df.columns if c != "item_id"]
 
 
-# ===========================================================================
-# 6. META-MODEL  (V7-2: model selection — Ridge / XGB / GBT)
-# ===========================================================================
+# 6. META-MODEL  (V7-2: model selection - Ridge / XGB / GBT)
 
 class _XGBWrapper:
-    """
-    Wraps an XGBClassifier trained on 0/1 labels to expose the same
-    predict / predict_proba interface as sklearn models trained on -1/+1.
-    """
+    """Implement xgbwrapper."""
     def __init__(self, clf):
+        """Initialize the instance."""
         self._clf    = clf
         self.classes_ = np.array([-1, 1])
 
     def predict(self, X):
+        """Predict labels for the supplied features."""
         raw = self._clf.predict(X)
         return np.where(raw == 1, 1, -1)
 
     def predict_proba(self, X):
+        """Predict class probabilities for the supplied features."""
         # columns: [proba_class0(=-1), proba_class1(=+1)]
         return self._clf.predict_proba(X)   # already [p0, p1]
 
     def get_params(self, deep=True):
+        """Return estimator parameters for scikit-learn compatibility."""
         return self._clf.get_params(deep=deep)
 
     @property
     def feature_importances_(self):
+        """Return feature weights in estimator order."""
         return self._clf.feature_importances_
 
 
 def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
-    """Build candidate models for selection."""
+    """Build candidates from the supplied data."""
     candidates = [
         ("Ridge", LogisticRegression(
             penalty="l2", C=0.1, class_weight="balanced",
@@ -830,7 +717,7 @@ def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
         ("GBT", GradientBoostingClassifier(
             n_estimators=200, learning_rate=0.05,
             max_depth=4, subsample=0.8,
-            min_samples_leaf=20, random_state=42,
+            min_samples_leaf=20, random_state=10,
         )),
     ]
     if HAS_XGBOOST:
@@ -842,7 +729,7 @@ def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
             max_depth=4, subsample=0.8,
             scale_pos_weight=scale_pos,
             eval_metric="logloss",
-            verbosity=0, random_state=42,
+            verbosity=0, random_state=10,
         )))
     return candidates
 
@@ -852,12 +739,7 @@ def train_meta_model(
     labels:    Dict[str, int],
     feat_cols: List[str],
 ) -> Tuple[Any, StandardScaler, str]:
-    """
-    V7-2: trains Ridge, GBT, and XGBoost (if available).
-    Selects best by 3-fold CV macro F1 on the training sample.
-    Returns (best_clf, scaler, model_name).
-    GBT/XGB use sample_weight for imbalance; Ridge uses class_weight='balanced'.
-    """
+    """Train meta model on the supplied features."""
     items = feat_df[feat_df["item_id"].isin(labels)]["item_id"].tolist()
     X = feat_df.set_index("item_id").loc[items, feat_cols].values.astype(float)
     y = np.array([labels[i] for i in items])
@@ -880,7 +762,7 @@ def train_meta_model(
                 )
             else:
                 from sklearn.model_selection import StratifiedKFold
-                skf    = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+                skf    = StratifiedKFold(n_splits=3, shuffle=True, random_state=10)
                 scores = []
                 # XGB needs 0/1 labels
                 y_fit = (y == 1).astype(int) if name == "XGB" else y
@@ -894,7 +776,7 @@ def train_meta_model(
                 cv_scores = np.array(scores)
 
             mean_f1 = float(cv_scores.mean())
-            log.info("    %s CV macro_f1=%.4f ± %.4f", name, mean_f1, cv_scores.std())
+            log.info("    %s CV macro_f1=%.4f +/- %.4f", name, mean_f1, cv_scores.std())
 
             if mean_f1 > best_score:
                 best_score, best_name, best_clf = mean_f1, name, clf
@@ -929,21 +811,14 @@ def train_meta_model(
     return best_clf, scaler, best_name
 
 
-# ===========================================================================
 # 6b. NEGATIVE PREDICTOR  (V7-1)
-# ===========================================================================
 
 def train_neg_predictor(
     feat_df:   pd.DataFrame,
     labels:    Dict[str, int],
     feat_cols: List[str],
 ) -> Tuple[Optional[Any], Optional[StandardScaler]]:
-    """
-    V7-1: dedicated classifier for the 'remove' class.
-    Trained only on posts that have at least MIN_NEG_EXPERTS reliable
-    downvoter experts (n_neg_reliable > 0). Uses only downvoter features.
-    Returns (clf, scaler) or (None, None) if insufficient data.
-    """
+    """Train neg predictor on the supplied features."""
     neg_feat_cols = [c for c in feat_cols if
                      any(tag in c for tag in ["neg", "wv_neg", "n_neg", "neg_expert"])]
     if not neg_feat_cols:
@@ -957,7 +832,7 @@ def train_neg_predictor(
     df_neg = df[mask]
 
     if len(df_neg) < 50 or df_neg["_label"].nunique() < 2:
-        log.info("  Neg predictor: insufficient data (%d posts) — skipped.", len(df_neg))
+        log.info("  Neg predictor: insufficient data (%d posts) - skipped.", len(df_neg))
         return None, None
 
     X = df_neg[neg_feat_cols].values.astype(float)
@@ -987,10 +862,7 @@ def apply_neg_predictor(
     neg_scaler:     Optional[StandardScaler],
     neg_feat_cols:  Optional[List[str]],
 ) -> Dict[str, float]:
-    """
-    Returns {item_id: proba_remove} for posts with reliable downvoter experts.
-    Returns 0.5 (neutral) for posts without.
-    """
+    """Apply neg predictor to the supplied data."""
     result = {iid: 0.5 for iid in item_ids}
     if neg_clf is None or neg_feat_cols is None:
         return result
@@ -1019,7 +891,7 @@ def predict_meta_model(
     scaler:    StandardScaler,
     feat_cols: List[str],
 ) -> Dict[str, Tuple[int, float]]:
-    """Batch prediction — single clf call. Works for Ridge, GBT, XGB."""
+    """Predict item labels with the fitted meta-model."""
     df = feat_df.set_index("item_id")
     pos_class_idx = list(clf.classes_).index(1)
 
@@ -1037,9 +909,7 @@ def predict_meta_model(
     return result
 
 
-# ===========================================================================
 # 7. WEIGHTED VOTE
-# ===========================================================================
 
 def _compute_weighted_votes(
     item_ids:   List[str],
@@ -1047,7 +917,7 @@ def _compute_weighted_votes(
     weights_df: pd.DataFrame,
     top_t:      int,
 ) -> Dict[str, float]:
-    """V6-3: vectorised weighted vote using groupby instead of per-post loop."""
+    """Compute weighted votes from the supplied data."""
     if weights_df.empty:
         raw = vote_df[vote_df["item_id"].isin(item_ids)][["item_id", "vote"]]
         return {iid: float(g["vote"].mean()) for iid, g in raw.groupby("item_id")}
@@ -1085,9 +955,7 @@ def _compute_weighted_votes(
     return result
 
 
-# ===========================================================================
 # 8. THRESHOLD CALIBRATION
-# ===========================================================================
 
 def calibrate_threshold_weighted(
     sample_ids:  List[str],
@@ -1096,7 +964,7 @@ def calibrate_threshold_weighted(
     top_t:       int,
     neg_weight:  float = 2.0,
 ) -> float:
-    """Find threshold maximising weighted macro-F1 (neg class upweighted 2x)."""
+    """Calibrate threshold weighted on validation data."""
     labels = (
         vote_df[vote_df["item_id"].isin(sample_ids)]
         .drop_duplicates("item_id").set_index("item_id")["label"].to_dict()
@@ -1127,7 +995,7 @@ def calibrate_thresholds_per_subreddit(
     top_t:       int,
     min_samples: int = MIN_SUB_SAMPLES,
 ) -> Dict[Optional[str], float]:
-    """Per-subreddit threshold; falls back to global for small subreddits."""
+    """Calibrate thresholds per subreddit on validation data."""
     global_thr = calibrate_threshold_weighted(sample_ids, vote_df, weights_df, top_t)
     thresholds: Dict[Optional[str], float] = {None: global_thr}
 
@@ -1153,9 +1021,7 @@ def calibrate_thresholds_per_subreddit(
     return thresholds
 
 
-# ===========================================================================
 # 9. GRID SEARCH  (I3+I4: extended T grid, pure-C combo covered by (0,0))
-# ===========================================================================
 
 def grid_search_hyperparams(
     val_ids:       List[str],
@@ -1169,11 +1035,7 @@ def grid_search_hyperparams(
     faiss_index:   faiss.Index,
     lambda_smooth: float,
 ) -> Tuple[int, int, float, float]:
-    """
-    V6-5: grid search with FAISS precomputed per K.
-    For each K, compute weights once per (alpha, beta) combo.
-    T iteration reuses the same weights_df — no extra compute_expert_weights calls.
-    """
+    """Select expert-weighting parameters on validation data."""
     labels  = (
         vote_df[vote_df["item_id"].isin(val_ids)]
         .drop_duplicates("item_id").set_index("item_id")["label"].to_dict()
@@ -1184,12 +1046,12 @@ def grid_search_hyperparams(
 
     valid_ab = [(a, b) for a in GRID_ALPHA for b in GRID_BETA if a + b <= 1.0]
     n_combos = len(GRID_K) * len(valid_ab) * len(GRID_T)
-    log.info("  Grid search: %d combos on %d val posts …", n_combos, len(val_ids))
+    log.info("  Grid search: %d combos on %d val posts ...", n_combos, len(val_ids))
 
     best = {"f1": -1.0, "k": K_NEIGHBORS, "t": TOP_T, "alpha": ALPHA, "beta": BETA}
 
     for k in GRID_K:
-        # precompute weights once per (k, alpha, beta) — T is free to vary after
+        # precompute weights once per (k, alpha, beta) - T is free to vary after
         for alpha, beta in valid_ab:
             weights_df = compute_expert_weights(
                 val_ids, train_ids, vote_df, prec_df,
@@ -1219,9 +1081,7 @@ def grid_search_hyperparams(
     return best["k"], best["t"], best["alpha"], best["beta"]
 
 
-# ===========================================================================
 # 10. PREDICTION
-# ===========================================================================
 
 def predict_fold(
     test_ids:       List[str],
@@ -1237,11 +1097,7 @@ def predict_fold(
     neg_scaler:     Optional[StandardScaler] = None,
     neg_feat_cols:  Optional[List[str]]     = None,
 ) -> pd.DataFrame:
-    """
-    V7-1: injects neg_expert_proba into feat_df before meta-model prediction.
-    The neg predictor's probability of 'remove' becomes a feature so the
-    main model can learn how to weight it.
-    """
+    """Generate predictions for one evaluation fold."""
     labels = (
         vote_df[vote_df["item_id"].isin(test_ids)]
         .drop_duplicates("item_id")[["item_id", "label"]]
@@ -1284,11 +1140,10 @@ def predict_fold(
     return result
 
 
-# ===========================================================================
 # 11. METRICS
-# ===========================================================================
 
 def evaluate_fold(decisions: pd.DataFrame) -> Dict:
+    """Evaluate fold and return its metrics."""
     y_true = decisions["label"].values
     y_pred = decisions["predicted"].values
     try:
@@ -1313,9 +1168,7 @@ def evaluate_fold(decisions: pd.DataFrame) -> Dict:
     }
 
 
-# ===========================================================================
 # 12. SINGLE-SPLIT EVALUATION  (core logic, reused by K-fold and multi-split)
-# ===========================================================================
 
 def run_single_split(
     train_ids:      set,
@@ -1335,25 +1188,7 @@ def run_single_split(
     do_grid_search: bool = True,
     split_label:    str = "",
 ) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame]:
-    """
-    Core train/val/test evaluation for one split, factored out so it can be
-    reused both by:
-
-      - run_kfold(): the legacy random K-fold benchmark. It calls this with
-        val_ids=None, in which case a validation sample is carved out of
-        train_ids internally (same behaviour as before this refactor).
-
-      - step_multi_split(): the new benchmark that uses the REAL train/val/
-        test split produced by prepare_data_step1. Grid search and threshold
-        calibration use the split's actual val_ids when non-empty; if val_ids
-        is empty (e.g. windowed_folds at w=100%, where the whole pool goes to
-        train), this falls back to carving a validation sample out of train
-        — the same graceful fallback used by the legacy K-fold, so that
-        split still produces a result instead of being skipped outright.
-
-    Returns (metrics | None, decisions_df, weights_df). metrics is None if
-    the test set ends up with a single class (nothing to evaluate).
-    """
+    """Run the single split workflow."""
     train_vote_df = vote_df[vote_df["item_id"].isin(train_ids)]
     prec_df       = precompute_vote_precision(train_vote_df, LAMBDA_SMOOTH, min_coverage)
     base_rates    = compute_subreddit_base_rates(train_vote_df)
@@ -1361,7 +1196,7 @@ def run_single_split(
              split_label, len(train_ids), len(val_ids or []), len(test_ids),
              min_coverage, prec_df["username"].nunique())
 
-    # ── hyperparameter selection: use real val if we have one, else carve from train ─
+    # hyperparameter selection: use real val if we have one, else carve from train
     if val_ids:
         val_grid_ids = list(val_ids)
         train_grid   = train_ids
@@ -1380,7 +1215,7 @@ def run_single_split(
     else:
         k, t, alpha, beta = default_k, default_t, default_alpha, default_beta
 
-    # ── expert weights for the TEST set (weighted using TRAIN-only precision) ─
+    # expert weights for the TEST set (weighted using TRAIN-only precision)
     test_id_list = list(test_ids)
     weights_df = compute_expert_weights(
         test_id_list, train_ids, vote_df, prec_df,
@@ -1388,7 +1223,7 @@ def run_single_split(
         faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
     )
 
-    # ── training sample for the meta-model (subsampled from TRAIN only) ────
+    # training sample for the meta-model (subsampled from TRAIN only)
     train_sample = list(train_ids)
     np.random.shuffle(train_sample)
     train_sample = train_sample[:min(CAL_SAMPLE, len(train_sample))]
@@ -1399,7 +1234,7 @@ def run_single_split(
         faiss_index, k, alpha, beta, LAMBDA_SMOOTH,
     )
 
-    # ── threshold calibration: on real VAL if available, else on train_sample ─
+    # threshold calibration: on real VAL if available, else on train_sample
     if val_ids:
         cal_ids     = list(val_ids)
         weights_cal = compute_expert_weights(
@@ -1412,7 +1247,7 @@ def run_single_split(
         weights_cal = weights_train_sample
     thresholds = calibrate_thresholds_per_subreddit(cal_ids, vote_df, weights_cal, t)
 
-    log.info("  [%s] Extracting features for meta-model …", split_label)
+    log.info("  [%s] Extracting features for meta-model ...", split_label)
     train_feat_df = extract_post_features(train_sample, vote_df, weights_train_sample, base_rates)
     feat_cols     = get_meta_feature_cols(train_feat_df)
     train_labels  = (
@@ -1453,7 +1288,7 @@ def run_single_split(
     decisions["beta"]  = beta
 
     if decisions["label"].nunique() < 2:
-        log.warning("  [%s] single class in test — skipped.", split_label)
+        log.warning("  [%s] single class in test - skipped.", split_label)
         return None, decisions, weights_df
 
     metrics = evaluate_fold(decisions)
@@ -1487,9 +1322,7 @@ def run_single_split(
     return metrics, decisions, weights_df
 
 
-# ===========================================================================
 # 12b. KFOLD  (legacy: random split, val carved out of train per fold)
-# ===========================================================================
 
 def run_kfold(
     vote_df:        pd.DataFrame,
@@ -1505,6 +1338,7 @@ def run_kfold(
     min_coverage:   int,
     do_grid_search: bool = True,
 ) -> Tuple[List[Dict], List[pd.DataFrame], List[pd.DataFrame]]:
+    """Run the kfold workflow."""
     global post_ids_ordered
     post_ids_ordered = post_id_list
 
@@ -1517,7 +1351,7 @@ def run_kfold(
     )
     log.info("Labeled items: %d", len(labeled_items))
 
-    kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
+    kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=10)
     fold_metrics:     List[Dict]         = []
     fold_item_scores: List[pd.DataFrame] = []
     fold_weights:     List[pd.DataFrame] = []
@@ -1548,11 +1382,9 @@ def run_kfold(
     return fold_metrics, fold_item_scores, fold_weights
 
 
-# ===========================================================================
 # 12c. MULTI-SPLIT BENCHMARK  (uses splits produced by prepare_data_step1)
-# ===========================================================================
 
-def step_multi_split(
+def evaluate_splits(
     votes_dir:      Path,
     output_dir:     Path,
     post_emb:       np.ndarray,
@@ -1567,31 +1399,7 @@ def step_multi_split(
     min_coverage:   int,
     do_grid_search: bool = True,
 ) -> Dict[str, Dict]:
-    """
-    Run the Semantic Expert Finder on every split directory found under
-    votes_dir (splits/, splits_full/, splits_intersection/, and every window
-    under windowed_folds_full/ and windowed_folds_intersection/).
-
-    For each split, the vote_df used is the concatenation of that split's own
-    train/val/test votes only (not the full 73k-vote CSV), so no vote from
-    outside the split's item population leaks in. Precision tables and
-    subreddit base rates come from TRAIN only; hyperparameter grid search and
-    threshold calibration use VAL; the meta-model and negative predictor are
-    trained on TRAIN; final metrics are computed on TEST.
-
-    Results are saved under output_dir/<split_label>/, mirroring the
-    directory layout produced by prepare_data_step1:
-
-      output_dir/
-        splits/{item_scores,weights}.parquet + metrics.json
-        splits_full/...
-        splits_intersection/...
-        windowed_folds_full/w020/...
-        ...
-        windowed_folds_intersection/w020/...
-        ...
-        all_splits_summary.json   <- metrics for every split, for comparison
-    """
+    """Evaluate splits and return its metrics."""
     global post_ids_ordered
     post_ids_ordered = post_id_list
     post_id2idx = {pid: i for i, pid in enumerate(post_id_list)}
@@ -1614,7 +1422,7 @@ def step_multi_split(
         val_votes   = _load_split_votes(split_path / "val_votes.parquet")
         test_votes  = _load_split_votes(split_path / "test_votes.parquet")
 
-        # this split's own votes only — never mixes in votes from outside it
+        # this split's own votes only - never mixes in votes from outside it
         split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
 
         train_ids = set(train_votes["item_id"].unique())
@@ -1622,7 +1430,7 @@ def step_multi_split(
         test_ids  = set(test_votes["item_id"].unique())
 
         if not test_ids:
-            log.warning("  [%s] empty test set — skipped.", split_name)
+            log.warning("  [%s] empty test set - skipped.", split_name)
             continue
 
         metrics, decisions, weights_df = run_single_split(
@@ -1639,7 +1447,7 @@ def step_multi_split(
         # net vote (see _compute_weighted_votes' fallback branch). Force the
         # final decision for those items to follow that net vote directly,
         # instead of the meta-model's prediction on a degenerate/zero-padded
-        # feature vector — this measures how much performance degrades when
+        # feature vector - this measures how much performance degrades when
         # every item must get a decision, using the simplest possible signal
         # for items with no real expert coverage.
         if split_name == "splits_full" and decisions["used_fallback"].any():
@@ -1660,13 +1468,13 @@ def step_multi_split(
                      split_name, n_fallback, len(decisions),
                      metrics["macro_f1"], metrics["roc_auc"])
 
-        split_out_dir = output_dir / split_name
+        split_out_dir = output_dir / split_name / "expertise"
         split_out_dir.mkdir(parents=True, exist_ok=True)
         decisions.to_parquet(split_out_dir / "item_scores.parquet", index=False)
         weights_df.to_parquet(split_out_dir / "weights.parquet", index=False)
         with open(split_out_dir / "metrics.json", "w") as fh:
             json.dump(metrics, fh, indent=2)
-        log.info("  [%s] Saved → %s", split_name, split_out_dir)
+        log.info("  [%s] Saved -> %s", split_name, split_out_dir)
 
         summary[split_name] = metrics
 
@@ -1674,7 +1482,7 @@ def step_multi_split(
     summary_path = output_dir / "all_splits_summary.json"
     with open(summary_path, "w") as fh:
         json.dump(summary, fh, indent=2)
-    log.info("Summary of all splits saved → %s", summary_path)
+    log.info("Summary of all splits saved -> %s", summary_path)
 
     if summary:
         log.info("=== Cross-split comparison ===")
@@ -1685,9 +1493,7 @@ def step_multi_split(
     return summary
 
 
-# ===========================================================================
 # 13. OUTPUT
-# ===========================================================================
 
 def save_outputs(
     fold_metrics:     List[Dict],
@@ -1695,6 +1501,7 @@ def save_outputs(
     fold_weights:     List[pd.DataFrame],
     output_dir:       Path,
 ) -> None:
+    """Write outputs to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pd.concat(fold_item_scores, ignore_index=True).to_parquet(
@@ -1734,7 +1541,7 @@ def save_outputs(
         json.dump(agg, fh, indent=2)
 
     log.info(
-        "Saved to %s | macro_f1=%.4f±%.4f  roc_auc=%.4f±%.4f  f1_pos=%.4f  f1_neg=%.4f",
+        "Saved to %s | macro_f1=%.4f+/-%.4f  roc_auc=%.4f+/-%.4f  f1_pos=%.4f  f1_neg=%.4f",
         output_dir,
         agg["macro_f1"], agg["macro_f1_std"],
         agg["roc_auc"],  agg["roc_auc_std"],
@@ -1742,11 +1549,10 @@ def save_outputs(
     )
 
 
-# ===========================================================================
 # ENTRY POINT
-# ===========================================================================
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser(description="Semantic Expert Finder v7")
     parser.add_argument("--k-neighbors",    type=int,   default=K_NEIGHBORS)
     parser.add_argument("--top-t",          type=int,   default=TOP_T)
@@ -1756,26 +1562,26 @@ def main() -> None:
     parser.add_argument("--output-dir",     type=Path,  default=OUTPUT_DIR)
     parser.add_argument("--no-grid-search", action="store_true")
     parser.add_argument("--input-csv",      type=Path,  default=None)
-    parser.add_argument("--votes-dir",      type=Path,  default=STEP1_DIR,
+    parser.add_argument("--votes-dir",      type=Path,  default=SPLITS_DIR,
                          help="Directory with the splits produced by prepare_data_step1 "
                               "(splits/, splits_full/, splits_intersection/, windowed_folds_*)")
-    parser.add_argument("--steps", nargs="+", default=["kfold", "multi_split"],
-                         choices=["kfold", "multi_split"],
+    parser.add_argument("--tasks", nargs="+", default=["kfold", "splits"],
+                         choices=["kfold", "splits"],
                          help="kfold = legacy random K-fold benchmark; "
-                              "multi_split = benchmark on every split produced by prepare_data_step1")
-    parser.add_argument("--skip-steps", nargs="+", default=[],
-                         choices=["kfold", "multi_split"])
+                              "splits = benchmark on every prepared split")
+    parser.add_argument("--skip-tasks", nargs="+", default=[],
+                         choices=["kfold", "splits"])
     args = parser.parse_args()
 
     assert args.alpha + args.beta <= 1.0, \
         f"alpha + beta must be <= 1.0 (got {args.alpha + args.beta:.2f})"
 
-    steps_to_run = [s for s in args.steps if s not in args.skip_steps]
+    tasks_to_run = [task for task in args.tasks if task not in args.skip_tasks]
 
-    embed_dir = args.output_dir / "embeddings"
+    embed_dir = CACHE_DIR
 
     log.info("=== SEF v7 | alpha=%.2f beta=%.2f gamma=%.2f | steps=%s ===",
-             args.alpha, args.beta, 1.0 - args.alpha - args.beta, steps_to_run)
+             args.alpha, args.beta, 1.0 - args.alpha - args.beta, tasks_to_run)
 
     vote_df    = load_votes(args.input_csv)
     post_texts = load_post_texts()
@@ -1790,7 +1596,7 @@ def main() -> None:
 
     faiss_index = build_faiss_index(post_emb)
 
-    if "kfold" in steps_to_run:
+    if "kfold" in tasks_to_run:
         fold_metrics, fold_item_scores, fold_weights = run_kfold(
             vote_df        = vote_df,
             post_emb       = post_emb,
@@ -1805,12 +1611,13 @@ def main() -> None:
             min_coverage   = args.min_user_votes,
             do_grid_search = not args.no_grid_search,
         )
-        save_outputs(fold_metrics, fold_item_scores, fold_weights, args.output_dir)
+        save_outputs(fold_metrics, fold_item_scores, fold_weights,
+                     args.output_dir / "kfold" / "expertise")
 
-    if "multi_split" in steps_to_run:
-        step_multi_split(
+    if "splits" in tasks_to_run:
+        evaluate_splits(
             votes_dir      = args.votes_dir,
-            output_dir     = args.output_dir / "benchmark_by_split",
+            output_dir     = args.output_dir,
             post_emb       = post_emb,
             post_id_list   = post_id_list,
             user_emb       = user_emb,

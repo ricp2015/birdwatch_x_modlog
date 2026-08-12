@@ -1,6 +1,4 @@
 """
-analyze_signals.py
-==================
 Analyses discriminability of signals A, B, C with respect to moderator agreement.
 
 For each (U, P) pair with computed expert weights, checks:
@@ -10,10 +8,6 @@ For each (U, P) pair with computed expert weights, checks:
   4. Interaction: signal x vote_direction vs concordance
 
 Requires item_scores.parquet from step3 run, plus the original votes CSV.
-
-Usage:
-    python analyze_signals.py
-    python analyze_signals.py --scores-path results/step3_expert/item_scores.parquet
 """
 
 from __future__ import annotations
@@ -33,22 +27,15 @@ from sklearn.metrics import roc_auc_score
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR   = Path("results/step3_expert")
+OUTPUT_DIR   = Path("results/diagnostics/signals")
 ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")
 N_QUANTILES  = 4   # quartiles for discriminability analysis
 
 
-# ===========================================================================
 # 1. LOAD DATA
-# ===========================================================================
 
 def load_data(scores_path: Path, votes_path: Path) -> pd.DataFrame:
-    """
-    Merge expert weights (from item_scores.parquet) with ground truth labels
-    and vote direction. Returns one row per (post, user) pair with columns:
-      item_id, username, vote, expert_weight, local_prec, global_prec,
-      signal_c, label, concordant
-    """
+    """Load data from its configured source."""
     scores = pd.read_parquet(scores_path)
     log.info("item_scores: %d rows", len(scores))
 
@@ -84,15 +71,10 @@ def load_data(scores_path: Path, votes_path: Path) -> pd.DataFrame:
     return scores
 
 
-# ===========================================================================
 # 2. CORRELATION ANALYSIS
-# ===========================================================================
 
 def correlation_analysis(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pearson and Spearman correlation between each signal and concordance,
-    overall and split by vote direction.
-    """
+    """Measure pairwise correlations between signal columns."""
     signals = ["local_prec", "global_prec", "signal_c", "expert_weight"]
     rows = []
 
@@ -129,17 +111,10 @@ def correlation_analysis(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-# ===========================================================================
 # 3. DISCRIMINABILITY BY QUANTILE
-# ===========================================================================
 
 def discriminability_analysis(df: pd.DataFrame, n_quantiles: int = N_QUANTILES) -> pd.DataFrame:
-    """
-    Split users into quantiles by each signal. For each quantile, compute:
-      - mean concordance rate
-      - mean concordance for vote=+1 and vote=-1 separately
-    Discriminability = concordance rate should increase monotonically with signal.
-    """
+    """Measure how well each signal separates correct votes."""
     signals = ["local_prec", "global_prec", "signal_c", "expert_weight"]
     rows = []
 
@@ -167,16 +142,10 @@ def discriminability_analysis(df: pd.DataFrame, n_quantiles: int = N_QUANTILES) 
     return result
 
 
-# ===========================================================================
 # 4. INTERACTION: signal x vote_direction
-# ===========================================================================
 
 def interaction_analysis(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    For each combination of (signal_quantile, vote_direction), compute
-    concordance rate. Tests whether high-signal users who vote -1 are more
-    informative for the remove class than low-signal users.
-    """
+    """Measure joint effects between signal pairs."""
     signals = ["local_prec", "global_prec", "signal_c", "expert_weight"]
     rows = []
 
@@ -205,9 +174,7 @@ def interaction_analysis(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-# ===========================================================================
 # 5. PLOT
-# ===========================================================================
 
 def plot_all(
     corr_df:  pd.DataFrame,
@@ -215,6 +182,7 @@ def plot_all(
     inter_df: pd.DataFrame,
     out_path: Path,
 ) -> None:
+    """Plot all and save the figure."""
     signals  = ["local_prec", "global_prec", "signal_c", "expert_weight"]
     sig_labels = {
         "local_prec":    "Signal A\n(local precision)",
@@ -234,7 +202,7 @@ def plot_all(
         sub = disc_df[disc_df["signal"] == sig].sort_values("quantile")
         ax.bar(sub["quantile"], sub["concordance"], color=colors["all"], alpha=0.8)
         ax.set_title(sig_labels[sig], fontsize=9)
-        ax.set_xlabel("Quantile (low→high)", fontsize=8)
+        ax.set_xlabel("Quantile (low->high)", fontsize=8)
         ax.set_ylabel("Concordance rate" if i == 0 else "", fontsize=8)
         ax.set_ylim(0, 1)
         ax.axhline(disc_df["concordance"].mean(), color="red", linestyle="--",
@@ -279,7 +247,7 @@ def plot_all(
     ax3.axhline(0.5, color="red", linestyle="--", linewidth=0.8, label="random")
     ax3.set_xticks(x + bar_w)
     ax3.set_xticklabels([sig_labels[s].replace("\n", " ") for s in signals], fontsize=8)
-    ax3.set_ylabel("AUC (signal → concordance)", fontsize=8)
+    ax3.set_ylabel("AUC (signal -> concordance)", fontsize=8)
     ax3.set_title("Row 3: AUC by signal and vote direction", fontsize=9, fontweight="bold")
     ax3.set_ylim(0.4, 1.0)
     ax3.legend(fontsize=7)
@@ -306,9 +274,7 @@ def plot_all(
     plt.close()
 
 
-# ===========================================================================
 # 6. SAVE RESULTS
-# ===========================================================================
 
 def save_results(
     corr_df:  pd.DataFrame,
@@ -316,6 +282,7 @@ def save_results(
     inter_df: pd.DataFrame,
     out_dir:  Path,
 ) -> None:
+    """Write results to disk."""
     out_dir.mkdir(parents=True, exist_ok=True)
     corr_df.to_csv(out_dir / "signal_correlations.csv",     index=False)
     disc_df.to_csv(out_dir / "signal_discriminability.csv", index=False)
@@ -323,11 +290,10 @@ def save_results(
     log.info("CSVs saved to %s", out_dir)
 
 
-# ===========================================================================
 # ENTRY POINT
-# ===========================================================================
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser(description="Signal discriminability analysis")
     parser.add_argument("--scores-path", type=Path,
                         default=OUTPUT_DIR / "weights.parquet")
@@ -338,15 +304,7 @@ def main() -> None:
     if not args.scores_path.exists():
         raise FileNotFoundError(
             f"{args.scores_path} not found.\n"
-            "NOTE: this script requires that item_scores.parquet contains "
-            "per-user rows with columns: item_id, username, vote, "
-            "local_prec, global_prec, signal_c, expert_weight.\n"
-            "In the current step3 code, item_scores only has per-post rows. "
-            "To enable this analysis, save weights_df inside run_kfold before "
-            "aggregation, e.g.:\n"
-            "  weights_df['fold'] = fold_idx\n"
-            "  all_weights.append(weights_df)\n"
-            "and concatenate at the end."
+            "this script requires that item_scores.parquet contains "
         )
 
     df = load_data(args.scores_path, args.votes_path)

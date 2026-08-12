@@ -1,18 +1,13 @@
 """
-compare_splits_text.py
-======================
-Minimal benchmark comparison. One table per split, all methods × key metrics.
-
-Usage:
-    python compare_splits_text.py
-    python compare_splits_text.py --roots results/step2 results/step3_expert
-    python compare_splits_text.py --out comparison_report.txt
+Minimal benchmark comparison. One table per split, all methods x key metrics.
 """
 
 from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from src.utils.results import parse_result_path
 
 import numpy as np
 import pandas as pd
@@ -42,48 +37,19 @@ TWO_PART_SPLIT_ROOTS = {"windowed_folds_full", "windowed_folds_intersection"}
 
 
 def load_metrics(path: Path) -> Dict:
+    """Load metrics from its configured source."""
     with open(path) as f:
         return json.load(f)
 
 
-def _parse_split_and_run(metrics_path: Path, root: Path) -> Optional[Tuple[str, str]]:
-    try:
-        rel_parts = metrics_path.parent.relative_to(root).parts
-    except ValueError:
-        return None
-    for i, part in enumerate(rel_parts):
-        if not part.endswith(BY_SPLIT_SUFFIX):
-            continue
-        after = rel_parts[i + 1:]
-        if not after:
-            return None
-        if after[0] in TWO_PART_SPLIT_ROOTS:
-            if len(after) < 2:
-                return None
-            split_name = f"{after[0]}/{after[1]}"
-            remainder = after[2:]
-        else:
-            split_name = after[0]
-            remainder = after[1:]
-        if remainder:
-            run_key = remainder[0]
-        elif i > 0:
-            run_key = rel_parts[i - 1]
-        elif part != "benchmark_by_split":
-            run_key = part[: -len(BY_SPLIT_SUFFIX)]
-        else:
-            run_key = root.name
-        return split_name, run_key
-    return None
-
-
 def collect_by_split(results_roots: List[Path]) -> Dict[str, pd.DataFrame]:
+    """Collect by split from the available records."""
     per_split_rows: Dict[str, List[Dict]] = {}
     for root in results_roots:
         if not root.exists():
             continue
         for p in root.rglob("metrics.json"):
-            parsed = _parse_split_and_run(p, root)
+            parsed = parse_result_path(p, root)
             if parsed is None:
                 continue
             split_name, run_key = parsed
@@ -105,6 +71,7 @@ def collect_by_split(results_roots: List[Path]) -> Dict[str, pd.DataFrame]:
 
 
 def build_report(per_split_df: Dict[str, pd.DataFrame]) -> str:
+    """Build report from the supplied data."""
     lines = []
     for split_name, df in sorted(per_split_df.items()):
         if df.empty:
@@ -124,12 +91,12 @@ def build_report(per_split_df: Dict[str, pd.DataFrame]) -> str:
                 val = row.get(m)
                 std = row.get(m + "_std")
                 if val is None or (isinstance(val, float) and np.isnan(val)):
-                    line += f"{'—':>16}"
+                    line += f"{'-':>16}"
                 else:
                     star = "*" if abs(val - best[m]) < 1e-6 else " "
                     s = f"{val:.3f}"
                     if std and not np.isnan(std):
-                        s += f"±{std:.3f}"
+                        s += f"+/-{std:.3f}"
                     line += f"{star}{s:>15}"
             lines.append(line)
 
@@ -139,16 +106,17 @@ def build_report(per_split_df: Dict[str, pd.DataFrame]) -> str:
         for m in METRICS:
             col = df[m].dropna()
             g = col.max() - col.min() if not col.empty else float("nan")
-            gap_line += f"{g:>16.3f}" if not np.isnan(g) else f"{'—':>16}"
+            gap_line += f"{g:>16.3f}" if not np.isnan(g) else f"{'-':>16}"
         lines.append(gap_line)
 
     return "\n".join(lines)
 
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--roots", nargs="+", type=Path,
-                        default=[Path("results/step2"), Path("results/step3_expert")])
+                        default=[Path("results/reddit")])
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 

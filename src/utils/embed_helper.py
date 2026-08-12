@@ -8,6 +8,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--texts-path",  required=True)
     parser.add_argument("--out-path",    required=True)

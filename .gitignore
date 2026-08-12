@@ -1,11 +1,16 @@
-normvio/
-results/step1/wikipedia*
-results/step1/reddit/csv/history/user_documents.csv
-results/step3_expert/embeddings
+external/normvio/
+data/splits/wikipedia/
+data/interim/reddit/csv/history/user_documents.csv
+cache/
 data/raw/user_contributions.zip
-results/step3_expert/*.parquet
-results/step1/reddit/history/*.parquet
+data/interim/reddit/post_texts.parquet
+data/interim/reddit/user_documents.parquet
+data/interim/reddit/user_history_summary.parquet
+data/interim/reddit/history/*.parquet
 
+src/correlation/
+
+.git/
 .DS_Store
 *.swp
 *.swo

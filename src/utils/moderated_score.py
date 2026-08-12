@@ -7,8 +7,8 @@ import requests
 from tqdm import tqdm
 from typing import Any, Optional, List, Dict
 
-VOTES_PATH     = Path("results/step1/reddit/filtered_votes.parquet")
-OUTPUT_DIR     = Path("results/step1/reddit/")
+VOTES_PATH     = Path("data/interim/reddit/filtered_votes.parquet")
+OUTPUT_DIR     = Path("data/interim/reddit")
 OUTPUT_PARQUET = OUTPUT_DIR / "moderated_posts_scores.parquet"
 OUTPUT_CSV     = OUTPUT_DIR / "moderated_posts_scores.csv"
 
@@ -24,11 +24,13 @@ log = logging.getLogger(__name__)
 
 
 def _chunk(lst, size):
+    """Yield fixed-size chunks from a sequence."""
     for i in range(0, len(lst), size):
         yield lst[i:i + size]
 
 
 def _safe_request(path: str, params: Optional[Dict] = None) -> Any:
+    """Run request with retry and error handling."""
     url = f"{ARCTIC_SHIFT_BASE}{path}"
     params = {k: v for k, v in (params or {}).items() if v is not None}
     for attempt in range(1, API_RETRIES + 1):
@@ -51,6 +53,7 @@ def _safe_request(path: str, params: Optional[Dict] = None) -> Any:
 
 
 def _normalize_payload(payload: Any) -> List[Dict]:
+    """Normalize payload into a consistent schema."""
     if payload is None:
         return []
     if isinstance(payload, list):
@@ -72,6 +75,7 @@ def _normalize_payload(payload: Any) -> List[Dict]:
 
 
 def _parse_post(item: Dict) -> Dict:
+    """Parse post from the supplied input."""
     created_utc = item.get("created_utc")
     title    = str(item.get("title", "")).strip() or None
     selftext = str(item.get("selftext", "")).strip() or None
@@ -103,6 +107,7 @@ def _parse_post(item: Dict) -> Dict:
 
 
 def fetch_posts(item_ids: List[str]) -> pd.DataFrame:
+    """Fetch posts from the remote API."""
     records = []
     for chunk in tqdm(list(_chunk(item_ids, CHUNK_SIZE)), desc="Fetch post da Arctic Shift"):
         payload = _safe_request("/api/posts/ids", params={"ids": ",".join(chunk)})
@@ -113,6 +118,7 @@ def fetch_posts(item_ids: List[str]) -> pd.DataFrame:
 
 
 def run():
+    """Run the configured analysis workflow."""
     # 1. Carica i post moderati
     votes = pd.read_parquet(VOTES_PATH)
     moderated = (
@@ -122,13 +128,13 @@ def run():
     )
     log.info("Post moderati unici: %d", len(moderated))
 
-    # 2. Resume: salta item_id già fetchati
+    # Skip item IDs already fetched.
     existing = pd.DataFrame()
     if OUTPUT_PARQUET.exists():
         existing = pd.read_parquet(OUTPUT_PARQUET)
         done = set(existing["item_id"].dropna())
         moderated = moderated[~moderated["item_id"].isin(done)]
-        log.info("Resume: %d già presenti, %d da recuperare", len(done), len(moderated))
+        log.info("Resume: %d present, %d remaining", len(done), len(moderated))
 
     # 3. Fetch da Arctic Shift
     if not moderated.empty:
@@ -148,7 +154,7 @@ def run():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     result.to_parquet(OUTPUT_PARQUET, index=False)
     result.to_csv(OUTPUT_CSV, index=False)
-    log.info("Salvato in:\n  %s\n  %s", OUTPUT_PARQUET, OUTPUT_CSV)
+    log.info("Saved to:\n  %s\n  %s", OUTPUT_PARQUET, OUTPUT_CSV)
 
     return result
 

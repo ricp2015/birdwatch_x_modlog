@@ -2,10 +2,11 @@ from pathlib import Path
 import pandas as pd
 import csv
 
-INPUT_DIR = Path("results/step1/reddit")
+INPUT_DIR = Path("data/interim/reddit")
 OUTPUT_DIR = INPUT_DIR / "csv"
 
 def convert():
+    """Convert convert to the target format."""
     parquet_files = list(INPUT_DIR.rglob("*.parquet"))
     if not parquet_files:
         print("No parquet files found.")
@@ -27,7 +28,7 @@ def convert():
                 escapechar="\\"
             )
         except Exception as e:
-            print(f"⚠️ Failed: {parquet_path} ({e})")
+            print(f"[WARNING] Failed: {parquet_path} ({e})")
     print(f"\nCSVs saved in: {OUTPUT_DIR}")
 
 if __name__ == "__main__":

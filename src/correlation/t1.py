@@ -1,55 +1,4 @@
-"""
-t1_user_characteristics_analysis.py
-====================================
-T1 — Come le caratteristiche utente (attivita', diversita' cross-subreddit,
-tenure/karma) modulano la performance/reliability di ciascun metodo.
-
-Disegno
--------
-Due fonti di dati tenute volutamente separate:
-
-  1. CARATTERISTICHE UTENTE (stabili, indipendenti dallo split)
-     - karma, tenure, is_suspended, has_verified_email  <- user_metadata.csv
-       (fonte "Shayan": copertura ~completa sui 14.925 utenti originali,
-       confermata piu' affidabile di users.parquet/Arctic Shift)
-     - attivita' (n. voti totali) e diversita' cross-subreddit (n. community
-       distinte, entropia) <- calcolate dal dataset RAW completo
-       (final_intersection_dataset.csv), NON dai voti di un singolo split.
-       Motivo: queste sono proprieta' anagrafiche dell'utente esattamente
-       come karma/tenure. Se le calcolassimo dal train di uno split
-       specifico, mescoleremmo "quanto e' attivo l'utente" con "quanto
-       train ha quello split/finestra" — due cose diverse (vedi nota sotto
-       sui punteggi per-split).
-
-  2. SCORE PER UTENTE PRODOTTO DA UN METODO SU UNO SPLIT (non stabili)
-     - CN:  f_u / i_u                      <- user_params.parquet
-     - SEF: reliability / local_prec        <- weights.parquet (per item,user)
-     - TFR: skill_overall                   <- user_skill.parquet (per user,community)
-     - VAR: VAR_score                       <- voter_scores.parquet (per user,community)
-     Questi sono ricalcolati da zero per ogni split usando SOLO il TRAIN di
-     quello split — a differenza delle caratteristiche in (1), NON sono
-     confrontabili alla leggera tra split/finestre diverse (a w020 uno
-     score e' stimato su meno dati che a w100). Lo script quindi lavora
-     SEMPRE su un singolo split alla volta (--split), mai mescolando split.
-
-Cosa produce
-------------
-Per ogni metodo disponibile in quello split:
-  - correlazione di Spearman tra lo score dell'utente e ciascuna
-    caratteristica (karma, tenure, attivita', diversita')
-  - tabella di stratificazione: media/mediana dello score per quartile di
-    ciascuna caratteristica
-  - copertura: quanti utenti con score hanno anche caratteristiche note
-
-Uso
----
-    python t1_user_characteristics_analysis.py \
-        --votes-dir   results/step1/reddit \
-        --split       splits \
-        --user-metadata data/processed/user_metadata.csv \
-        --raw-csv     data/processed/final_intersection_dataset.csv \
-        --output-dir  results/t1_analysis
-"""
+"""Analyze how user characteristics relate to method-specific reliability."""
 
 from __future__ import annotations
 
@@ -62,19 +11,12 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-SEP = "=" * 70
 
 
-# ===========================================================================
 # 1. USER CHARACTERISTICS  (stable, split-independent)
-# ===========================================================================
 
 def load_karma_tenure(user_metadata_path: Path) -> pd.DataFrame:
-    """
-    Load karma/tenure/status from Shayan's user_metadata.csv.
-    Returns columns: username, total_karma, log_karma, tenure_days,
-    is_suspended, has_verified_email.
-    """
+    """Load karma tenure from its configured source."""
     meta = pd.read_csv(user_metadata_path)
     meta["account_created_utc"] = pd.to_numeric(meta.get("account_created_utc"), errors="coerce")
     REF_TS = 1685000000  # ~May 2023, dataset cutoff — same reference used in TFR's _load_feature_skill
@@ -91,6 +33,7 @@ def load_karma_tenure(user_metadata_path: Path) -> pd.DataFrame:
 
 
 def _shannon_entropy(counts: np.ndarray) -> float:
+    """Calculate Shannon entropy for observed category counts."""
     counts = counts[counts > 0]
     if len(counts) == 0:
         return np.nan
@@ -99,15 +42,7 @@ def _shannon_entropy(counts: np.ndarray) -> float:
 
 
 def compute_activity_diversity(raw_csv_path: Path) -> pd.DataFrame:
-    """
-    Activity + cross-subreddit diversity computed from the FULL raw dataset
-    (all votes, all users, before any density filter or split), so these
-    are stable per-user properties comparable across every split/window —
-    exactly like karma/tenure. Uses only ['username','item_id','community']
-    to keep memory low.
-
-    Returns columns: username, n_votes_total, n_communities, subreddit_entropy.
-    """
+    """Compute activity diversity from the supplied data."""
     df = pd.read_csv(raw_csv_path, usecols=["username", "item_id", "community"], low_memory=False)
     df = df.dropna(subset=["username", "community"])
 
@@ -129,11 +64,7 @@ def build_user_characteristics(
     raw_csv_path: Path,
     cache_path: Optional[Path] = None,
 ) -> pd.DataFrame:
-    """
-    Merge karma/tenure (Shayan) with activity/diversity (raw CSV) into one
-    table indexed by username. Cached to disk (parquet) since
-    compute_activity_diversity() does a full pass over the ~73k-row CSV.
-    """
+    """Build user characteristics from the supplied data."""
     if cache_path is not None and cache_path.exists():
         print(f"  Loading cached user characteristics from {cache_path}")
         return pd.read_parquet(cache_path)
@@ -159,25 +90,10 @@ def build_user_characteristics(
     return merged
 
 
-# ===========================================================================
 # 2. PER-METHOD, PER-SPLIT USER SCORES  (NOT stable across splits)
-# ===========================================================================
 
 def load_cn_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
-    """
-    Uses i_u (the per-user intercept) as score_primary, not f_u.
-    f_u is CN's latent polarization factor — it tells you whether a user's
-    ratings tend to align with one "side", not whether the user is reliable.
-    i_u is the closer analogue to a reliability/skill score in this dataset
-    (a user's baseline tendency to rate notes/posts as helpful/approved,
-    independent of the polarization axis). f_u is kept as a secondary
-    column (score_polarization) in case you want to analyze it separately.
-
-    n_signal comes from user_params.parquet's `n_votes` column (requires the
-    patched CN_wrapper.py — build_user_params(rater_params, all_df) — to be
-    re-run; older outputs won't have this column and fall back to NaN,
-    disabling the min_n_signal sensitivity sweep for CN as before).
-    """
+    """Load cn user scores from its configured source."""
     path = split_dir / "user_params.parquet"
     if not path.exists():
         return None
@@ -193,6 +109,7 @@ def load_cn_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
 
 
 def load_sef_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
+    """Load sef user scores from its configured source."""
     path = split_dir / "weights.parquet"
     if not path.exists():
         return None
@@ -218,25 +135,7 @@ TFR_CATEGORIES = [
 
 
 def load_tfr_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
-    """
-    IMPORTANT FIX: does NOT use `skill_overall`. In team_formation_ranker.py,
-    compute_user_skill() defines
-        skill_overall = alpha*skill_mod + (1-alpha)*skill_feat   (alpha=0.5 default)
-    and skill_feat (_load_feature_skill) is ITSELF built directly from
-    log(karma), tenure_days, and email — the exact characteristics this
-    script correlates against. Using skill_overall as score_primary would
-    partly correlate a variable against a copy of itself injected into the
-    formula, especially for rows where skill_mod was NaN (not enough votes
-    in that category) and the fallback to pure skill_feat kicked in.
-
-    score_primary here is rebuilt from ONLY the raw skill_mod_<category>
-    columns (moderator-agreement, never touched by karma/tenure/email),
-    averaged across whichever categories have a non-NaN skill_mod for that
-    (username, community) row. Rows where EVERY skill_mod_<cat> is NaN are
-    dropped entirely — in the original pipeline that row's skill_overall
-    would have come ONLY from skill_feat, so keeping it here would silently
-    reintroduce the same circularity this fix removes.
-    """
+    """Load tfr user scores from its configured source."""
     path = split_dir / "user_skill.parquet"
     if not path.exists():
         return None
@@ -246,7 +145,7 @@ def load_tfr_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
 
     mod_cols = [f"skill_mod_{cat}" for cat in TFR_CATEGORIES if f"skill_mod_{cat}" in s.columns]
     if not mod_cols:
-        print("    [TFR] nessuna colonna skill_mod_<categoria> trovata — "
+        print("    [TFR] no skill_mod_<category> column found; "
               "impossibile costruire uno score karma/tenure-free. Controlla lo schema di user_skill.parquet.")
         return None
 
@@ -258,7 +157,7 @@ def load_tfr_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
     n_dropped = n_before - len(s)
     if n_dropped:
         print(f"    [TFR] scartate {n_dropped} / {n_before} righe (username, community) senza "
-              f"nessun segnale skill_mod reale (avrebbero usato solo skill_feat — "
+              f"no usable skill_mod signal (only skill_feat would remain; "
               f"escluse per evitare la circolarita' con karma/tenure)")
 
     return s.rename(columns={"n_votes": "n_signal"})[
@@ -267,23 +166,7 @@ def load_tfr_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
 
 
 def load_var_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
-    """
-    Uses all_user_var_scores.parquet — the FULL per-(community, username)
-    VAR_score table computed on TRAIN, BEFORE any top-K filtering.
-
-    IMPORTANT: do NOT use voter_scores.parquet for this analysis. It only
-    contains the top-K users actually selected per item/community, which
-    truncates the VAR_score distribution from above by construction — any
-    correlation against user characteristics computed on that file would be
-    attenuated/biased by the selection itself, not a property of VAR's
-    scoring function. all_user_var_scores.parquet has one row per user who
-    cast at least one TRAIN vote in a community, regardless of whether they
-    ended up in anyone's top-K.
-
-    Aggregated to one row per username via a vote-count-weighted mean of
-    VAR_score across the user's communities (total_votes column, already
-    present in the file — no need to recount from item-level rows).
-    """
+    """Load var user scores from its configured source."""
     path = split_dir / "all_user_var_scores.parquet"
     if not path.exists():
         print(f"    [VAR] all_user_var_scores.parquet not found at {path} — "
@@ -297,6 +180,7 @@ def load_var_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
         return None
 
     def _weighted_mean(g):
+        """Return a count-weighted mean score."""
         w = g["total_votes"].values.astype(float)
         v = g["VAR_score"].values.astype(float)
         if w.sum() == 0:
@@ -316,8 +200,7 @@ def load_var_user_scores(split_dir: Path) -> Optional[pd.DataFrame]:
 
 
 def _load_var_user_scores_topk_fallback(split_dir: Path) -> Optional[pd.DataFrame]:
-    """Legacy fallback (top-K filtered, biased) — only used if the patched
-    var_baseline.py hasn't been re-run yet for this split."""
+    """Load var user scores topk fallback from its configured source."""
     path = split_dir / "voter_scores.parquet"
     if not path.exists():
         return None
@@ -331,6 +214,7 @@ def _load_var_user_scores_topk_fallback(split_dir: Path) -> Optional[pd.DataFram
     )
 
     def _weighted_mean(g):
+        """Return a count-weighted mean score."""
         w = g["n_rows"].values.astype(float)
         val = g["VAR_score"].values.astype(float)
         if w.sum() == 0:
@@ -355,16 +239,14 @@ METHOD_LOADERS = {
     # cluster_col=None means "already one row per user" (plain Spearman OK).
     # cluster_col="username" means rows are NOT one-per-user (multiple rows
     # per user, e.g. one per community) -> use the cluster bootstrap.
-    "CN":  ("results/step2/reddit_cn/benchmark_by_split",     load_cn_user_scores,  None),
-    "SEF": ("results/step3_expert/benchmark_by_split",         load_sef_user_scores, None),
-    "TFR": ("results/step2/team_formation/benchmark_by_split", load_tfr_user_scores, "username"),
-    "VAR": ("results/step2/VAR_by_split",                      load_var_user_scores, None),
+    "CN":  ("results/reddit", load_cn_user_scores,  None),
+    "SEF": ("results/reddit", load_sef_user_scores, None),
+    "TFR": ("results/reddit", load_tfr_user_scores, "username"),
+    "VAR": ("results/reddit", load_var_user_scores, None),
 }
 
 
-# ===========================================================================
 # 3. ANALYSIS: correlation + quartile stratification
-# ===========================================================================
 
 CHARACTERISTIC_COLS = ["log_karma", "tenure_days", "n_votes_total", "n_communities", "subreddit_entropy"]
 
@@ -388,17 +270,7 @@ def cluster_bootstrap_spearman(
     n_boot: int = 500,
     seed: int = 42,
 ) -> Dict:
-    """
-    Spearman correlation with a cluster bootstrap, for data where the same
-    unit (e.g. username) contributes multiple, non-independent rows (e.g.
-    one row per community). Standard scipy.stats.spearmanr assumes i.i.d.
-    rows and will understate the p-value in this situation.
-
-    Procedure: resample CLUSTERS (not rows) with replacement, recompute rho
-    on each resample, use the empirical distribution of rho for the
-    standard error, a 95% CI, and a two-sided bootstrap p-value (based on
-    how much of the bootstrap distribution crosses zero).
-    """
+    """Estimate Spearman uncertainty with a cluster bootstrap."""
     rng = np.random.RandomState(seed)
     grouped = df.groupby(cluster_col).indices  # cluster -> positional row indices
     cluster_keys = np.array(list(grouped.keys()))
@@ -449,12 +321,7 @@ def analyze_method(
     cluster_col: Optional[str] = None,
     exclude_suspended: bool = False,
 ) -> Dict:
-    """
-    cluster_col: if the rows in user_scores are NOT one-per-user (e.g. TFR's
-    (username, community) rows), pass "username" here to use a cluster
-    bootstrap instead of the plain (i.i.d.-assuming) Spearman test. Leave
-    None for methods already aggregated to one row per user (CN, SEF, VAR).
-    """
+    """Analyze method and return summary statistics."""
     chars = characteristics
     if exclude_suspended and "is_suspended" in chars.columns:
         chars = chars[chars["is_suspended"] != True]  # noqa: E712
@@ -539,13 +406,7 @@ def run_signal_sensitivity(
     cluster_col: Optional[str] = None,
     exclude_suspended: bool = False,
 ) -> Dict:
-    """
-    Re-runs analyze_method() at each n_signal threshold and reports how the
-    Spearman rho for each characteristic moves as low-signal users are
-    excluded. A correlation that only shows up at min_n_signal=0 and
-    disappears/reverses at min_n_signal=20 is a strong hint it's driven by
-    noisy, low-vote-count users rather than a real pattern.
-    """
+    """Run the signal sensitivity workflow."""
     if "n_signal" not in user_scores.columns:
         return {}
     per_threshold = {}
@@ -560,6 +421,7 @@ def run_signal_sensitivity(
 
 
 def print_sensitivity_report(method_name: str, sensitivity: Dict) -> None:
+    """Print sensitivity report to the console."""
     if not sensitivity:
         return
     print(f"  Sensitivity to min_n_signal (Spearman rho at each threshold):")
@@ -572,17 +434,15 @@ def print_sensitivity_report(method_name: str, sensitivity: Dict) -> None:
         print(f"    {col:20s}  {row_str}")
 
 
-# ---------------------------------------------------------------------------
 # FDR correction (Benjamini-Hochberg), applied ONCE across every p-value
 # collected from every method x characteristic combination — not per method.
 # With 4 methods x 5 characteristics = 20 tests, an uncorrected alpha=0.05
 # would be expected to flag ~1 test as "significant" by chance alone even if
 # nothing real is going on; BH keeps the false-discovery rate under control
 # across the whole family of tests instead of per-test.
-# ---------------------------------------------------------------------------
 
 def benjamini_hochberg(pvals: list) -> list:
-    """Returns BH-adjusted p-values (q-values), same order as input."""
+    """Adjust p-values with the Benjamini-Hochberg procedure."""
     pvals = np.asarray(pvals, dtype=float)
     n = len(pvals)
     order = np.argsort(pvals)
@@ -597,11 +457,7 @@ def benjamini_hochberg(pvals: list) -> list:
 
 
 def apply_fdr_correction(all_results: Dict) -> None:
-    """
-    Mutates all_results in place: adds 'q_value' and 'significant_fdr'
-    (q < 0.05) to every correlation entry, computed jointly across every
-    method x characteristic combination in this run.
-    """
+    """Apply fdr correction to the supplied data."""
     entries = []  # list of (method, col) references into all_results
     pvals = []
     for method_name, result in all_results.items():
@@ -621,12 +477,13 @@ def apply_fdr_correction(all_results: Dict) -> None:
 
 
 def print_method_report(result: Dict) -> None:
+    """Print method report to the console."""
     clustered_tag = " [CLUSTERED by username — bootstrap p-value]" if result.get("clustered") else ""
-    susp_tag = " [utenti sospesi esclusi]" if result.get("exclude_suspended") else ""
+    susp_tag = " [suspended users excluded]" if result.get("exclude_suspended") else ""
     print(f"\n--- {result['method']} (min_n_signal={result.get('min_n_signal', 0)}){clustered_tag}{susp_tag} ---")
     print(f"  Righe con score: {result['n_rows_with_score']:,}  |  "
           f"righe matchate a caratteristiche: {result['n_rows_matched_to_characteristics']:,} "
-          f"({result['coverage_pct']}%)  |  utenti unici matchati: "
+          f"({result['coverage_pct']}%)  |  matched users: "
           f"{result.get('n_unique_users_matched', 'n/a')}  |  dopo filtro segnale: "
           f"{result.get('n_rows_after_signal_filter', result['n_rows_matched_to_characteristics']):,}")
 
@@ -635,13 +492,13 @@ def print_method_report(result: Dict) -> None:
         return
 
     print("  Spearman correlation (score_primary vs characteristic):")
-    print("    NOTE: 'sig(p<.05)' e' NON corretto, solo per riferimento.")
+    print("    Note: sig(p<.05) is uncorrected and shown only for reference.")
     print("    Usa 'q=' / 'FDR-sig' (aggiunto dopo che tutti i metodi sono girati) per la conclusione family-wise.")
     for col, c in result["correlations"].items():
         if c is None:
             print(f"    {col:20s}  [n<10, skipped]")
         elif c.get("bootstrap_failed"):
-            print(f"    {col:20s}  rho={c['spearman_rho']}  [bootstrap fallito, <20 repliche valide — n_clusters={c['n_clusters']}]")
+            print(f"    {col:20s}  rho={c['spearman_rho']}  [bootstrap failed; fewer than 20 valid samples, n_clusters={c['n_clusters']}]")
         elif c["p_value"] is None:
             print(f"    {col:20s}  rho={c['spearman_rho']:+.4f}  p=n/a  n={c['n']}")
         else:
@@ -654,20 +511,19 @@ def print_method_report(result: Dict) -> None:
 
     print("  Quartile stratification (mean score_primary by quartile):")
     for col, qinfo in result["quartile_tables"].items():
-        collapse_warn = "  [ATTENZIONE: bin collassati, non sono 4 quartili distinti]" if qinfo["bins_collapsed"] else ""
-        print(f"    [{col}]  ({qinfo['n_bins_actual']}/{qinfo['n_bins_requested']} bin ottenuti){collapse_warn}")
+        collapse_warn = "  [collapsed bins]" if qinfo["bins_collapsed"] else ""
+        print(f"    [{col}]  ({qinfo['n_bins_actual']}/{qinfo['n_bins_requested']} bins){collapse_warn}")
         for q, stats_row in qinfo["table"].items():
             print(f"      {q:10s}  mean={stats_row['mean']:+.4f}  "
                   f"median={stats_row['median']:+.4f}  n={int(stats_row['count'])}")
 
 
-# ===========================================================================
 # MAIN
-# ===========================================================================
 
 def main() -> None:
+    """Run the command-line workflow."""
     ap = argparse.ArgumentParser()
-    ap.add_argument("--votes-dir", type=str, default="results/step1/reddit",
+    ap.add_argument("--votes-dir", type=str, default="data/splits/reddit",
                      help="Root dir with users.parquet / splits (only used for reference paths)")
     ap.add_argument("--split", type=str, default="splits",
                      help="Which split label to analyze (e.g. splits, splits_full, "
@@ -698,12 +554,10 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(SEP)
     print("T1 — User characteristics vs per-method reliability/skill")
     print(f"Split: {args.split}")
     if args.exclude_suspended:
-        print("Utenti sospesi: ESCLUSI (--exclude-suspended attivo)")
-    print(SEP)
+        print("Suspended users excluded")
 
     cache_path = output_dir / "user_characteristics_cache.parquet" if args.cache_characteristics else None
     characteristics = build_user_characteristics(
@@ -713,10 +567,9 @@ def main() -> None:
     all_results = {}
     for method_name, (base_dir, loader, cluster_col) in METHOD_LOADERS.items():
         split_dir = Path(base_dir) / args.split
-        print(f"\n{SEP}")
+        print()
         print(f"METHOD: {method_name}  (looking in {split_dir})"
               + (f"  [cluster_col={cluster_col}]" if cluster_col else ""))
-        print(SEP)
 
         if not split_dir.exists():
             print(f"  [SKIP] split directory not found: {split_dir}")
@@ -743,7 +596,7 @@ def main() -> None:
 
     # FDR correction applied ONCE, jointly across every method x
     # characteristic combination collected above — see apply_fdr_correction()
-    print(f"\n{SEP}")
+    print()
     print("Applying Benjamini-Hochberg FDR correction across all "
           f"{sum(len(r['correlations']) for r in all_results.values())} tests...")
     apply_fdr_correction(all_results)
@@ -754,7 +607,7 @@ def main() -> None:
     summary_path = output_dir / f"t1_summary_{args.split.replace('/', '_')}.json"
     with open(summary_path, "w") as fh:
         json.dump(all_results, fh, indent=2, default=str)
-    print(f"\n{SEP}\nFull results saved → {summary_path}\n{SEP}")
+    print(f"\nFull results saved to {summary_path}")
 
 
 if __name__ == "__main__":

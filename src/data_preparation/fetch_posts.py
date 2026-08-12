@@ -1,25 +1,11 @@
 """
-fetch_expert_data.py
-====================
 Fetches two things needed for the expert-finding pipeline:
 
-  1. POST TEXTS  — title + body for every post already in the vote dataset
-                   (identified by item_id, e.g. "t3_dxlv9b").
-                   Output: results/step3_expert/post_texts.parquet
+  1. title + body for every post already in the vote dataset (identified by item_id, e.g. "t3_dxlv9b").
+  Output: data/interim/reddit/post_texts.parquet
 
-  2. USER HISTORY — up to N_USER_DOCS (default 150) posts + comments per user,
-                    used to build topical-alignment embeddings (Segnale B).
-                    Output: results/step3_expert/user_documents.parquet
-                            results/step3_expert/user_history_summary.parquet
-
-Both fetches are fully resumable: already-fetched items are skipped on restart.
-
-Usage
------
-    python fetch_expert_data.py                  # both fetches
-    python fetch_expert_data.py --posts-only
-    python fetch_expert_data.py --users-only
-    python fetch_expert_data.py --n-user-docs 200
+  2. USER HISTORY - up to N_USER_DOCS (default 150) posts + comments per user, used to build embeddings.
+  Output: data/interim/reddit/user_documents.parquet    data/interim/reddit/user_history_summary.parquet
 """
 
 from __future__ import annotations
@@ -35,34 +21,26 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
-STEP1_DIR   = Path("results/step1/reddit")
-OUTPUT_DIR  = Path("results/step3_expert")
+STEP1_DIR   = Path("data/interim/reddit")
+OUTPUT_DIR  = Path("data/interim/reddit")
 SPLITS_DIR   = STEP1_DIR / "splits"
 ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")  # full pre-filter dataset
 
-# ---------------------------------------------------------------------------
 # API settings  (mirrors step1 fetcher)
-# ---------------------------------------------------------------------------
 ARCTIC_SHIFT_BASE   = "https://arctic-shift.photon-reddit.com"
 API_TIMEOUT_SEC     = 30
 API_RETRIES         = 3
 API_BACKOFF_SEC     = 2.0
 API_SLEEP_SEC       = 0.35          # polite delay between requests
 
-# ---------------------------------------------------------------------------
 # Collection limits
-# ---------------------------------------------------------------------------
 POST_CHUNK_SIZE  = 25               # IDs per bulk-post request (safe limit)
 N_USER_DOCS      = 150              # total posts+comments per user (param)
-N_USER_POSTS     = 75               # half posts …
-N_USER_COMMENTS  = 75              # … half comments  (adjusted if N_USER_DOCS changes)
+N_USER_POSTS     = 75               # half posts ...
+N_USER_COMMENTS  = 75              # ... half comments  (adjusted if N_USER_DOCS changes)
 
-# ---------------------------------------------------------------------------
 # Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -71,12 +49,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ===========================================================================
 # Shared helpers  (same pattern as step1)
-# ===========================================================================
 
 def _chunk(lst: List[Any], size: int):
-    """Yield successive sub-lists of length `size`."""
+    """Yield fixed-size chunks from a sequence."""
     for i in range(0, len(lst), size):
         yield lst[i : i + size]
 
@@ -86,7 +62,7 @@ def _safe_request(
     params: Optional[Dict[str, Any]] = None,
     timeout: int = API_TIMEOUT_SEC,
 ) -> Any:
-    """GET an Arctic Shift endpoint with retry/back-off."""
+    """Run request with retry and error handling."""
     url = f"{ARCTIC_SHIFT_BASE}{path}"
     params = {k: v for k, v in (params or {}).items() if v is not None}
     last_exc: Optional[Exception] = None
@@ -97,7 +73,7 @@ def _safe_request(
             return r.json()
         except requests.exceptions.HTTPError as exc:
             if exc.response is not None and 400 <= exc.response.status_code < 500:
-                log.warning("4xx for %s — skipping (%s)", url, exc)
+                log.warning("4xx for %s - skipping (%s)", url, exc)
                 return None
             last_exc = exc
         except requests.RequestException as exc:
@@ -111,7 +87,7 @@ def _safe_request(
 
 
 def _normalize_payload(payload: Any) -> List[Dict]:
-    """Convert common Arctic Shift response shapes to list[dict]."""
+    """Normalize payload into a consistent schema."""
     if payload is None:
         return []
     if isinstance(payload, list):
@@ -135,6 +111,7 @@ def _normalize_payload(payload: Any) -> List[Dict]:
 
 
 def _safe_text(value: Any) -> Optional[str]:
+    """Run text with retry and error handling."""
     if value is None:
         return None
     s = str(value).strip()
@@ -145,7 +122,7 @@ def _safe_text(value: Any) -> Optional[str]:
 
 
 def _combine_post_text(item: Dict) -> Optional[str]:
-    """Merge title + selftext into a single string."""
+    """Join a post title and body into one text field."""
     title    = _safe_text(item.get("title"))
     selftext = _safe_text(item.get("selftext"))
     if title and selftext:
@@ -154,27 +131,14 @@ def _combine_post_text(item: Dict) -> Optional[str]:
 
 
 def _strip_prefix(item_id: str) -> str:
-    """'t3_dxlv9b'  →  'dxlv9b'  (Arctic Shift uses bare IDs)."""
+    """Remove prefix from the supplied value."""
     return item_id.split("_", 1)[-1] if "_" in item_id else item_id
 
 
-# ===========================================================================
 # 1.  POST TEXTS  (fetch by item_id from the vote dataset)
-# ===========================================================================
 
 def _load_all_item_ids(input_csv: Optional[Path] = None) -> List[str]:
-    """
-    Collect every unique item_id to fetch text for.
-
-    Source priority (first that exists wins):
-      1. input_csv  — the raw intersection dataset before any filtering (~73k posts).
-      2. ORIGINAL_CSV — module-level default path to the same file.
-      3. filtered_votes.parquet — posts after density filter (~5k). Last resort.
-
-    Using the full original CSV gives FAISS the richest possible pool of
-    neighbours. Posts not in the density-filtered splits still serve as
-    semantic anchors for nearest-neighbour lookup.
-    """
+    """Load all item ids from its configured source."""
     for csv_path in [p for p in [input_csv, ORIGINAL_CSV] if p is not None]:
         if csv_path.exists():
             ids = (
@@ -198,7 +162,7 @@ def _load_all_item_ids(input_csv: Optional[Path] = None) -> List[str]:
         return ids
 
     # absolute last resort: split files
-    log.warning("No CSV found — reading from split parquets only (~5k posts).")
+    log.warning("No CSV found - reading from split parquets only (~5k posts).")
     ids_set: set[str] = set()
     for split in ("train", "val", "test"):
         p = SPLITS_DIR / f"{split}_votes.parquet"
@@ -209,6 +173,7 @@ def _load_all_item_ids(input_csv: Optional[Path] = None) -> List[str]:
 
 
 def _load_done_post_ids(out_path: Path) -> set[str]:
+    """Load done post ids from its configured source."""
     if out_path.exists():
         done = set(pd.read_parquet(out_path, columns=["item_id"])["item_id"].tolist())
         log.info("Resuming post-text fetch: %d already done", len(done))
@@ -217,18 +182,14 @@ def _load_done_post_ids(out_path: Path) -> set[str]:
 
 
 def _fetch_post_chunk(bare_ids: List[str]) -> List[Dict]:
-    """
-    Fetch a batch of posts by Reddit ID via /api/posts/ids.
-    Tries bare IDs first (e.g. 'dxlv9b'), then full t3_ prefix if the
-    first attempt returns nothing — Arctic Shift versions differ on this.
-    """
+    """Fetch post chunk from the remote API."""
     for id_list in (
         ",".join(bare_ids),                          # bare:  dxlv9b,abc123
         ",".join(f"t3_{i}" for i in bare_ids),      # full:  t3_dxlv9b,t3_abc123
     ):
         payload = _safe_request(
             "/api/posts/ids",                        # correct bulk-by-id endpoint
-            params={"ids": id_list},                 # no 'limit' — IDs are explicit
+            params={"ids": id_list},                 # no 'limit' - IDs are explicit
         )
         items = _normalize_payload(payload)
         if items:
@@ -237,12 +198,7 @@ def _fetch_post_chunk(bare_ids: List[str]) -> List[Dict]:
 
 
 def fetch_post_texts(output_dir: Path, input_csv: Optional[Path] = None) -> pd.DataFrame:
-    """
-    Fetch title+body for every post in the vote dataset.
-    Skips posts:
-      - already in the output file (resumable)
-      - with empty/removed text after fetching (filtered out)
-    """
+    """Fetch post texts from the remote API."""
     out_path = output_dir / "post_texts.parquet"
     all_ids  = _load_all_item_ids(input_csv)
     done_ids = _load_done_post_ids(out_path)
@@ -250,16 +206,17 @@ def fetch_post_texts(output_dir: Path, input_csv: Optional[Path] = None) -> pd.D
 
     log.info("Post-text fetch: %d remaining / %d total", len(todo), len(all_ids))
     if not todo:
-        log.info("Nothing to fetch — loading existing file.")
+        log.info("Nothing to fetch - loading existing file.")
         return pd.read_parquet(out_path)
 
     rows: List[Dict] = []
     bare_todo = [_strip_prefix(i) for i in todo]
-    # keep a map bare_id → full item_id for the output
+    # keep a map bare_id -> full item_id for the output
     bare_to_full = {_strip_prefix(i): i for i in todo}
 
     # helper: strip t3_ prefix from whatever the API returns in 'id'
     def _bare(raw_id: str) -> str:
+        """Remove the Reddit type prefix from an item ID."""
         return raw_id.split("_", 1)[-1] if "_" in raw_id else raw_id
 
     chunks = list(_chunk(bare_todo, POST_CHUNK_SIZE))
@@ -287,7 +244,7 @@ def fetch_post_texts(output_dir: Path, input_csv: Optional[Path] = None) -> pd.D
                 "is_self":    item.get("is_self", None),
             })
 
-        # posts missing from the API response → record as null so we don't re-fetch
+        # posts missing from the API response -> record as null so we don't re-fetch
         for bare_id in chunk:
             if bare_id not in fetched_bare:
                 full_id = bare_to_full.get(bare_id, f"t3_{bare_id}")
@@ -300,7 +257,7 @@ def fetch_post_texts(output_dir: Path, input_csv: Optional[Path] = None) -> pd.D
 
         time.sleep(API_SLEEP_SEC)
 
-        # ---------- incremental checkpoint every 200 chunks ----------
+        # incremental checkpoint every 200 chunks
         if rows and (chunk_idx + 1) % 200 == 0:
             _checkpoint_post_texts(out_path, done_ids, rows)
 
@@ -320,6 +277,7 @@ def fetch_post_texts(output_dir: Path, input_csv: Optional[Path] = None) -> pd.D
 
 
 def _checkpoint_post_texts(out_path: Path, done_ids: set, rows: List[Dict]) -> None:
+    """Write post texts checkpoint to disk."""
     new_df = pd.DataFrame(rows)
     if out_path.exists():
         existing = pd.read_parquet(out_path)
@@ -329,11 +287,10 @@ def _checkpoint_post_texts(out_path: Path, done_ids: set, rows: List[Dict]) -> N
     log.info("  Checkpoint: %d post-text rows saved", len(new_df))
 
 
-# ===========================================================================
 # 2.  USER HISTORY  (posts + comments per user, for Segnale B embeddings)
-# ===========================================================================
 
 def _load_done_usernames(output_dir: Path) -> set[str]:
+    """Load done usernames from its configured source."""
     summary_path = output_dir / "user_history_summary.parquet"
     if summary_path.exists():
         done = set(pd.read_parquet(summary_path, columns=["username"])["username"].tolist())
@@ -343,11 +300,7 @@ def _load_done_usernames(output_dir: Path) -> set[str]:
 
 
 def _load_all_usernames(input_csv: Optional[Path] = None) -> List[str]:
-    """
-    Same source-priority logic as _load_all_item_ids:
-    prefer the original pre-filter CSV (~15k users) over the
-    density-filtered splits (~2k users).
-    """
+    """Load all usernames from its configured source."""
     for csv_path in [p for p in [input_csv, ORIGINAL_CSV] if p is not None]:
         if csv_path.exists():
             users = (
@@ -371,7 +324,7 @@ def _load_all_usernames(input_csv: Optional[Path] = None) -> List[str]:
         return users
 
     # last resort: splits
-    log.warning("No CSV found — reading usernames from split parquets only.")
+    log.warning("No CSV found - reading usernames from split parquets only.")
     users_set: set[str] = set()
     for split in ("train", "val", "test"):
         p = SPLITS_DIR / f"{split}_votes.parquet"
@@ -388,13 +341,10 @@ def _collect_one_user(
     after: Optional[str],
     before: Optional[str],
 ) -> Tuple[List[Dict], Dict]:
-    """
-    Fetch up to `n_posts` posts and `n_comments` comments for one user.
-    Returns (doc_rows, summary_row).
-    """
+    """Collect one user from the available records."""
     docs: List[Dict] = []
 
-    # --- posts ---
+    # posts
     posts_payload = _safe_request(
         "/api/posts/search",
         params={
@@ -422,7 +372,7 @@ def _collect_one_user(
 
     time.sleep(API_SLEEP_SEC)
 
-    # --- comments ---
+    # comments
     comments_payload = _safe_request(
         "/api/comments/search",
         params={
@@ -466,10 +416,7 @@ def fetch_user_history(
     before: Optional[str] = None,
     input_csv: Optional[Path] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Fetch post+comment history for all users in the dataset.
-    Returns (user_documents_df, user_history_summary_df).
-    """
+    """Fetch user history from the remote API."""
     docs_path    = output_dir / "user_documents.parquet"
     summary_path = output_dir / "user_history_summary.parquet"
 
@@ -520,7 +467,7 @@ def _checkpoint_user_history(
     new_docs:     List[Dict],
     new_summaries: List[Dict],
 ) -> None:
-    """Append new rows to the parquet checkpoint files."""
+    """Write user history checkpoint to disk."""
     for path, rows in [(docs_path, new_docs), (summary_path, new_summaries)]:
         if not rows:
             continue
@@ -537,12 +484,10 @@ def _checkpoint_user_history(
         new_df.to_parquet(path, index=False)
 
 
-# ===========================================================================
 # 3.  Infer time window from the vote dataset
-# ===========================================================================
 
 def _infer_time_window() -> Tuple[Optional[str], Optional[str]]:
-    """Return (after, before) ISO date strings from the dataset's timestamp range."""
+    """Infer time window from the available timestamps."""
     dfs = []
     for split in ("train", "val", "test"):
         p = SPLITS_DIR / f"{split}_votes.parquet"
@@ -558,15 +503,14 @@ def _infer_time_window() -> Tuple[Optional[str], Optional[str]]:
         ts = pd.to_datetime(ts, utc=True)
     after  = ts.min().date().isoformat()
     before = ts.max().date().isoformat()
-    log.info("Dataset time window: %s → %s", after, before)
+    log.info("Dataset time window: %s -> %s", after, before)
     return after, before
 
 
-# ===========================================================================
 # Entry point
-# ===========================================================================
 
 def main() -> None:
+    """Run the command-line workflow."""
     parser = argparse.ArgumentParser(description="Fetch data for expert-finding pipeline")
     parser.add_argument("--posts-only",  action="store_true", help="Only fetch post texts")
     parser.add_argument("--users-only",  action="store_true", help="Only fetch user history")
@@ -594,7 +538,7 @@ def main() -> None:
 
     if do_posts:
         log.info("=" * 50)
-        log.info("FETCH 1/2 — Post texts")
+        log.info("FETCH 1/2 - Post texts")
         log.info("=" * 50)
         post_df = fetch_post_texts(output_dir, input_csv=args.input_csv)
         n_ok = post_df["text"].notna().sum()
@@ -602,7 +546,7 @@ def main() -> None:
 
     if do_users:
         log.info("=" * 50)
-        log.info("FETCH 2/2 — User history (n_docs=%d)", args.n_user_docs)
+        log.info("FETCH 2/2 - User history (n_docs=%d)", args.n_user_docs)
         log.info("=" * 50)
         docs_df, summary_df = fetch_user_history(
             output_dir,

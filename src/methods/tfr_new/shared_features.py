@@ -1,106 +1,99 @@
-"""
-graph_propagation.py — Opzione 1 (graph propagation) del team_formation_ideas.md.
+"""Shared graph scoring and threshold calibration utilities."""
 
-Costruisce un grafo di co-voto tra utenti (arco pesato per quante volte
-votano sugli stessi item, rinforzato se concordi), propaga 'prossimità al
-moderatore' con Personalized PageRank (seed = utenti storicamente affidabili),
-poi aggrega i voti per item con pesi softmax sullo score PPR — stessa logica
-di aggregazione di bandit_dr.py, per confrontabilità diretta.
-
-Fedele al documento originale: qui NON c'è apprendimento online per-caso
-(a differenza del bandit) — il punteggio di fiducia è statico per utente,
-calcolato una volta su tutto il train, poi congelato per val/test.
-
-Uso:
-    python graph_propagation.py --votes-dir data/splits_intersection --out-dir results/graph_propagation/splits_intersection
-"""
-
-import argparse
-import json
-from pathlib import Path
+from collections import defaultdict
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import f1_score, roc_auc_score
-
-from shared_features import compute_ppr_scores, calibrate_thresholds_per_community, apply_thresholds
-
-DEFAULT_VOTES_DIR = "data/splits_intersection"
-DEFAULT_OUT_DIR = "results/graph_propagation/splits_intersection"
-RELIABILITY_SEED_THR = 0.6
+from scipy import sparse
+from sklearn.metrics import f1_score
 
 
-def aggregate_with_ppr(votes: pd.DataFrame, ppr_scores: dict) -> pd.DataFrame:
-    votes = votes.copy()
-    global_median = np.median(list(ppr_scores.values())) if ppr_scores else 0.0
-    votes["_trust"] = votes["username"].map(ppr_scores).fillna(global_median)
+def compute_ppr_scores(
+    train_votes: pd.DataFrame,
+    reliability_thr: float = 0.6,
+    damping: float = 0.85,
+    max_iter: int = 100,
+    tol: float = 1e-10,
+) -> dict[str, float]:
+    """Rank users on a co-voting graph seeded by reliable training voters."""
+    users = sorted(train_votes["username"].dropna().unique())
+    if not users:
+        return {}
 
-    def agg(g):
-        w = np.exp(g["_trust"] - g["_trust"].max())
-        w = w / w.sum()
-        score = float((w * g["vote"]).sum())  # continuo in [-1, 1], NON ancora sogliato
-        return pd.Series({"label": g["label"].iloc[0], "community": g["community"].iloc[0],
-                           "score": score, "n_voters": len(g)})
+    user_index = {user: idx for idx, user in enumerate(users)}
+    edge_weights: defaultdict[tuple[int, int], float] = defaultdict(float)
+    for _, item_votes in train_votes.groupby("item_id"):
+        rows = item_votes[["username", "vote"]].drop_duplicates("username").itertuples(index=False)
+        for left, right in combinations(rows, 2):
+            i, j = user_index[left.username], user_index[right.username]
+            weight = 2.0 if left.vote == right.vote else 1.0
+            edge_weights[i, j] += weight
+            edge_weights[j, i] += weight
 
-    return votes.groupby("item_id").apply(agg).reset_index()
+    if edge_weights:
+        row, col, values = zip(*((i, j, value) for (i, j), value in edge_weights.items()))
+        adjacency = sparse.csr_matrix((values, (row, col)), shape=(len(users), len(users)))
+        degree = np.asarray(adjacency.sum(axis=1)).ravel()
+        inv_degree = np.divide(1.0, degree, out=np.zeros_like(degree), where=degree > 0)
+        transition = sparse.diags(inv_degree) @ adjacency
+    else:
+        transition = sparse.csr_matrix((len(users), len(users)))
+
+    agreement = (
+        train_votes.assign(agree=train_votes["vote"] == train_votes["label"])
+        .groupby("username")["agree"]
+        .mean()
+    )
+    seeds = np.array([agreement.get(user, 0.0) >= reliability_thr for user in users], dtype=float)
+    personalization = seeds / seeds.sum() if seeds.sum() else np.full(len(users), 1.0 / len(users))
+
+    scores = personalization.copy()
+    dangling = np.asarray(transition.sum(axis=1)).ravel() == 0
+    for _ in range(max_iter):
+        updated = damping * (transition.T @ scores)
+        updated += damping * scores[dangling].sum() * personalization
+        updated += (1.0 - damping) * personalization
+        if np.abs(updated - scores).sum() < tol:
+            scores = updated
+            break
+        scores = updated
+    return dict(zip(users, scores.astype(float)))
 
 
-def compute_metrics(preds: pd.DataFrame) -> dict:
-    y_true, y_pred = preds["label"], preds["y_hat"]
-    metrics = {
-        "macro_f1": f1_score(y_true, y_pred, average="macro"),
-        "f1_pos": f1_score(y_true, y_pred, pos_label=1),
-        "f1_neg": f1_score(y_true, y_pred, pos_label=-1),
-        "n_items": len(preds),
+def calibrate_thresholds_per_community(
+    validation_scores: pd.DataFrame,
+    min_items: int = 20,
+    grid_size: int = 201,
+) -> tuple[dict[str, float], float]:
+    """Select global and community thresholds by validation macro F1."""
+    if validation_scores.empty:
+        return {}, 0.0
+
+    def best_threshold(frame: pd.DataFrame) -> float:
+        values = frame["score"].to_numpy(dtype=float)
+        labels = frame["label"].to_numpy()
+        grid = np.linspace(values.min(), values.max(), grid_size) if len(values) else np.array([0.0])
+        return float(max(grid, key=lambda threshold: f1_score(
+            labels, np.where(values >= threshold, 1, -1), average="macro"
+        )))
+
+    global_threshold = best_threshold(validation_scores)
+    thresholds = {
+        community: best_threshold(group)
+        for community, group in validation_scores.groupby("community")
+        if len(group) >= min_items and group["label"].nunique() > 1
     }
-    try:
-        metrics["roc_auc"] = roc_auc_score(y_true, y_pred)
-    except ValueError:
-        metrics["roc_auc"] = None
-    return metrics
+    return thresholds, global_threshold
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--votes-dir", default=DEFAULT_VOTES_DIR)
-    parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
-    args = parser.parse_args()
-
-    votes_dir = Path(args.votes_dir)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    train = pd.read_parquet(votes_dir / "train_votes.parquet").sort_values("timestamp")
-    val = pd.read_parquet(votes_dir / "val_votes.parquet").sort_values("timestamp")
-    test = pd.read_parquet(votes_dir / "test_votes.parquet").sort_values("timestamp")
-
-    print("Costruzione grafo di co-voto + Personalized PageRank su train...")
-    ppr_scores = compute_ppr_scores(train, reliability_thr=RELIABILITY_SEED_THR)
-
-    print("Aggregazione train/val/test (score continuo)...")
-    train_scores = aggregate_with_ppr(train, ppr_scores)
-    val_scores = aggregate_with_ppr(val, ppr_scores)
-    test_scores = aggregate_with_ppr(test, ppr_scores)
-
-    print("Calibrazione soglia per-community su VAL...")
-    thresholds, global_threshold = calibrate_thresholds_per_community(val_scores)
-    train_preds = apply_thresholds(train_scores, thresholds, global_threshold)
-    val_preds = apply_thresholds(val_scores, thresholds, global_threshold)
-    test_preds = apply_thresholds(test_scores, thresholds, global_threshold)
-
-    results = {
-        "train": compute_metrics(train_preds),
-        "val": compute_metrics(val_preds),
-        "test": compute_metrics(test_preds),
-    }
-
-    with open(out_dir / "metrics.json", "w") as f:
-        json.dump(results, f, indent=2)
-    test_preds.to_parquet(out_dir / "test_predictions.parquet", index=False)
-
-    print(json.dumps(results, indent=2))
-    print(f"\nSalvato in {out_dir}")
-
-
-if __name__ == "__main__":
-    main()
+def apply_thresholds(
+    scores: pd.DataFrame,
+    community_thresholds: dict[str, float],
+    global_threshold: float,
+) -> pd.DataFrame:
+    """Apply community thresholds with a global fallback."""
+    predictions = scores.copy()
+    thresholds = predictions["community"].map(community_thresholds).fillna(global_threshold)
+    predictions["y_hat"] = np.where(predictions["score"] >= thresholds, 1, -1)
+    return predictions
