@@ -1,0 +1,537 @@
+{
+  "split": "windows/intersection/w060",
+  "selected": {
+    "mode": "none",
+    "metadata_mix": 0.0,
+    "k": 10,
+    "selection_mode": "per_community",
+    "strategy": "majority",
+    "validation_macro_f1": 0.6728896103896104
+  },
+  "test": {
+    "macro_f1": 0.6330460297084174,
+    "roc_auc": 0.7177754677754677,
+    "f1_pos": 0.8270676691729323,
+    "f1_neg": 0.43902439024390244,
+    "macro_precision": 0.6268159806295399,
+    "macro_recall": 0.7177754677754677,
+    "precision_pos": 0.9322033898305084,
+    "recall_pos": 0.7432432432432432,
+    "precision_neg": 0.32142857142857145,
+    "recall_neg": 0.6923076923076923
+  },
+  "validation_candidates": [
+    {
+      "mode": "none",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6728896103896104
+    },
+    {
+      "mode": "none",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.6296497420581049
+    },
+    {
+      "mode": "none",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5603264281230382
+    },
+    {
+      "mode": "none",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5283189577175945
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6728896103896104
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.6296497420581049
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5603264281230382
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5283189577175945
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6694972584205654
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.666739242848978
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5615478089790115
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5784720590922141
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6214485578992682
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5987968146885976
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5634697174777977
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5672371796114309
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.577632836067917
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.555612310049802
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5519477809071954
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5502168072579394
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.4927460050462573
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.49870129870129865
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5523651296197611
+    },
+    {
+      "mode": "global",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5403749098774333
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6728896103896104
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.6296497420581049
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5603264281230382
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5283189577175945
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6606345433592624
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.650564522239903
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5580763322698806
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.578938958133589
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.552888368462139
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5367426456263393
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5673076923076923
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5675070028011204
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5234203501346906
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5228828234518017
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5597027570014281
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5569497016161301
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.4976851851851852
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5086371043828801
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5507520649356135
+    },
+    {
+      "mode": "subreddit",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5510628933310249
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6728896103896104
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.6296497420581049
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5603264281230382
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5283189577175945
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.6694997718015621
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.6658515535097813
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5580763322698806
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.25,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.578938958133589
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5491897110544101
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5347470081881167
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5630656108597285
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.5,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5675070028011204
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.4862173913043478
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.495744565020143
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5555878294967685
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 0.75,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5562039312039312
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "majority",
+      "validation_macro_f1": 0.4903314240955598
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_community",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5013196277260731
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "majority",
+      "validation_macro_f1": 0.5541242901600949
+    },
+    {
+      "mode": "full",
+      "metadata_mix": 1.0,
+      "k": 10,
+      "selection_mode": "per_item",
+      "strategy": "weighted",
+      "validation_macro_f1": 0.5468075653057265
+    }
+  ]
+}

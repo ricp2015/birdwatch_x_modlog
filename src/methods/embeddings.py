@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
@@ -11,9 +12,18 @@ from typing import Dict, List, Optional, Tuple, Any
 import faiss
 import numpy as np
 import pandas as pd
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from src.methods.tfr_new.shared_features import (
+    DEFAULT_CAUSAL_FEATURES,
+    attach_causal_features,
+    load_causal_features,
+)
 from src.utils.splits import discover_splits
 import subprocess
-import sys
 import tempfile
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -88,6 +98,49 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 post_ids_ordered: List[str] = []
+causal_feature_table: Optional[pd.DataFrame] = None
+causal_metadata_mode = "none"
+causal_metadata_weight = 0.20
+
+CAUSAL_METADATA_FEATURES = {
+    "none": [],
+    "global": [
+        "prior_n_posts", "prior_n_comments", "prior_n_distinct_subreddits",
+        "prior_n_replies_made", "tenure_days_at_vote",
+    ],
+    "subreddit": [
+        "prior_n_posts", "prior_n_comments", "prior_n_distinct_subreddits",
+        "prior_n_replies_made", "tenure_days_at_vote", "prior_n_posts_in_sub",
+        "prior_n_comments_in_sub", "prior_n_months_active_in_sub",
+    ],
+    "full": [
+        "prior_n_posts", "prior_n_comments", "prior_n_distinct_subreddits",
+        "prior_n_replies_made", "tenure_days_at_vote", "prior_n_posts_in_sub",
+        "prior_n_comments_in_sub", "prior_n_months_active_in_sub",
+        "prior_n_interaction_partners", "prior_total_interactions",
+        "prior_n_interaction_partners_in_sub", "prior_total_interactions_in_sub",
+    ],
+}
+
+
+def _causal_metadata_scores(votes: pd.DataFrame, item_ids: List[str]) -> Dict[tuple, float]:
+    """Return bounded per-vote causal profile scores for semantic-weight fusion."""
+    columns = CAUSAL_METADATA_FEATURES[causal_metadata_mode]
+    if not columns:
+        return {}
+    subset = votes[votes["item_id"].isin(item_ids)][["item_id", "username", *columns]].copy()
+    subset = subset.drop_duplicates(["item_id", "username"], keep="last")
+    components = []
+    for column in columns:
+        values = pd.to_numeric(subset[column], errors="coerce")
+        if column == "tenure_days_at_vote":
+            signal = 1.0 - np.exp(-np.log1p(values.clip(lower=0)) / 7.0)
+            signal = signal.fillna(0.5)
+        else:
+            signal = 1.0 - np.exp(-np.log1p(values.fillna(0).clip(lower=0)) / 5.0)
+        components.append(signal.to_numpy(dtype=float))
+    subset["causal_metadata_score"] = np.column_stack(components).mean(axis=1)
+    return subset.set_index(["item_id", "username"])["causal_metadata_score"].to_dict()
 
 
 # 1. DATA LOADING
@@ -406,6 +459,7 @@ def compute_expert_weights(
     lambda_smooth:  float,
 ) -> pd.DataFrame:
     """Compute expert weights from the supplied data."""
+    metadata_map = _causal_metadata_scores(vote_df, test_item_ids)
     # lookup tables
     global_map: Dict[tuple, tuple] = {}
     sub_map:    Dict[tuple, tuple] = {}
@@ -431,6 +485,7 @@ def compute_expert_weights(
     if not valid_ids:
         return pd.DataFrame(columns=[
             "item_id", "username", "vote", "effective_vote", "expert_weight",
+            "semantic_expert_weight", "causal_metadata_score",
             "local_prec", "global_prec", "reliability", "bias_sign",
             "signal_c", "signal_c_directed",
         ])
@@ -499,7 +554,14 @@ def compute_expert_weights(
 
             raw_c      = sig_c_map.get(uname, reliability)
             signal_c_d = raw_c if direction == -1 else (1.0 - raw_c)
-            expert_w   = alpha * local_rel + beta * reliability + gamma * signal_c_d
+            semantic_w = alpha * local_rel + beta * reliability + gamma * signal_c_d
+            metadata_score = metadata_map.get((item_id, uname), 0.5)
+            expert_w = (
+                (1.0 - causal_metadata_weight) * semantic_w
+                + causal_metadata_weight * metadata_score
+                if causal_metadata_mode != "none"
+                else semantic_w
+            )
 
             rows.append({
                 "item_id":           item_id,
@@ -507,6 +569,8 @@ def compute_expert_weights(
                 "vote":              direction,
                 "effective_vote":    effective_vote,
                 "expert_weight":     float(expert_w),
+                "semantic_expert_weight": float(semantic_w),
+                "causal_metadata_score": float(metadata_score),
                 "local_prec":        float(local_rel),
                 "global_prec":       float(sub_p),
                 "reliability":       float(reliability),
@@ -518,6 +582,7 @@ def compute_expert_weights(
     if not rows:
         return pd.DataFrame(columns=[
             "item_id", "username", "vote", "effective_vote", "expert_weight",
+            "semantic_expert_weight", "causal_metadata_score",
             "local_prec", "global_prec", "reliability", "bias_sign",
             "signal_c", "signal_c_directed",
         ])
@@ -711,7 +776,7 @@ def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
     """Build candidates from the supplied data."""
     candidates = [
         ("Ridge", LogisticRegression(
-            penalty="l2", C=0.1, class_weight="balanced",
+            C=0.1, class_weight="balanced",
             max_iter=1000, solver="lbfgs",
         )),
         ("GBT", GradientBoostingClassifier(
@@ -846,7 +911,7 @@ def train_neg_predictor(
     X_s    = scaler.fit_transform(X)
 
     clf = LogisticRegression(
-        penalty="l2", C=0.1, class_weight="balanced",
+        C=0.1, class_weight="balanced",
         max_iter=1000, solver="lbfgs",
     )
     clf.fit(X_s, y)
@@ -1306,6 +1371,11 @@ def run_single_split(
         "fallback_pct":      float(decisions["used_fallback"].mean()),
         "model_name":        model_name,
         "has_neg_predictor": int(neg_clf is not None),
+        "causal_metadata_mode": causal_metadata_mode,
+        "causal_metadata_weight": (
+            causal_metadata_weight if causal_metadata_mode != "none" else 0.0
+        ),
+        "semantic_user_profiles_are_static": True,
     })
 
     log.info(
@@ -1424,6 +1494,10 @@ def evaluate_splits(
 
         # this split's own votes only - never mixes in votes from outside it
         split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
+        if causal_metadata_mode != "none":
+            if causal_feature_table is None:
+                raise RuntimeError("Causal metadata mode enabled without a loaded feature table")
+            split_vote_df = attach_causal_features(split_vote_df, causal_feature_table)
 
         train_ids = set(train_votes["item_id"].unique())
         val_ids   = set(val_votes["item_id"].unique())
@@ -1441,6 +1515,11 @@ def evaluate_splits(
         )
         if metrics is None:
             continue
+        metrics["causal_metadata_mode"] = causal_metadata_mode
+        metrics["causal_metadata_weight"] = (
+            causal_metadata_weight if causal_metadata_mode != "none" else 0.0
+        )
+        metrics["semantic_user_profiles_are_static"] = True
 
         # "splits_full" only: for items where compute_expert_weights found no
         # expert (used_fallback=True), weighted_vote already equals the raw
@@ -1561,6 +1640,14 @@ def main() -> None:
     parser.add_argument("--min-user-votes", type=int,   default=MIN_USER_VOTES)
     parser.add_argument("--output-dir",     type=Path,  default=OUTPUT_DIR)
     parser.add_argument("--no-grid-search", action="store_true")
+    parser.add_argument(
+        "--causal-metadata-mode",
+        choices=list(CAUSAL_METADATA_FEATURES),
+        default="full",
+        help="Causal user-profile ablation; use 'none' for the original semantic method.",
+    )
+    parser.add_argument("--causal-metadata-weight", type=float, default=0.20)
+    parser.add_argument("--causal-features", type=Path, default=DEFAULT_CAUSAL_FEATURES)
     parser.add_argument("--input-csv",      type=Path,  default=None)
     parser.add_argument("--votes-dir",      type=Path,  default=SPLITS_DIR,
                          help="Directory with the splits produced by prepare_data_step1 "
@@ -1573,6 +1660,9 @@ def main() -> None:
                          choices=["kfold", "splits"])
     args = parser.parse_args()
 
+    if not 0.0 <= args.causal_metadata_weight <= 1.0:
+        parser.error("--causal-metadata-weight must be between 0 and 1")
+
     assert args.alpha + args.beta <= 1.0, \
         f"alpha + beta must be <= 1.0 (got {args.alpha + args.beta:.2f})"
 
@@ -1583,7 +1673,15 @@ def main() -> None:
     log.info("=== SEF v7 | alpha=%.2f beta=%.2f gamma=%.2f | steps=%s ===",
              args.alpha, args.beta, 1.0 - args.alpha - args.beta, tasks_to_run)
 
+    global causal_feature_table, causal_metadata_mode, causal_metadata_weight
+    causal_metadata_mode = args.causal_metadata_mode
+    causal_metadata_weight = args.causal_metadata_weight
+    if causal_metadata_mode != "none":
+        causal_feature_table = load_causal_features(args.causal_features)
+
     vote_df    = load_votes(args.input_csv)
+    if causal_metadata_mode != "none":
+        vote_df = attach_causal_features(vote_df, causal_feature_table)
     post_texts = load_post_texts()
     user_docs  = load_user_documents()
 

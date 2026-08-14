@@ -184,7 +184,7 @@
     91.0,
     105.0
   ],
-  "split": "windowed_folds_full/w100",
+  "split": "windows/full/w100",
   "baseline": "BL1_net_vote",
   "alpha": 1.0,
   "threshold": 1.2515644555694792,

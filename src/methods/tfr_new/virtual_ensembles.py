@@ -1,4 +1,4 @@
-"""Combine votes from reliability- and graph-based voter groups."""
+"""Virtual sub-team ensemble built from complementary causal voter profiles."""
 
 import argparse
 import json
@@ -6,137 +6,181 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from shared_features import (
+    DEFAULT_CAUSAL_FEATURES,
+    apply_thresholds,
+    calibrate_thresholds_per_community,
+    classification_metrics,
+    compute_ppr_scores,
+    load_and_enrich_splits,
+    prepare_voter_representation,
+)
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, roc_auc_score
-
-from shared_features import compute_ppr_scores
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 DEFAULT_VOTES_DIR = "data/splits/reddit/intersection"
 DEFAULT_OUT_DIR = "results/reddit/intersection/virtual-ensembles"
-RELIABILITY_SEED_THR = 0.6
+TEAMS = [
+    "moderator_aligned",
+    "local_experts",
+    "social_core",
+    "fresh_eyes",
+    "experienced_generalists",
+]
 
 
-def compute_train_reliability(train: pd.DataFrame) -> dict:
-    """Compute training-only user reliability."""
-    agree = train["vote"] == train["label"]
-    rel = train.assign(agree=agree).groupby("username")["agree"].mean()
-    return rel.to_dict()
+def add_profile_signals(votes: pd.DataFrame, ppr_scores: dict) -> pd.DataFrame:
+    """Construct continuous community-specific role signals."""
+    out = votes.copy()
+    local = out["prior_n_posts_in_sub"] + out["prior_n_comments_in_sub"]
+    global_activity = out["prior_n_posts"] + out["prior_n_comments"]
+    out["_local_activity"] = np.log1p(local)
+    out["_global_activity"] = np.log1p(global_activity)
+    out["_domain_share"] = np.divide(local, np.maximum(global_activity, 1.0)).clip(0, 1)
+    out["_social_core"] = np.log1p(
+        out["prior_n_interaction_partners_in_sub"]
+        + out["prior_total_interactions_in_sub"]
+        + out["prior_n_replies_made"]
+    )
+    ppr = pd.Series(ppr_scores, dtype=float)
+    ppr_rank = ppr.rank(pct=True).to_dict() if len(ppr) else {}
+    out["_ppr_rank"] = out["username"].map(ppr_rank).fillna(0.5)
+    out["_social_role"] = 0.5 * out["_social_core"] + 0.5 * out["_ppr_rank"]
+    return out
 
 
-def assign_team(reliability: float, ppr: float, rel_median: float, ppr_median: float) -> str:
-    """Assign a voter to one of four reliability and PageRank groups."""
-    if reliability >= rel_median and ppr >= ppr_median:
-        return "core"
-    if reliability < rel_median and ppr >= ppr_median:
-        return "fresh"
-    if reliability >= rel_median and ppr < ppr_median:
-        return "niche"
-    return "other"
+def fit_team_thresholds(train: pd.DataFrame) -> dict[str, float]:
+    """Fit role boundaries once on training profiles."""
+    known_tenure = train["tenure_days_at_vote"].dropna()
+    return {
+        "alignment_hi": float(train["moderator_alignment_local"].quantile(0.70)),
+        "alignment_mid": float(train["moderator_alignment_local"].median()),
+        "local_hi": float(train["_local_activity"].quantile(0.70)),
+        "local_mid": float(train["_local_activity"].median()),
+        "global_hi": float(train["_global_activity"].quantile(0.70)),
+        "domain_hi": float(train["_domain_share"].quantile(0.70)),
+        "domain_lo": float(train["_domain_share"].quantile(0.30)),
+        "social_hi": float(train["_social_role"].quantile(0.70)),
+        "tenure_lo": float(known_tenure.quantile(0.30)) if len(known_tenure) else 0.0,
+    }
+
+
+def annotate_teams(votes: pd.DataFrame, thresholds: dict) -> pd.DataFrame:
+    """Assign overlapping semantic roles; one voter may serve several teams."""
+    out = votes.copy()
+    out["team_moderator_aligned"] = (
+        out["moderator_alignment_local"] >= thresholds["alignment_hi"]
+    )
+    out["team_local_experts"] = (
+        (out["_local_activity"] >= thresholds["local_hi"])
+        & (out["_domain_share"] >= thresholds["domain_hi"])
+    )
+    out["team_social_core"] = out["_social_role"] >= thresholds["social_hi"]
+    out["team_fresh_eyes"] = (
+        out["tenure_days_at_vote"].notna()
+        & (out["tenure_days_at_vote"] <= thresholds["tenure_lo"])
+        & (out["_local_activity"] <= thresholds["local_mid"])
+        & (out["moderator_alignment_local"] >= thresholds["alignment_mid"])
+    )
+    out["team_experienced_generalists"] = (
+        (out["_global_activity"] >= thresholds["global_hi"])
+        & (out["_domain_share"] <= thresholds["domain_lo"])
+    )
+    return out
 
 
 def team_verdict(group: pd.DataFrame) -> float:
-    """Return the reliability-weighted vote for one group."""
-    if len(group) == 0:
+    """Return a smoothed moderator-alignment weighted team vote."""
+    if group.empty:
         return 0.0
-    w = group["_reliability"].clip(lower=0.01)
-    return float((w * group["vote"]).sum() / w.sum())
+    weights = (0.25 + group["moderator_alignment_local"].clip(0, 1)).to_numpy()
+    return float(weights @ group["vote"].to_numpy() / weights.sum())
 
 
 def build_item_features(votes: pd.DataFrame) -> pd.DataFrame:
-    """Build one feature row per item."""
+    """Summarize every overlapping virtual team for each moderation case."""
     rows = []
-    for item_id, g in votes.groupby("item_id"):
-        feats = {"item_id": item_id, "label": g["label"].iloc[0], "community": g["community"].iloc[0]}
-        for team_name in ["core", "fresh", "niche", "other"]:
-            team_g = g[g["_team"] == team_name]
-            feats[f"verdict_{team_name}"] = team_verdict(team_g)
-            feats[f"n_{team_name}"] = len(team_g)
-        feats["n_voters"] = len(g)
+    for item_id, group in votes.groupby("item_id", sort=False):
+        feats = {
+            "item_id": item_id,
+            "label": group["label"].iloc[0],
+            "community": group["community"].iloc[0],
+            "n_voters": len(group),
+            "raw_vote": float(group["vote"].mean()),
+        }
+        for team in TEAMS:
+            members = group[group[f"team_{team}"]]
+            feats[f"verdict_{team}"] = team_verdict(members)
+            feats[f"n_{team}"] = len(members)
+            feats[f"coverage_{team}"] = float(len(members) / len(group))
+            feats[f"alignment_{team}"] = (
+                float(members["moderator_alignment_local"].mean()) if len(members) else 0.0
+            )
         rows.append(feats)
     return pd.DataFrame(rows)
 
 
-def annotate_teams(votes: pd.DataFrame, reliability: dict, ppr_scores: dict) -> pd.DataFrame:
-    """Attach reliability, PageRank, and group labels to each vote."""
-    votes = votes.copy()
-    rel_default = np.median(list(reliability.values())) if reliability else 0.5
-    ppr_default = np.median(list(ppr_scores.values())) if ppr_scores else 0.0
-
-    votes["_reliability"] = votes["username"].map(reliability).fillna(rel_default)
-    votes["_ppr"] = votes["username"].map(ppr_scores).fillna(ppr_default)
-
-    rel_median = votes["_reliability"].median()
-    ppr_median = votes["_ppr"].median()
-
-    votes["_team"] = votes.apply(
-        lambda r: assign_team(r["_reliability"], r["_ppr"], rel_median, ppr_median), axis=1
-    )
-    return votes
-
-
-def compute_metrics(y_true, y_pred) -> dict:
-    """Calculate classification metrics for one split."""
-    metrics = {
-        "macro_f1": f1_score(y_true, y_pred, average="macro"),
-        "f1_pos": f1_score(y_true, y_pred, pos_label=1),
-        "f1_neg": f1_score(y_true, y_pred, pos_label=-1),
-        "n_items": len(y_true),
-    }
-    try:
-        metrics["roc_auc"] = roc_auc_score(y_true, y_pred)
-    except ValueError:
-        metrics["roc_auc"] = None
-    return metrics
-
-
 def main():
-    """Train the group-level ensemble and save its test predictions."""
+    """Fit semantic virtual teams and a validation-calibrated meta-learner."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--votes-dir", default=DEFAULT_VOTES_DIR)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    parser.add_argument("--causal-features", type=Path, default=DEFAULT_CAUSAL_FEATURES)
     args = parser.parse_args()
 
-    votes_dir = Path(args.votes_dir)
-    out_dir = Path(args.out_dir)
+    votes_dir, out_dir = Path(args.votes_dir), Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    train, val, test = load_and_enrich_splits(votes_dir, args.causal_features)
+    train, val, test, _ = prepare_voter_representation(train, val, test)
 
-    train = pd.read_parquet(votes_dir / "train_votes.parquet").sort_values("timestamp")
-    val = pd.read_parquet(votes_dir / "val_votes.parquet").sort_values("timestamp")
-    test = pd.read_parquet(votes_dir / "test_votes.parquet").sort_values("timestamp")
+    print("Building causal community roles...")
+    ppr_scores = compute_ppr_scores(train)
+    train = add_profile_signals(train, ppr_scores)
+    val = add_profile_signals(val, ppr_scores)
+    test = add_profile_signals(test, ppr_scores)
+    thresholds = fit_team_thresholds(train)
+    annotated = {
+        "train": annotate_teams(train, thresholds),
+        "val": annotate_teams(val, thresholds),
+        "test": annotate_teams(test, thresholds),
+    }
+    frames = {name: build_item_features(frame) for name, frame in annotated.items()}
+    feature_cols = [
+        column for column in frames["train"].columns
+        if column not in {"item_id", "label", "community"}
+    ]
+    meta_model = make_pipeline(
+        StandardScaler(), LogisticRegression(max_iter=2_000, class_weight="balanced")
+    )
+    meta_model.fit(frames["train"][feature_cols], frames["train"]["label"])
 
-    print("Computing reliability and PageRank scores...")
-    reliability = compute_train_reliability(train)
-    ppr_scores = compute_ppr_scores(train, reliability_thr=RELIABILITY_SEED_THR)
-
-    print("Building group features...")
-    train_annot = annotate_teams(train, reliability, ppr_scores)
-    val_annot = annotate_teams(val, reliability, ppr_scores)
-    test_annot = annotate_teams(test, reliability, ppr_scores)
-
-    train_feats = build_item_features(train_annot)
-    val_feats = build_item_features(val_annot)
-    test_feats = build_item_features(test_annot)
-
-    feature_cols = ["verdict_core", "verdict_fresh", "verdict_niche", "verdict_other",
-                     "n_core", "n_fresh", "n_niche", "n_other", "n_voters"]
-
-    print("Training the meta-model...")
-    meta_model = LogisticRegression(max_iter=500, class_weight="balanced")
-    meta_model.fit(train_feats[feature_cols], train_feats["label"])
-
-    results = {}
-    predictions = {}
-    for name, feats in [("train", train_feats), ("val", val_feats), ("test", test_feats)]:
-        y_pred = meta_model.predict(feats[feature_cols])
-        feats = feats.copy()
-        feats["y_hat"] = y_pred
-        predictions[name] = feats
-        results[name] = compute_metrics(feats["label"], y_pred)
-
-    with open(out_dir / "metrics.json", "w") as f:
-        json.dump(results, f, indent=2)
+    score_frames = {}
+    for name, frame in frames.items():
+        positive_idx = int(np.where(meta_model.classes_ == 1)[0][0])
+        scored = frame.copy()
+        scored["score"] = meta_model.predict_proba(frame[feature_cols])[:, positive_idx]
+        score_frames[name] = scored
+    community_thresholds, global_threshold = calibrate_thresholds_per_community(
+        score_frames["val"]
+    )
+    predictions = {
+        name: apply_thresholds(frame, community_thresholds, global_threshold)
+        for name, frame in score_frames.items()
+    }
+    results = {name: classification_metrics(frame) for name, frame in predictions.items()}
+    results["team_thresholds"] = thresholds
+    results["n_model_features"] = len(feature_cols)
+    results["teams_are_overlapping"] = True
+    with open(out_dir / "metrics.json", "w") as file:
+        json.dump(results, file, indent=2)
     predictions["test"].to_parquet(out_dir / "test_predictions.parquet", index=False)
-
+    membership_columns = [
+        "item_id", "username", "community", "label", "vote", *[f"team_{team}" for team in TEAMS]
+    ]
+    annotated["test"][membership_columns].to_parquet(
+        out_dir / "test_team_membership.parquet", index=False
+    )
     print(json.dumps(results, indent=2))
     print(f"\nSaved to {out_dir}")
 

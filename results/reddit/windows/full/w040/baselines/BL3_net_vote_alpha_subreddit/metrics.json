@@ -682,7 +682,7 @@
     61.8421052631579,
     93.63157894736842
   ],
-  "split": "windowed_folds_full/w040",
+  "split": "windows/full/w040",
   "baseline": "BL3_net_vote_alpha_subreddit",
   "alpha": 4.789473684210526,
   "threshold": -6.2578222778473105,

@@ -595,7 +595,7 @@
     47.8421052631579,
     54.8421052631579
   ],
-  "split": "splits",
+  "split": "random",
   "baseline": "BL3_net_vote_alpha_subreddit",
   "alpha": 1.631578947368421,
   "threshold": -1.2515644555694507,

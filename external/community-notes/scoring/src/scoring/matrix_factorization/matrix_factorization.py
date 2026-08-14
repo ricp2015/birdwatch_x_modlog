@@ -535,13 +535,19 @@ class MatrixFactorization:
         self.ratingFeaturesAndLabels[c.noteIdKey] == specificNoteId
       ]
 
-    rating_labels = torch.FloatTensor(ratingFeaturesAndLabels[self._labelCol].values).to(
+    rating_labels = torch.FloatTensor(
+      ratingFeaturesAndLabels[self._labelCol].to_numpy(copy=True)
+    ).to(
       self.mf_model.device
     )
-    user_indexes = torch.IntTensor(ratingFeaturesAndLabels[Constants.raterIndexKey].values).to(
+    user_indexes = torch.IntTensor(
+      ratingFeaturesAndLabels[Constants.raterIndexKey].to_numpy(copy=True)
+    ).to(
       self.mf_model.device
     )
-    note_indexes = torch.IntTensor(ratingFeaturesAndLabels[Constants.noteIndexKey].values).to(
+    note_indexes = torch.IntTensor(
+      ratingFeaturesAndLabels[Constants.noteIndexKey].to_numpy(copy=True)
+    ).to(
       self.mf_model.device
     )
     self.modelData = ModelData(rating_labels, user_indexes, note_indexes)

@@ -2,11 +2,14 @@ external/normvio/
 data/splits/wikipedia/
 data/interim/reddit/csv/history/user_documents.csv
 cache/
-data/raw/user_contributions.zip
+data/raw/
+data/interim
+data/interim/reddit/user_temporal_features/
 data/interim/reddit/post_texts.parquet
 data/interim/reddit/user_documents.parquet
 data/interim/reddit/user_history_summary.parquet
 data/interim/reddit/history/*.parquet
+thesis_summary.md
 
 src/correlation/
 

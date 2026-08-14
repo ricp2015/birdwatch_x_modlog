@@ -1,10 +1,17 @@
 from __future__ import annotations
+import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.utils.splits import discover_splits, load_split_data
 from sklearn.metrics import (
     precision_recall_curve,
@@ -200,11 +207,13 @@ def evaluate_fold(
     test_df:         pd.DataFrame,
     predictions:     np.ndarray,
     fallback_scores: Optional[Dict[str, float]] = None,
+    auc_observed_only: bool = False,
 ) -> Dict:
     """Evaluate fold and return its metrics."""
     test_labels = get_item_labels(test_df)
     items_test  = test_labels.merge(scores_df, on="item_id", how="left")
     n_missing_score = int(items_test["score"].isna().sum())
+    observed_score = items_test["score"].notna()
     if fallback_scores:
         fallback_series = items_test["item_id"].map(fallback_scores)
         items_test["score"] = items_test["score"].fillna(fallback_series).fillna(0.0)
@@ -221,17 +230,19 @@ def evaluate_fold(
         y_true, y_pred, labels=[1],    average="binary",  zero_division=0)
     p_1, r_1, f_1, _ = precision_recall_fscore_support(
         y_true, y_pred, labels=[-1],   average="binary",  pos_label=-1, zero_division=0)
+    auc_mask = observed_score.to_numpy() if auc_observed_only else np.ones(len(items_test), dtype=bool)
     try:
-        auc = float(roc_auc_score((y_true == 1).astype(int), scores))
+        auc = float(roc_auc_score((y_true[auc_mask] == 1).astype(int), scores[auc_mask]))
     except ValueError:
         auc = float("nan")
 
-    mean_s_pos = float(items_test.loc[items_test["label"] ==  1, "score"].mean())
-    mean_s_neg = float(items_test.loc[items_test["label"] == -1, "score"].mean())
+    diagnostic_items = items_test.loc[observed_score] if auc_observed_only else items_test
+    mean_s_pos = float(diagnostic_items.loc[diagnostic_items["label"] ==  1, "score"].mean())
+    mean_s_neg = float(diagnostic_items.loc[diagnostic_items["label"] == -1, "score"].mean())
 
     try:
         prec_curve, rec_curve, thr_curve = precision_recall_curve(
-            (y_true == 1).astype(int), scores
+            (y_true[auc_mask] == 1).astype(int), scores[auc_mask]
         )
         pr_precision = prec_curve.tolist()
         pr_recall    = rec_curve.tolist()
@@ -247,6 +258,8 @@ def evaluate_fold(
         "polarity_correct": mean_s_pos > mean_s_neg,
         "n_items":         int(len(items_test)),
         "n_items_missing_score": n_missing_score,
+        "score_coverage": float(observed_score.mean()),
+        "auc_observed_only": bool(auc_observed_only),
         "mean_score_approve": mean_s_pos,
         "mean_score_remove":  mean_s_neg,
         "pr_curve_precision":  pr_precision,
@@ -398,6 +411,26 @@ def load_external_scores(path: Path) -> pd.DataFrame:
     )
     return df
 
+
+def orient_external_scores(
+    scores_df: pd.DataFrame,
+    calibration_labels: pd.DataFrame,
+) -> Tuple[pd.DataFrame, int, float]:
+    """Choose the external-score direction on validation, never on test."""
+    merged = calibration_labels[["item_id", "label"]].merge(
+        scores_df[["item_id", "score"]], on="item_id", how="left"
+    ).dropna(subset=["score"])
+    polarity = 1
+    raw_auc = float("nan")
+    if not merged.empty and merged["label"].nunique() == 2:
+        raw_auc = float(
+            roc_auc_score((merged["label"] == 1).astype(int), merged["score"])
+        )
+        polarity = 1 if raw_auc >= 0.5 else -1
+    oriented = scores_df[["item_id", "score"]].copy()
+    oriented["score"] = polarity * oriented["score"]
+    return oriented, polarity, raw_auc
+
 def run_bl4_kfold(
     folds:          List[pd.DataFrame],
     external_scores: pd.DataFrame,
@@ -419,19 +452,30 @@ def run_bl4_kfold(
         )
         train_labels = get_item_labels(train_fold)
 
+        oriented_scores, polarity, validation_raw_auc = orient_external_scores(
+            scores_df, train_labels
+        )
+
         # threshold calibrata sul training fold con griglia standard
-        threshold, _ = calibrate_global_threshold(scores_df, train_labels)
+        threshold, _ = calibrate_global_threshold(oriented_scores, train_labels)
 
         test_items = get_item_labels(val_fold).merge(
-            scores_df[["item_id", "score"]], on="item_id", how="left"
+            oriented_scores[["item_id", "score"]], on="item_id", how="left"
         )
         test_items["score"] = test_items["score"].fillna(0.0)
         preds = np.where(test_items["score"].values >= threshold, 1, -1)
 
-        fold_metric = evaluate_fold(scores_df, val_fold, preds)
+        fold_metric = evaluate_fold(
+            oriented_scores, val_fold, preds, auc_observed_only=True
+        )
         fold_metric["fold"]      = k
         fold_metric["alpha"]     = float("nan")
         fold_metric["threshold"] = threshold
+        fold_metric["score_polarity"] = polarity
+        fold_metric["validation_roc_auc_raw"] = validation_raw_auc
+        fold_metric["roc_auc_raw"] = (
+            fold_metric["roc_auc"] if polarity == 1 else 1.0 - fold_metric["roc_auc"]
+        )
         fold_results.append(fold_metric)
         fold_details.append(fold_metric)
 
@@ -467,12 +511,18 @@ def run_bl5_kfold(
         ].copy()
         train_labels = train_labels_full[["item_id", "label"]].copy()
 
+        oriented_scores, polarity, validation_raw_auc = orient_external_scores(
+            scores_df, train_labels
+        )
+
         # Global threshold.
-        threshold_global, _ = calibrate_global_threshold(scores_df, train_labels, grid=THRESHOLD_GRID)
+        threshold_global, _ = calibrate_global_threshold(
+            oriented_scores, train_labels, grid=THRESHOLD_GRID
+        )
 
         # Community thresholds.
         sub_thr = calibrate_per_subreddit(
-            scores_df,
+            oriented_scores,
             train_labels_full,
             threshold_global,
             grid=THRESHOLD_GRID,
@@ -484,16 +534,23 @@ def run_bl5_kfold(
             val_fold.drop_duplicates("item_id")[["item_id", "community"]],
             on="item_id",
             how="left"
-        ).merge(scores_df[["item_id", "score"]], on="item_id", how="left")
+        ).merge(oriented_scores[["item_id", "score"]], on="item_id", how="left")
         test_items["score"] = test_items["score"].fillna(0.0)
 
         thr_per_item = test_items["community"].map(sub_thr).fillna(threshold_global)
         preds = np.where(test_items["score"].values >= thr_per_item.values, 1, -1)
 
-        fold_metric = evaluate_fold(scores_df, val_fold, preds)
+        fold_metric = evaluate_fold(
+            oriented_scores, val_fold, preds, auc_observed_only=True
+        )
         fold_metric["fold"]      = k
         fold_metric["alpha"]     = float("nan")
         fold_metric["threshold"] = threshold_global
+        fold_metric["score_polarity"] = polarity
+        fold_metric["validation_roc_auc_raw"] = validation_raw_auc
+        fold_metric["roc_auc_raw"] = (
+            fold_metric["roc_auc"] if polarity == 1 else 1.0 - fold_metric["roc_auc"]
+        )
         fold_results.append(fold_metric)
         fold_details.append(fold_metric)
 
@@ -660,41 +717,50 @@ def run_single_split_external(
         return None, pd.DataFrame()
 
     val_labels = get_item_labels(val_for_cal)
-    threshold, _ = calibrate_global_threshold(external_scores, val_labels)
+    oriented_scores, polarity, validation_raw_auc = orient_external_scores(
+        external_scores, val_labels
+    )
+    threshold, _ = calibrate_global_threshold(oriented_scores, val_labels)
 
     test_items = (
         get_item_labels(test_df)
         .merge(test_df.drop_duplicates("item_id")[["item_id", "community"]], on="item_id", how="left")
-        .merge(external_scores[["item_id", "score"]], on="item_id", how="left")
+        .merge(oriented_scores[["item_id", "score"]], on="item_id", how="left")
     )
 
-    # "splits_full" only: force full test coverage using this item's net
-    # vote (mean of +1/-1 votes in this split's test set) for items with no
-    # external Reddit score, instead of a neutral 0.0 default.
-    fallback_scores = None
-    if split_label == "splits_full":
-        fallback_scores = test_df.groupby("item_id")["vote"].mean().to_dict()
-        fallback_series = test_items["item_id"].map(fallback_scores)
-        test_items["score"] = test_items["score"].fillna(fallback_series)
+    # Missing external scores use the item's net vote as a decision fallback.
+    # Do not mix that [-1, 1] fallback into the external score scale for AUC.
+    missing_external = test_items["score"].isna()
     test_items["score"] = test_items["score"].fillna(0.0)
 
     if use_subreddit:
         val_labels_full = val_for_cal.drop_duplicates("item_id")[["item_id", "label", "community"]].copy()
-        sub_thr = calibrate_per_subreddit(external_scores, val_labels_full, threshold)
+        sub_thr = calibrate_per_subreddit(oriented_scores, val_labels_full, threshold)
         thr_per_item = test_items["community"].map(sub_thr).fillna(threshold)
     else:
         thr_per_item = pd.Series(threshold, index=test_items.index)
 
     preds = np.where(test_items["score"].values >= thr_per_item.values, 1, -1)
+    if missing_external.any():
+        net_vote = test_df.groupby("item_id")["vote"].mean()
+        fallback_pred = np.where(test_items["item_id"].map(net_vote).fillna(0.0) >= 0.0, 1, -1)
+        preds[missing_external.to_numpy()] = fallback_pred[missing_external.to_numpy()]
 
-    metric = evaluate_fold(external_scores, test_df, preds, fallback_scores)
+    metric = evaluate_fold(
+        oriented_scores, test_df, preds, auc_observed_only=True
+    )
     metric["split"]         = split_label
     metric["baseline"]      = baseline_name
     metric["alpha"]         = float("nan")
     metric["threshold"]     = threshold
+    metric["score_polarity"] = polarity
+    metric["validation_roc_auc_raw"] = validation_raw_auc
+    metric["roc_auc_raw"] = (
+        metric["roc_auc"] if polarity == 1 else 1.0 - metric["roc_auc"]
+    )
     metric["n_train_items"] = int(train_df["item_id"].nunique())
     metric["n_val_items"]   = int(val_df["item_id"].nunique())
-    if split_label == "splits_full" and metric.get("n_items_missing_score", 0) > 0:
+    if metric.get("n_items_missing_score", 0) > 0:
         metric["used_net_vote_fallback"] = True
         metric["n_fallback_items"]       = metric["n_items_missing_score"]
 
@@ -726,6 +792,7 @@ def evaluate_splits(
     votes_dir:            Path,
     output_dir:           Path,
     external_scores_path: Path = REDDIT_SCORES_PATH,
+    only_external:        bool = False,
 ) -> Dict[str, Dict[str, Dict]]:
     """Evaluate splits and return its metrics."""
     splits = discover_splits(votes_dir)
@@ -759,19 +826,20 @@ def evaluate_splits(
         split_out_dir = output_dir / split_name / "baselines"
         summary[split_name] = {}
 
-        baseline_configs = [
-            ("BL1_net_vote",                dict(use_alpha=False, use_subreddit=False)),
-            ("BL2_net_vote_alpha",           dict(use_alpha=True,  use_subreddit=False)),
-            ("BL3_net_vote_alpha_subreddit", dict(use_alpha=True,  use_subreddit=True)),
-        ]
-        for baseline_name, kwargs in baseline_configs:
-            metric, item_scores = run_single_split_baseline(
-                split_name, all_df, train_df, val_df, test_df, baseline_name, **kwargs
-            )
-            if metric is None:
-                continue
-            _save_split_baseline_outputs(split_out_dir, baseline_name, metric, item_scores)
-            summary[split_name][baseline_name] = metric
+        if not only_external:
+            baseline_configs = [
+                ("BL1_net_vote",                dict(use_alpha=False, use_subreddit=False)),
+                ("BL2_net_vote_alpha",           dict(use_alpha=True,  use_subreddit=False)),
+                ("BL3_net_vote_alpha_subreddit", dict(use_alpha=True,  use_subreddit=True)),
+            ]
+            for baseline_name, kwargs in baseline_configs:
+                metric, item_scores = run_single_split_baseline(
+                    split_name, all_df, train_df, val_df, test_df, baseline_name, **kwargs
+                )
+                if metric is None:
+                    continue
+                _save_split_baseline_outputs(split_out_dir, baseline_name, metric, item_scores)
+                summary[split_name][baseline_name] = metric
 
         if external_scores_compressed is not None:
             for baseline_name, use_sub in (("BL4_reddit_score", False), ("BL5_subreddit", True)):
@@ -796,7 +864,11 @@ def evaluate_splits(
         }
         for split_name, baselines in summary.items()
     }
-    summary_path = output_dir / "all_splits_summary.json"
+    summary_name = (
+        "external_baselines_all_splits_summary.json"
+        if only_external else "all_splits_summary.json"
+    )
+    summary_path = output_dir / summary_name
     with open(summary_path, "w") as fh:
         json.dump(summary_slim, fh, indent=2)
     log.info("Summary of all splits saved -> %s", summary_path)
@@ -812,11 +884,25 @@ def evaluate_splits(
 
 
 if __name__ == "__main__":
-    run_baselines(
-        step1_dir  = Path("data/splits/reddit"),
-        output_dir = Path("results/reddit/random/baselines"),
+    parser = argparse.ArgumentParser(description="Evaluate baselines on one common split")
+    parser.add_argument(
+        "--votes-dir",
+        type=Path,
+        default=Path("data/splits/reddit"),
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("results/reddit"),
+    )
+    parser.add_argument(
+        "--only-external",
+        action="store_true",
+        help="Run only BL4/BL5 and keep their summary separate from other methods.",
+    )
+    args = parser.parse_args()
     evaluate_splits(
-        votes_dir  = Path("data/splits/reddit"),
-        output_dir = Path("results/reddit"),
+        votes_dir=args.votes_dir,
+        output_dir=args.output_dir,
+        only_external=args.only_external,
     )

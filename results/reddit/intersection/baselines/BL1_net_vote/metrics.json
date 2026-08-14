@@ -181,7 +181,7 @@
     55.0,
     68.0
   ],
-  "split": "splits_intersection",
+  "split": "intersection",
   "baseline": "BL1_net_vote",
   "alpha": 1.0,
   "threshold": 0.2503128911139072,

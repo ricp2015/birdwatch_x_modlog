@@ -172,7 +172,7 @@
     51.0,
     58.0
   ],
-  "split": "splits",
+  "split": "random",
   "baseline": "BL1_net_vote",
   "alpha": 1.0,
   "threshold": 0.2503128911139072,

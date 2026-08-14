@@ -574,7 +574,7 @@
     50.8421052631579,
     64.84210526315789
   ],
-  "split": "splits_intersection",
+  "split": "intersection",
   "baseline": "BL2_net_vote_alpha",
   "alpha": 1.631578947368421,
   "threshold": -0.7509386733416648,

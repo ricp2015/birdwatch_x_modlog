@@ -14,6 +14,23 @@ import pandas as pd
 
 METRICS = ["macro_f1", "roc_auc", "f1_pos", "f1_neg"]
 
+CANONICAL_RUNS = [
+    ("Net", "baselines/BL1_net_vote/metrics.json"),
+    ("WNet", "baselines/BL2_net_vote_alpha/metrics.json"),
+    ("SubAdj", "baselines/BL3_net_vote_alpha_subreddit/metrics.json"),
+    ("RedditScore", "baselines/BL4_reddit_score/metrics.json"),
+    ("RedditScore+Sub", "baselines/BL5_subreddit/metrics.json"),
+    ("CN", "cn/metrics.json"),
+    ("SEF", "expertise/metrics.json"),
+    ("TeamFormation", "team-formation/metrics.json"),
+    ("VAR", "var/metrics.json"),
+    ("KExpertsCausal", "k_experts_causal/metrics.json"),
+    ("BanditDR", "bandit_dr/metrics.json"),
+    ("GraphPropagation", "graph_propagation/metrics.json"),
+    ("VirtualEnsembles", "virtual_ensembles/metrics.json"),
+]
+BOC_MODES = ("none", "global", "subreddit", "full")
+
 RUN_LABELS = {
     "reddit_cn":                     "CN",
     "BL1_net_score":                 "Net",
@@ -40,6 +57,64 @@ def load_metrics(path: Path) -> Dict:
     """Load metrics from its configured source."""
     with open(path) as f:
         return json.load(f)
+
+
+def _canonical_split_dirs(root: Path) -> Dict[str, Path]:
+    """Return the fixed and windowed result directories in benchmark order."""
+    found: Dict[str, Path] = {}
+    for name in ("random", "full", "intersection", "intersection_chronological"):
+        path = root / name
+        if path.is_dir():
+            found[name] = path
+    for population in ("full", "intersection"):
+        window_root = root / "windows" / population
+        if not window_root.is_dir():
+            continue
+        for path in sorted(window_root.glob("w*")):
+            if path.is_dir():
+                found[f"windows/{population}/{path.name}"] = path
+    return found
+
+
+def _test_payload(metrics: Dict) -> Dict:
+    """Normalize flat and train/val/test metric schemas."""
+    test = metrics.get("test")
+    return test if isinstance(test, dict) else metrics
+
+
+def collect_canonical_suite(root: Path) -> Dict[str, pd.DataFrame]:
+    """Collect the 14-method suite and select the BoC metadata mode on VAL."""
+    output: Dict[str, pd.DataFrame] = {}
+    for split_name, split_dir in _canonical_split_dirs(root).items():
+        rows: List[Dict] = []
+        for label, relative_path in CANONICAL_RUNS:
+            path = split_dir / relative_path
+            if not path.exists():
+                continue
+            payload = _test_payload(load_metrics(path))
+            rows.append({"run": label, **{metric: payload.get(metric) for metric in METRICS}})
+
+        boc_candidates = []
+        for mode in BOC_MODES:
+            path = split_dir / "boc_stacking" / mode / "metrics.json"
+            if not path.exists():
+                continue
+            metrics = load_metrics(path)
+            validation = metrics.get("val", {})
+            test = metrics.get("test", {})
+            boc_candidates.append((validation.get("macro_f1", float("-inf")), mode, test))
+        if boc_candidates:
+            _, selected_mode, payload = max(boc_candidates, key=lambda candidate: candidate[0])
+            rows.append({
+                "run": f"BoC[val:{selected_mode}]",
+                **{metric: payload.get(metric) for metric in METRICS},
+            })
+
+        if rows:
+            output[split_name] = (
+                pd.DataFrame(rows).sort_values("macro_f1", ascending=False).reset_index(drop=True)
+            )
+    return output
 
 
 def collect_by_split(results_roots: List[Path]) -> Dict[str, pd.DataFrame]:
@@ -120,7 +195,10 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    per_split_df = collect_by_split(args.roots)
+    if len(args.roots) == 1:
+        per_split_df = collect_canonical_suite(args.roots[0])
+    else:
+        per_split_df = collect_by_split(args.roots)
     if not per_split_df:
         print("No per-split data found.")
         sys.exit(1)

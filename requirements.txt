@@ -17,3 +17,4 @@ praw
 convokit
 matplotlib
 seaborn
+orjson

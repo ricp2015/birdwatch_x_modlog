@@ -646,7 +646,7 @@
     50.26315789473684,
     92.89473684210526
   ],
-  "split": "windowed_folds_intersection/w020",
+  "split": "windows/intersection/w020",
   "baseline": "BL2_net_vote_alpha",
   "alpha": 4.368421052631579,
   "threshold": -7.259073842302882,

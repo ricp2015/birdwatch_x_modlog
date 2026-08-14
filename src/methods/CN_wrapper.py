@@ -1,4 +1,5 @@
 from __future__ import annotations
+import argparse
 import json
 import logging
 import sys
@@ -6,6 +7,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.utils.splits import discover_splits, load_split_data
 from sklearn.metrics import (
     precision_recall_curve,
@@ -13,8 +19,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import KFold
-import sys
-from pathlib import Path
 _SCORING_ROOT = Path(__file__).parent.parent.parent / "external/community-notes/scoring/src"
 if not _SCORING_ROOT.exists():
     raise ImportError(
@@ -633,30 +637,23 @@ def evaluate_splits(
 
 
 if __name__ == "__main__":
-    evaluate_cn(
-        dataset_dir = Path("data/splits/reddit"),
-        output_dir  = Path("results/reddit/random/cn"),
+    parser = argparse.ArgumentParser(description="Evaluate Community Notes on one common split")
+    parser.add_argument(
+        "--votes-dir",
+        type=Path,
+        default=Path("data/splits/reddit"),
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("results/reddit"),
+    )
+    parser.add_argument("--vote-sign", type=int, choices=(-1, 1), default=1)
+    parser.add_argument("--method-name", default="cn")
+    args = parser.parse_args()
     evaluate_splits(
-        votes_dir  = Path("data/splits/reddit"),
-        output_dir = Path("results/reddit"),
-    )
-    evaluate_cn(
-        dataset_dir = Path("data/splits/reddit"),
-        output_dir  = Path("results/reddit/random/cn-inverted"),
-        vote_sign  = -1,
-    )
-    evaluate_splits(
-        votes_dir  = Path("data/splits/reddit"),
-        output_dir = Path("results/reddit"),
-        vote_sign  = -1,
-        method_name = "cn-inverted",
-    )
-    evaluate_cn(
-        dataset_dir=Path("data/splits/wikipedia/standard"),
-        output_dir=Path("results/wikipedia/standard/random/cn"),
-    )
-    evaluate_splits(
-        votes_dir  = Path("data/splits/wikipedia/standard"),
-        output_dir = Path("results/wikipedia/standard"),
+        votes_dir=args.votes_dir,
+        output_dir=args.output_dir,
+        vote_sign=args.vote_sign,
+        method_name=args.method_name,
     )

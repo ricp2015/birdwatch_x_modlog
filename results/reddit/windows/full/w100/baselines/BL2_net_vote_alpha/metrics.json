@@ -682,7 +682,7 @@
     66.89473684210526,
     97.42105263157895
   ],
-  "split": "windowed_folds_full/w100",
+  "split": "windows/full/w100",
   "baseline": "BL2_net_vote_alpha",
   "alpha": 3.526315789473684,
   "threshold": -3.7546933667083806,

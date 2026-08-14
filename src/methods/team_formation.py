@@ -21,12 +21,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import unicodedata
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from src.methods.tfr_new.shared_features import (
+    DEFAULT_CAUSAL_FEATURES,
+    attach_causal_features,
+    load_causal_features,
+)
 from src.utils.splits import discover_splits
 import torch
 import torch.nn as nn
@@ -44,7 +55,7 @@ DROPOUT     = 0.1
 NUM_CLASSES = 2
 
 CATEGORIES = [
-    "spam", "meta-rules", "content", "doxxing",
+    "spam", "meta-rules", "content",
     "harassment", "hatespeech", "format",
     "off-topic", "trolling", "incivility",
 ]
@@ -252,7 +263,11 @@ def load_votes(votes_dir: Path) -> pd.DataFrame:
     # label: 1=approve, -1=remove (may be missing for some rows)
     if "label" not in votes.columns:
         votes["label"] = float("nan")
-    return votes[["username", "item_id", "vote", "community", "label"]]
+    required = ["username", "item_id", "timestamp", "vote", "community", "label"]
+    missing = set(required) - set(votes.columns)
+    if missing:
+        raise ValueError(f"Votes are missing columns required for causal metadata: {sorted(missing)}")
+    return votes[required]
 
 
 def _load_split_votes(path: Path) -> pd.DataFrame:
@@ -263,7 +278,11 @@ def _load_split_votes(path: Path) -> pd.DataFrame:
         votes["label"] = float("nan")
     else:
         votes["label"] = votes["label"].astype(float)
-    return votes[["username", "item_id", "vote", "community", "label"]]
+    required = ["username", "item_id", "timestamp", "vote", "community", "label"]
+    missing = set(required) - set(votes.columns)
+    if missing:
+        raise ValueError(f"Split votes are missing required columns: {sorted(missing)}")
+    return votes[required]
 
 
 # STEP B - Post violation scorer
@@ -279,6 +298,9 @@ def _build_post_text(row: pd.Series) -> str:
 
 
 POST_TEXTS_PATH = Path("data/interim/reddit/post_texts.parquet")
+DEFAULT_VIOLATION_SCORES = Path(
+    "results/reddit/kfold/team-formation/post_violation_scores.parquet"
+)
 
 def score_violations(votes_dir: Path, docs_path: Path, models_dir: Path,
            out_path: Path, tokenizer: BertTokenizer,
@@ -375,45 +397,49 @@ def score_violations(votes_dir: Path, docs_path: Path, models_dir: Path,
 #   - compute_user_skill() is the same logic factored out so step_E can
 #     call it once per split, passing only that split's TRAIN votes.
 
-METADATA_PATH = Path("data/processed/user_metadata.csv")
+CAUSAL_FEATURES_PATH = DEFAULT_CAUSAL_FEATURES
+CAUSAL_PROFILE_COLUMNS = [
+    "prior_n_posts",
+    "prior_n_comments",
+    "prior_n_distinct_subreddits",
+    "prior_n_replies_made",
+    "tenure_days_at_vote",
+    "prior_n_posts_in_sub",
+    "prior_n_comments_in_sub",
+    "prior_n_months_active_in_sub",
+    "prior_n_interaction_partners",
+    "prior_total_interactions",
+    "prior_n_interaction_partners_in_sub",
+    "prior_total_interactions_in_sub",
+]
 
-def _load_feature_skill(metadata_path: Path) -> pd.Series:
-    """Load feature skill from its configured source."""
-    if not metadata_path.exists():
-        print(f"  [WARNING] metadata not found at {metadata_path} - skipping feature skill")
-        return pd.Series(dtype=float)
 
-    meta = pd.read_csv(metadata_path)
-
-    # exclude suspended accounts entirely
-    meta = meta[meta["is_suspended"] != True].copy()
-
-    # tenure in days from account creation to a fixed reference point
-    meta["account_created_utc"] = pd.to_numeric(meta["account_created_utc"], errors="coerce")
-    REF_TS = 1685000000  # ~May 2023, end of dataset window
-    meta["tenure_days"] = (REF_TS - meta["account_created_utc"]) / 86400
-    meta["tenure_days"] = meta["tenure_days"].clip(lower=0)
-
-    meta["log_karma"]  = np.log1p(meta["total_karma"].fillna(0).clip(lower=0))
-    meta["email_bonus"] = meta["has_verified_email"].fillna(False).astype(float)
-
-    # percentile rank each feature -> [0, 1]
-    for col in ["log_karma", "tenure_days"]:
-        meta[f"{col}_rank"] = meta[col].rank(pct=True, na_option="bottom")
-
-    # composite: karma and tenure equally weighted, small email bonus
-    meta["feat_score"] = (
-        meta["log_karma_rank"] * 0.45 +
-        meta["tenure_days_rank"] * 0.45 +
-        meta["email_bonus"] * 0.10
+def _load_causal_feature_skill(
+    votes: pd.DataFrame,
+    causal_features: pd.DataFrame | Path,
+) -> pd.Series:
+    """Build a train-only user-community prior from causal per-vote snapshots."""
+    causal = (
+        load_causal_features(causal_features)
+        if isinstance(causal_features, Path)
+        else causal_features
     )
-
-    # shift to [-0.5, +0.5]
-    meta["skill_feat"] = meta["feat_score"] - 0.5
-
-    result = meta.set_index("username")["skill_feat"]
-    print(f"  Feature skill computed for {len(result):,} users "
-          f"(mean={result.mean():.4f}, std={result.std():.4f})")
+    enriched = attach_causal_features(votes, causal)
+    components = []
+    for column in CAUSAL_PROFILE_COLUMNS:
+        values = pd.to_numeric(enriched[column], errors="coerce")
+        if column == "tenure_days_at_vote":
+            signal = 1.0 - np.exp(-np.log1p(values.clip(lower=0)) / 7.0)
+            signal = signal.fillna(0.5)
+        else:
+            signal = 1.0 - np.exp(-np.log1p(values.fillna(0).clip(lower=0)) / 5.0)
+        components.append(signal.to_numpy(dtype=float))
+    enriched["_causal_profile"] = np.column_stack(components).mean(axis=1) - 0.5
+    result = enriched.groupby(["username", "community"])["_causal_profile"].mean()
+    print(
+        f"  Causal feature skill computed for {len(result):,} user-community profiles "
+        f"(mean={result.mean():.4f}, std={result.std():.4f})"
+    )
     return result
 
 
@@ -421,7 +447,7 @@ def compute_user_skill(
     votes:         pd.DataFrame,
     scores:        pd.DataFrame,
     min_votes:     int,
-    metadata_path: Path = METADATA_PATH,
+    causal_features: pd.DataFrame | Path = CAUSAL_FEATURES_PATH,
     alpha:         float = 0.5,
     verbose:       bool = True,
 ) -> pd.DataFrame:
@@ -434,7 +460,11 @@ def compute_user_skill(
 
     merged["agrees"] = (merged["vote"] == merged["label"]).astype(float)
 
-    skill_feat = _load_feature_skill(metadata_path) if alpha < 1.0 else pd.Series(dtype=float)
+    skill_feat = (
+        _load_causal_feature_skill(votes, causal_features)
+        if alpha < 1.0
+        else pd.Series(dtype=float)
+    )
     use_meta   = len(skill_feat) > 0 and alpha < 1.0
 
     records = []
@@ -445,7 +475,7 @@ def compute_user_skill(
         row = {"username": username, "community": community,
                "n_votes": len(grp)}
 
-        feat = float(skill_feat.get(username, np.nan)) if use_meta else np.nan
+        feat = float(skill_feat.get((username, community), np.nan)) if use_meta else np.nan
 
         skill_vals = []
         for cat in CATEGORIES:
@@ -479,7 +509,7 @@ def compute_user_skill(
 
 def estimate_user_skill(votes_dir: Path, scores_path: Path,
            out_path: Path, min_votes: int,
-           metadata_path: Path = METADATA_PATH,
+           causal_features: pd.DataFrame | Path = CAUSAL_FEATURES_PATH,
            alpha: float = 0.5) -> pd.DataFrame:
     """Estimate user-community skill from training votes."""
     print(f"\n=== STEP C: User skill extractor (alpha={alpha:.2f}) ===")
@@ -487,7 +517,7 @@ def estimate_user_skill(votes_dir: Path, scores_path: Path,
     votes  = load_votes(votes_dir)
     scores = pd.read_parquet(scores_path)
 
-    out_df = compute_user_skill(votes, scores, min_votes, metadata_path, alpha, verbose=True)
+    out_df = compute_user_skill(votes, scores, min_votes, causal_features, alpha, verbose=True)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
@@ -727,13 +757,14 @@ def evaluate_splits(
     scores_path:   Path,
     out_dir:       Path,
     min_votes:     int   = MIN_VOTES_SKILL,
-    metadata_path: Path  = METADATA_PATH,
+    causal_features_path: Path = CAUSAL_FEATURES_PATH,
     alpha:         float = 0.5,
 ) -> Dict[str, Dict]:
     """Evaluate splits and return its metrics."""
     print("\n=== STEP E: TFR benchmark on every prepared split ===")
 
     scores = pd.read_parquet(scores_path)
+    causal = load_causal_features(causal_features_path)
     splits = discover_splits(votes_dir)
 
     if not splits:
@@ -753,7 +784,7 @@ def evaluate_splits(
         test_votes  = _load_split_votes(split_path / "test_votes.parquet")
 
         skills = compute_user_skill(
-            train_votes, scores, min_votes, metadata_path, alpha, verbose=False
+            train_votes, scores, min_votes, causal, alpha, verbose=False
         )
         n_valid_skill = int(skills["skill_overall"].notna().sum()) if len(skills) else 0
         print(f"    Skill computed on TRAIN only: {len(skills):,} userxcommunity rows "
@@ -788,6 +819,8 @@ def evaluate_splits(
         metrics["n_val_items"]   = val_votes["item_id"].nunique()
         metrics["n_test_items"]  = n_test_items
         metrics["coverage_test"] = len(item_scores_test) / max(n_test_items, 1)
+        metrics["user_profile"] = "causal train-only activity/tenure/social metadata"
+        metrics["collection_time_karma_used"] = False
         if split_name == "splits_full":
             metrics["used_net_vote_fallback"] = True
             metrics["n_fallback_items"]        = n_fallback
@@ -836,6 +869,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--models",     default="external/normvio/normvio_redditmodels",
                    help="Dir with one sub-folder per category (finetuned_model.pt)")
     p.add_argument("--out_dir",    default="results/reddit/random/team-formation")
+    p.add_argument(
+        "--violation_scores",
+        default=str(DEFAULT_VIOLATION_SCORES),
+        help=(
+            "Shared NormVio score cache keyed by item_id. It is reused by every "
+            "split and is independent of out_dir."
+        ),
+    )
+    p.add_argument(
+        "--force-rescore",
+        action="store_true",
+        help="Recompute and overwrite the shared NormVio score cache.",
+    )
     p.add_argument("--batch_size",  type=int, default=32)
     p.add_argument("--device",      default="",
                    help="cuda | cpu (auto-detected if empty)")
@@ -843,8 +889,11 @@ def parse_args() -> argparse.Namespace:
                    help="Number of folds for the legacy random K-fold benchmark (step D)")
     p.add_argument("--min_votes",   type=int, default=MIN_VOTES_SKILL,
                    help="Min votes per userxcommunityxcategory to compute skill")
-    p.add_argument("--metadata_path", default="data/processed/user_metadata.csv",
-                   help="Path to user metadata CSV from Shayan")
+    p.add_argument(
+        "--causal_features",
+        default=str(CAUSAL_FEATURES_PATH),
+        help="Per-vote causal user feature parquet",
+    )
     p.add_argument("--alpha",         type=float, default=0.5,
                    help="Weight for moderator-agreement skill vs metadata skill (1.0=pure mod, 0.0=pure meta)")
 
@@ -873,22 +922,32 @@ def main():
     tasks_to_run = [task for task in args.tasks if task not in args.skip_tasks]
 
     # intermediate file paths
-    viol_scores_path = out_dir / "post_violation_scores.parquet"
+    viol_scores_path = Path(args.violation_scores)
     user_skill_path  = out_dir / "user_skill.parquet"
     per_split_dir    = Path("results/reddit")
 
     if "score" in tasks_to_run:
-        print("\nLoading BERT tokenizer ...")
-        tokenizer = BertTokenizer.from_pretrained(BERT_TYPE)
-        score_violations(Path(args.votes_dir), Path(args.docs),
-               Path(args.models), viol_scores_path,
-               tokenizer, device, args.batch_size,
-               max_posts=args.max_posts)
+        if viol_scores_path.exists() and not args.force_rescore:
+            print(f"\nReusing shared violation scores: {viol_scores_path}")
+        else:
+            print("\nLoading BERT tokenizer ...")
+            tokenizer = BertTokenizer.from_pretrained(BERT_TYPE)
+            score_violations(Path(args.votes_dir), Path(args.docs),
+                   Path(args.models), viol_scores_path,
+                   tokenizer, device, args.batch_size,
+                   max_posts=args.max_posts)
+
+    downstream_tasks = {"skill", "kfold", "splits"}.intersection(tasks_to_run)
+    if downstream_tasks and not viol_scores_path.exists():
+        raise FileNotFoundError(
+            f"Shared violation scores not found at {viol_scores_path}. "
+            "Run the 'score' task once or pass --violation_scores to an existing cache."
+        )
 
     if "skill" in tasks_to_run:
         estimate_user_skill(Path(args.votes_dir), viol_scores_path,
                user_skill_path, args.min_votes,
-               metadata_path=Path(args.metadata_path),
+               causal_features=Path(args.causal_features),
                alpha=args.alpha)
 
     if "kfold" in tasks_to_run:
@@ -898,7 +957,7 @@ def main():
     if "splits" in tasks_to_run:
         evaluate_splits(Path(args.votes_dir), viol_scores_path,
                             per_split_dir, args.min_votes,
-                            Path(args.metadata_path), args.alpha)
+                            Path(args.causal_features), args.alpha)
 
     print("\nDone.")
 

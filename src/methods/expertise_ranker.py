@@ -1,9 +1,17 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.metrics import ndcg_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.methods.var_core import calculate_var_scores, evaluate_fold, iterative_cleanup
 
 INPUT_FILE = "data/processed/final_intersection_dataset.csv"

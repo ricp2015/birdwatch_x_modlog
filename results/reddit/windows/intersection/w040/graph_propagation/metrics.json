@@ -1,0 +1,35 @@
+{
+  "train": {
+    "macro_f1": 0.6489317269076305,
+    "f1_pos": 0.8925301204819277,
+    "f1_neg": 0.4053333333333333,
+    "n_items": 1225,
+    "roc_auc": 0.6012470657276995
+  },
+  "val": {
+    "macro_f1": 0.7252525252525253,
+    "f1_pos": 0.9111111111111111,
+    "f1_neg": 0.5393939393939394,
+    "n_items": 1020,
+    "roc_auc": 0.6428560659173319
+  },
+  "test": {
+    "macro_f1": 0.6881205214538548,
+    "f1_pos": 0.9009324009324009,
+    "f1_neg": 0.47530864197530864,
+    "n_items": 1020,
+    "roc_auc": 0.6565708812260537
+  },
+  "selected_attention": {
+    "name": "skill_affinity",
+    "weights": {
+      "attention_graph": 1.0,
+      "attention_alignment": 1.0,
+      "attention_domain_affinity": 0.75,
+      "attention_local_experience": 0.5,
+      "attention_tenure": 0.25
+    },
+    "validation_auc": 0.6428560659173319
+  },
+  "n_graph_users": 1876
+}

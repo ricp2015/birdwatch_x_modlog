@@ -1,0 +1,36 @@
+{
+  "train": {
+    "macro_f1": 0.6160500826836759,
+    "f1_pos": 0.8387668320340185,
+    "f1_neg": 0.3933333333333333,
+    "n_items": 3572,
+    "roc_auc": 0.6854708571867676
+  },
+  "val": {
+    "macro_f1": 0.6951531146579532,
+    "f1_pos": 0.91324200913242,
+    "f1_neg": 0.47706422018348627,
+    "n_items": 766,
+    "roc_auc": 0.5404654654654655
+  },
+  "test": {
+    "macro_f1": 0.5691905297537574,
+    "f1_pos": 0.8728943338437979,
+    "f1_neg": 0.26548672566371684,
+    "n_items": 766,
+    "roc_auc": 0.47087505087505094
+  },
+  "selected_attention": {
+    "name": "full_social",
+    "weights": {
+      "attention_graph": 1.0,
+      "attention_alignment": 1.0,
+      "attention_domain_affinity": 0.75,
+      "attention_local_experience": 0.5,
+      "attention_tenure": 0.25,
+      "attention_social_core": 0.5
+    },
+    "validation_auc": 0.5404654654654655
+  },
+  "n_graph_users": 1848
+}

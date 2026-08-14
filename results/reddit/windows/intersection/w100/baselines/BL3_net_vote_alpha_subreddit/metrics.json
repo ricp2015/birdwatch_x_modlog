@@ -646,7 +646,7 @@
     53.631578947368425,
     97.94736842105263
   ],
-  "split": "windowed_folds_intersection/w100",
+  "split": "windows/intersection/w100",
   "baseline": "BL3_net_vote_alpha_subreddit",
   "alpha": 2.6842105263157894,
   "threshold": -2.7534418022528087,

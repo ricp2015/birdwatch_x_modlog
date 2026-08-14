@@ -1,0 +1,58 @@
+{
+  "train": {
+    "macro_f1": 0.6801286892865442,
+    "f1_pos": 0.9131419939577039,
+    "f1_neg": 0.44711538461538464,
+    "n_items": 3064,
+    "roc_auc": 0.6359059928298658,
+    "dr_action_diagnostics": {
+      "estimate_unbounded": 0.9671433657758067,
+      "standard_error": 0.025731534737264233,
+      "effective_sample_size": 2031.0984288180057,
+      "within_reward_bounds": true
+    }
+  },
+  "val": {
+    "macro_f1": 0.7491798710015865,
+    "f1_pos": 0.9215572341661824,
+    "f1_neg": 0.5768025078369906,
+    "n_items": 1020,
+    "roc_auc": 0.6635645415413378,
+    "dr_action_diagnostics": {
+      "estimate_unbounded": 0.9645188621016444,
+      "standard_error": 0.043951760525418146,
+      "effective_sample_size": 628.5321171965742,
+      "within_reward_bounds": true
+    }
+  },
+  "test": {
+    "macro_f1": 0.7208392069823941,
+    "f1_pos": 0.9157043879907621,
+    "f1_neg": 0.525974025974026,
+    "n_items": 1020,
+    "roc_auc": 0.6642758620689655,
+    "dr_action_diagnostics": {
+      "estimate_unbounded": 1.0246739925613093,
+      "standard_error": 0.04429636158669763,
+      "effective_sample_size": 691.8780241966871,
+      "within_reward_bounds": false
+    }
+  },
+  "dr_scope": "action-level majority policy; does not correct unobserved voter-set selection",
+  "policy_context": {
+    "shared_features": 12,
+    "user_features": 12,
+    "causal_metadata": true,
+    "within_case_updates": false,
+    "content_embeddings": {
+      "enabled": true,
+      "dimension": 8,
+      "coverage": {
+        "train": 1.0,
+        "val": 1.0,
+        "test": 1.0
+      },
+      "reducer_fit": "training items only"
+    }
+  }
+}
