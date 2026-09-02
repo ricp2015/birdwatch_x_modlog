@@ -1,0 +1,58 @@
+{
+  "layout": {
+    "datasets": {
+      "files": 3,
+      "bytes": 291120
+    },
+    "auxiliary": {
+      "files": 5,
+      "bytes": 353195444
+    },
+    "features": {
+      "files": 3,
+      "bytes": 6988750
+    },
+    "build_state": {
+      "files": 232,
+      "bytes": 4630988462
+    },
+    "legacy": {
+      "files": 18,
+      "bytes": 164529024
+    }
+  },
+  "checks": {
+    "active_source_literals_using_old_flat_paths": [],
+    "legacy_filtered_csv_core_equals_canonical_parquet": true,
+    "legacy_csv_split_union_equals_legacy_filtered_csv": true,
+    "legacy_users_csv_semantically_equals_legacy_users_parquet": true,
+    "legacy_score_csv_ids_are_subset_of_canonical_parquet": true,
+    "legacy_score_csv_items": 5175,
+    "canonical_score_parquet_items": 73872,
+    "canonical_score_items_missing_from_legacy_csv": 68697,
+    "shared_score_values_equal": true,
+    "legacy_user_document_rows": 309851,
+    "canonical_user_document_rows": 1748516,
+    "legacy_user_document_users": 1967,
+    "canonical_user_document_users": 14912,
+    "legacy_user_document_key_overlap": 56423,
+    "author_index_manifest_valid": true,
+    "author_index_manifest_complete": true,
+    "raw_contribution_files": 14917,
+    "snapshot_completed_users": 14917
+  },
+  "removal_candidates": [
+    {
+      "path": "data\\interim\\reddit\\legacy",
+      "bytes_reclaimable": 164529024,
+      "recommendation": "remove",
+      "reason": "No active pipeline reads this tree; canonical replacements are larger, equivalent, or both."
+    },
+    {
+      "path": "data\\interim\\reddit\\build_state",
+      "bytes_reclaimable": 4630988462,
+      "recommendation": "optional",
+      "reason": "No model reads build state after causal_user_vote_features.parquet exists. It is reproducible from raw JSONL, but rebuilding is expensive."
+    }
+  ]
+}

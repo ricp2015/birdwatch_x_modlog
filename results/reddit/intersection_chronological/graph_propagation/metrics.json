@@ -1,36 +1,130 @@
 {
-  "train": {
-    "macro_f1": 0.6160500826836759,
-    "f1_pos": 0.8387668320340185,
-    "f1_neg": 0.3933333333333333,
-    "n_items": 3572,
-    "roc_auc": 0.6854708571867676
+  "policy_train": {
+    "macro_f1": 0.5627074440221571,
+    "f1_pos": 0.9041382922996333,
+    "f1_neg": 0.22127659574468084,
+    "n_items": 1072,
+    "roc_auc": 0.7109923245614036
   },
   "val": {
-    "macro_f1": 0.6951531146579532,
-    "f1_pos": 0.91324200913242,
-    "f1_neg": 0.47706422018348627,
+    "macro_f1": 0.6947326471437013,
+    "f1_pos": 0.9366351056081573,
+    "f1_neg": 0.4528301886792453,
     "n_items": 766,
-    "roc_auc": 0.5404654654654655
+    "roc_auc": 0.7033183183183184
   },
   "test": {
-    "macro_f1": 0.5691905297537574,
-    "f1_pos": 0.8728943338437979,
-    "f1_neg": 0.26548672566371684,
+    "macro_f1": 0.5937600064040987,
+    "f1_pos": 0.9236311239193083,
+    "f1_neg": 0.2638888888888889,
     "n_items": 766,
-    "roc_auc": 0.47087505087505094
+    "roc_auc": 0.7183638583638584
   },
-  "selected_attention": {
-    "name": "full_social",
-    "weights": {
-      "attention_graph": 1.0,
-      "attention_alignment": 1.0,
-      "attention_domain_affinity": 0.75,
-      "attention_local_experience": 0.5,
-      "attention_tenure": 0.25,
-      "attention_social_core": 0.5
+  "coverage": {
+    "policy_train_eligible_items": 1072,
+    "policy_train_total_items": 1072,
+    "val_eligible_items": 766,
+    "val_total_items": 766,
+    "test_eligible_items": 766,
+    "test_total_items": 766
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.6838469431014562,
+      "accuracy": 0.829257689381589,
+      "n_votes": 9201,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8095396840611322
     },
-    "validation_auc": 0.5404654654654655
+    "test": {
+      "macro_f1": 0.743597277687715,
+      "accuracy": 0.8430271726925668,
+      "n_votes": 8906,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8410843322216343
+    }
   },
-  "n_graph_users": 1848
+  "graph_attention": {
+    "selected": {
+      "name": "content_social",
+      "weights": {
+        "attention_graph": 1.0,
+        "attention_alignment": 1.0,
+        "attention_case_affinity": 1.0,
+        "attention_domain_affinity": 0.5,
+        "attention_local_experience": 0.5,
+        "attention_social_core": 0.5
+      },
+      "policy_train_auc": 0.7109923245614036
+    },
+    "candidates": [
+      {
+        "name": "graph_only",
+        "weights": {
+          "attention_graph": 1.0
+        },
+        "policy_train_auc": 0.43162006578947365
+      },
+      {
+        "name": "skill_affinity",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25
+        },
+        "policy_train_auc": 0.6962822094298247
+      },
+      {
+        "name": "full_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.6838438870614034
+      },
+      {
+        "name": "content_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_case_affinity": 1.0,
+          "attention_domain_affinity": 0.5,
+          "attention_local_experience": 0.5,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.7109923245614036
+      }
+    ],
+    "n_graph_users": 1760,
+    "graph_fit": "simulator-prefix co-votes and tenure similarity with a per-case content-affinity restart vector",
+    "topic_conditioned_restart": true,
+    "aggregation": "softmax attention over continuous selected-panel scores"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 2500,
+    "simulator_votes": 27687,
+    "policy_items": 1072,
+    "policy_votes_ignored_except_case_labels": 12301,
+    "cut_timestamp": 1577960307.0,
+    "policy_suffix_use": "attention-family selection only",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2515,
+    "n_candidate_communities": 13,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  }
 }

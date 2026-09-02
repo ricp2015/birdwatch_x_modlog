@@ -1,0 +1,46 @@
+{
+  "BL_CN": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Iterative density filter: post needs >=5 votes, user needs >=10 votes."
+  },
+  "BL4_BL5": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "BL/CN density filter plus presence in moderated_posts_scores.parquet; 0 posts lack an external-score row."
+  },
+  "NVSE": {
+    "n_items_kept": 5175,
+    "n_items_dropped": 0,
+    "n_users_kept": 1920,
+    "n_users_dropped": 47,
+    "reason": "No item filter; a user needs >=5 votes in at least one community to obtain a skill entry."
+  },
+  "SEF": {
+    "n_items_kept": 73855,
+    "n_items_dropped": -68680,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Post requires non-null text in post_texts.parquet; user requires >=10 votes globally."
+  },
+  "VAR": {
+    "n_items_kept": 5151,
+    "n_items_dropped": 24,
+    "n_users_kept": 1967,
+    "n_users_dropped": 0,
+    "reason": "Iterative 5-vote item/user density filter followed by community >=40 unique users."
+  },
+  "__intersection__": {
+    "n_votes": 58095,
+    "n_items_kept": 5104,
+    "n_items_dropped": 71,
+    "n_users_kept": 1902,
+    "n_users_dropped": 65,
+    "n_communities": 13,
+    "reason": "Intersection of all final-method populations followed by density filtering."
+  }
+}

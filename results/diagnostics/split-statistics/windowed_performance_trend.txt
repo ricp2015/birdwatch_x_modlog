@@ -1,6 +1,6 @@
-WINDOWED PERFORMANCE TREND — macro_f1
+WINDOWED PERFORMANCE TREND ï¿½ macro_f1
 ============================================================
-split                               TeamFormation   Net           
+split                               NVSE   Net           
 ----------------------------------  --------------  --------------
 windowed_folds_full/w020            0.6386          0.5682        
 windowed_folds_full/w040            0.6579          0.5682        
@@ -13,9 +13,9 @@ windowed_folds_intersection/w060    0.6686          0.5925
 windowed_folds_intersection/w080    0.6845          0.5925        
 windowed_folds_intersection/w100    0.6949          0.5925        
 
-WINDOWED PERFORMANCE TREND — f1_pos
+WINDOWED PERFORMANCE TREND ï¿½ f1_pos
 ============================================================
-split                               TeamFormation   Net           
+split                               NVSE   Net           
 ----------------------------------  --------------  --------------
 windowed_folds_full/w020            0.8795          0.8648        
 windowed_folds_full/w040            0.8894          0.8648        
@@ -28,9 +28,9 @@ windowed_folds_intersection/w060    0.8768          0.8777
 windowed_folds_intersection/w080    0.8921          0.8777        
 windowed_folds_intersection/w100    0.8986          0.8777        
 
-WINDOWED PERFORMANCE TREND — f1_neg
+WINDOWED PERFORMANCE TREND ï¿½ f1_neg
 ============================================================
-split                               TeamFormation   Net           
+split                               NVSE   Net           
 ----------------------------------  --------------  --------------
 windowed_folds_full/w020            0.3977          0.2716        
 windowed_folds_full/w040            0.4264          0.2716        
@@ -43,9 +43,9 @@ windowed_folds_intersection/w060    0.4603          0.3072
 windowed_folds_intersection/w080    0.4770          0.3072        
 windowed_folds_intersection/w100    0.4911          0.3072        
 
-WINDOWED PERFORMANCE TREND — roc_auc
+WINDOWED PERFORMANCE TREND ï¿½ roc_auc
 ============================================================
-split                               TeamFormation   Net           
+split                               NVSE   Net           
 ----------------------------------  --------------  --------------
 windowed_folds_full/w020            0.7378          0.5814        
 windowed_folds_full/w040            0.7546          0.5814        

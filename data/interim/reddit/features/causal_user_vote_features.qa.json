@@ -1,0 +1,25 @@
+{
+  "n_votes": 189630,
+  "n_users": 14925,
+  "coverage": {
+    "global_snapshot": 0.9954648526077098,
+    "subreddit_snapshot": 0.7005906238464378,
+    "interaction_state": 0.9546748932130992,
+    "local_interaction_state": 0.36074460792068763,
+    "account_created": 0.7222274956494226
+  },
+  "anti_leakage_violations": {
+    "global_snapshot_not_prior": 0,
+    "subreddit_snapshot_not_prior": 0,
+    "interaction_not_prior": 0,
+    "local_interaction_not_prior": 0
+  },
+  "include_collection_score": false,
+  "timestamp_audit": {
+    "requested_semantics": "auto",
+    "share_items_with_one_timestamp": 0.9804932856833442,
+    "post_creation_match_rate": 0.9731208034221395,
+    "n_rows_compared_to_post_creation": 189589,
+    "resolved_semantics": "post_creation_proxy"
+  }
+}

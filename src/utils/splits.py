@@ -12,7 +12,7 @@ def discover_splits(votes_dir: Path) -> dict[str, Path]:
         return {votes_dir.name: votes_dir}
 
     found: dict[str, Path] = {}
-    for name in ("random", "full", "intersection", "intersection_chronological"):
+    for name in ("full", "intersection", "intersection_chronological"):
         split_dir = votes_dir / name
         if (split_dir / "train_votes.parquet").exists():
             found[name] = split_dir

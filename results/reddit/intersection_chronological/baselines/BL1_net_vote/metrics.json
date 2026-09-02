@@ -12,6 +12,11 @@
   "polarity_correct": false,
   "n_items": 766,
   "n_items_missing_score": 0,
+  "score_coverage": 1.0,
+  "auc_observed_only": false,
+  "n_auc_items": 766,
+  "auc_population": "all_test_items",
+  "prediction_population": "all_test_items",
   "mean_score_approve": 7.1792592592592595,
   "mean_score_remove": 9.406593406593407,
   "pr_curve_precision": [

@@ -1,57 +1,65 @@
 {
   "none": {
     "train": {
-      "macro_f1": 0.8463149299667106,
-      "f1_pos": 0.9550819672131148,
-      "f1_neg": 0.7375478927203065,
+      "macro_f1": 0.7519673151392219,
+      "f1_pos": 0.919451871657754,
+      "f1_neg": 0.5844827586206897,
       "n_items": 3572,
-      "roc_auc": 0.9377691115636326
+      "roc_auc": 0.8474206272972938
     },
     "val": {
-      "macro_f1": 0.6989524183821436,
-      "f1_pos": 0.9111791730474732,
-      "f1_neg": 0.48672566371681414,
+      "macro_f1": 0.7109860726061779,
+      "f1_pos": 0.9113338473400154,
+      "f1_neg": 0.5106382978723404,
       "n_items": 766,
-      "roc_auc": 0.8036561561561562
+      "roc_auc": 0.8275825825825825
     },
     "test": {
-      "macro_f1": 0.6989779062205483,
-      "f1_pos": 0.913937547600914,
-      "f1_neg": 0.4840182648401826,
+      "macro_f1": 0.6864949040198848,
+      "f1_pos": 0.9054573405073021,
+      "f1_neg": 0.4675324675324675,
       "n_items": 766,
-      "roc_auc": 0.826975986975987
+      "roc_auc": 0.83003663003663
     },
     "metadata_mode": "none",
+    "model_name": "logreg_l2",
+    "model_selection": "external_validation",
+    "model_selection_macro_f1": 0.7109860726061779,
+    "train_global_reliability_fallback": 0.5,
     "n_model_features": 20,
-    "validation_threshold": 0.6863052164276054,
-    "validation_threshold_macro_f1": 0.6989524183821436
+    "validation_threshold": 0.3963252817673911,
+    "validation_threshold_macro_f1": 0.7109860726061779
   },
   "global": {
     "train": {
-      "macro_f1": 0.8625115471824875,
-      "f1_pos": 0.960431654676259,
-      "f1_neg": 0.7645914396887159,
+      "macro_f1": 0.7552516567360825,
+      "f1_pos": 0.9265480895915679,
+      "f1_neg": 0.5839552238805971,
       "n_items": 3572,
-      "roc_auc": 0.9535242248434318
+      "roc_auc": 0.8580999218760006
     },
     "val": {
-      "macro_f1": 0.694510819841347,
-      "f1_pos": 0.908672294704528,
-      "f1_neg": 0.48034934497816595,
+      "macro_f1": 0.7149613802265369,
+      "f1_pos": 0.9185072353389185,
+      "f1_neg": 0.5114155251141552,
       "n_items": 766,
-      "roc_auc": 0.8016666666666666
+      "roc_auc": 0.8435285285285286
     },
     "test": {
-      "macro_f1": 0.7049996561446943,
-      "f1_pos": 0.9145038167938931,
-      "f1_neg": 0.4954954954954955,
+      "macro_f1": 0.722267699817965,
+      "f1_pos": 0.927122464312547,
+      "f1_neg": 0.5174129353233831,
       "n_items": 766,
-      "roc_auc": 0.8270004070004071
+      "roc_auc": 0.8443467643467643
     },
     "metadata_mode": "global",
+    "model_name": "logreg_l2",
+    "model_selection": "external_validation",
+    "model_selection_macro_f1": 0.7149613802265369,
+    "train_global_reliability_fallback": 0.5,
     "n_model_features": 40,
-    "validation_threshold": 0.6677777468222583,
-    "validation_threshold_macro_f1": 0.694510819841347
+    "validation_threshold": 0.32091757623502204,
+    "validation_threshold_macro_f1": 0.7149613802265369
   },
   "subreddit": {
     "train": {
@@ -76,6 +84,10 @@
       "roc_auc": 0.8383068783068783
     },
     "metadata_mode": "subreddit",
+    "model_name": "gbc",
+    "model_selection": "external_validation",
+    "model_selection_macro_f1": 0.7240022172949002,
+    "train_global_reliability_fallback": 0.5,
     "n_model_features": 52,
     "validation_threshold": 0.7147600826169016,
     "validation_threshold_macro_f1": 0.7240022172949002
@@ -103,6 +115,10 @@
       "roc_auc": 0.8421408221408221
     },
     "metadata_mode": "full",
+    "model_name": "gbc",
+    "model_selection": "external_validation",
+    "model_selection_macro_f1": 0.7251350894967916,
+    "train_global_reliability_fallback": 0.5,
     "n_model_features": 68,
     "validation_threshold": 0.6831313131313131,
     "validation_threshold_macro_f1": 0.7251350894967916

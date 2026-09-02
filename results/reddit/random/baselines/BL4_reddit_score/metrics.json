@@ -14,6 +14,9 @@
   "n_items_missing_score": 0,
   "score_coverage": 1.0,
   "auc_observed_only": true,
+  "n_auc_items": 777,
+  "auc_population": "items_with_observed_external_score",
+  "prediction_population": "all_test_items",
   "mean_score_approve": -7.743353528220911,
   "mean_score_remove": -7.918344313419426,
   "pr_curve_precision": [
@@ -2213,5 +2216,8 @@
   "validation_roc_auc_raw": 0.39627663411185965,
   "roc_auc_raw": 0.40279161052199897,
   "n_train_items": 3622,
-  "n_val_items": 776
+  "n_val_items": 776,
+  "n_fallback_items": 0,
+  "used_net_vote_fallback": false,
+  "prediction_score_policy": "external_score_when_observed_else_net_vote"
 }

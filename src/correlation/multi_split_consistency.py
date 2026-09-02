@@ -7,38 +7,59 @@ from pathlib import Path
 from typing import Dict
 
 import pandas as pd
-
-from t1 import (
-    METHOD_LOADERS,
-    build_user_characteristics,
-    analyze_method,
-    apply_fdr_correction,
-)
-
+try:
+    from .t1 import (
+        METHOD_LOADERS,
+        SEF_MODES,
+        analyze_method,
+        apply_fdr_correction,
+        build_user_characteristics,
+        read_timestamp_semantics,
+        resolve_method_result_dir,
+    )
+except ImportError:  # Direct script execution.
+    from t1 import (
+        METHOD_LOADERS,
+        SEF_MODES,
+        analyze_method,
+        apply_fdr_correction,
+        build_user_characteristics,
+        read_timestamp_semantics,
+        resolve_method_result_dir,
+    )
 
 
 def run_one_split(
     split: str,
     characteristics: pd.DataFrame,
+    votes_dir: Path,
     min_n_signal: int = 0,
     exclude_suspended: bool = False,
+    sef_mode: str = "auto",
+    timestamp_semantics: list[str] | None = None,
 ) -> Dict:
     """Run the one split workflow."""
     results = {}
     for method_name, (base_dir, loader, cluster_col) in METHOD_LOADERS.items():
-        split_dir = Path(base_dir) / split
+        split_dir, selected_sef_mode = resolve_method_result_dir(
+            method_name, base_dir, split, sef_mode
+        )
         if not split_dir.exists():
-            print(f"  [{split}/{method_name}] split directory not found; skipped")
+            print(f"Skipped {split}/{method_name}: split directory missing")
             continue
-        user_scores = loader(split_dir)
+        user_scores = loader(split_dir, votes_dir / split / "test_votes.parquet")
         if user_scores is None or user_scores.empty:
-            print(f"  [{split}/{method_name}] no usable detail file; skipped")
+            print(f"Skipped {split}/{method_name}: no usable detail file")
             continue
         result = analyze_method(
             method_name, user_scores, characteristics,
             min_n_signal=min_n_signal, cluster_col=cluster_col,
             exclude_suspended=exclude_suspended,
         )
+        result["timestamp_semantics"] = timestamp_semantics or ["unknown_legacy_artifact"]
+        result["temporal_estimand"] = "user state at the dataset reference timestamp"
+        if selected_sef_mode is not None:
+            result["selected_sef_mode"] = selected_sef_mode
         results[method_name] = result
     apply_fdr_correction(results)
     return results
@@ -96,7 +117,7 @@ def summarize_consistency(table: pd.DataFrame) -> pd.DataFrame:
 def print_summary(summary: pd.DataFrame) -> None:
     """Print summary to the console."""
     if summary.empty:
-        print("  [no results to summarize]")
+        print("No consistency results")
         return
     print(f"\n{'method':6s} {'characteristic':20s} {'tested':>7s} {'signif':>7s}  "
           f"{'direction':17s} {'consistent':>10s}  {'rho range':16s}")
@@ -114,42 +135,48 @@ def main() -> None:
     ap.add_argument("--splits", nargs="+", required=True,
                      help="Splits to compare")
     ap.add_argument("--user-metadata", type=str, default="data/processed/user_metadata.csv")
-    ap.add_argument("--raw-csv", type=str, default="data/processed/final_intersection_dataset.csv")
+    ap.add_argument("--votes-dir", type=str, default="data/splits/reddit")
+    ap.add_argument("--causal-features", type=str,
+                    default="data/interim/reddit/features/causal_user_vote_features.parquet")
     ap.add_argument("--output-dir", type=str, default="results/t1_analysis")
     ap.add_argument("--min-n-signal", type=int, default=0)
     ap.add_argument("--exclude-suspended", action="store_true")
     ap.add_argument("--cache-characteristics", action="store_true")
+    ap.add_argument("--sef-mode", choices=["auto", *SEF_MODES], default="auto")
     args = ap.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"T1 multi-split consistency check: {args.splits}")
-
-    cache_path = output_dir / "user_characteristics_cache.parquet" if args.cache_characteristics else None
-    characteristics = build_user_characteristics(Path(args.user_metadata), Path(args.raw_csv), cache_path)
-
     per_split_results = {}
+    timestamp_semantics = read_timestamp_semantics(Path(args.causal_features))
     for split in args.splits:
-        print(f"\nSplit: {split}")
+        cache_name = f"user_characteristics_{split.replace('/', '_')}.parquet"
+        cache_path = output_dir / cache_name if args.cache_characteristics else None
+        characteristics = build_user_characteristics(
+            Path(args.user_metadata),
+            Path(args.causal_features),
+            Path(args.votes_dir) / split / "train_votes.parquet",
+            cache_path,
+        )
         per_split_results[split] = run_one_split(
-            split, characteristics,
-            min_n_signal=args.min_n_signal, exclude_suspended=args.exclude_suspended,
+            split, characteristics, Path(args.votes_dir),
+            min_n_signal=args.min_n_signal,
+            exclude_suspended=args.exclude_suspended,
+            sef_mode=args.sef_mode,
+            timestamp_semantics=timestamp_semantics,
         )
 
     table = build_consistency_table(per_split_results)
     summary = summarize_consistency(table)
 
-    print()
-    print("Consistency by method and characteristic")
     print_summary(summary)
 
     table_path = output_dir / "t1_multi_split_raw.csv"
     summary_path = output_dir / "t1_multi_split_summary.csv"
     table.to_csv(table_path, index=False)
     summary.to_csv(summary_path, index=False)
-    print(f"\nRaw details saved to {table_path}")
-    print(f"Summary saved to {summary_path}")
+    print(f"T2 consistency: {summary_path} | details={table_path}")
 
 
 if __name__ == "__main__":

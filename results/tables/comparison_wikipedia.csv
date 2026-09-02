@@ -1,2 +1,0 @@
-run,label,macro_f1,roc_auc,f1_pos,f1_neg,macro_precision,macro_recall,precision_pos,recall_pos,precision_neg,recall_neg,alpha,threshold,polarity
-wikipedia,CN MF  Wikipedia,0.8761,0.9426,0.835,0.9172,0.8721,0.8808,0.8162,0.8548,0.9281,0.9067,—,-0.017,✓

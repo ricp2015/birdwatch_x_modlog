@@ -465,8 +465,8 @@
       }
     }
   },
-  "TFR": {
-    "method": "TFR",
+  "NVSE": {
+    "method": "NVSE",
     "min_n_signal": 0,
     "clustered": true,
     "exclude_suspended": false,

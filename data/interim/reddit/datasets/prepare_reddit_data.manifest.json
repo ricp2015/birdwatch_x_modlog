@@ -1,0 +1,24 @@
+{
+    "pipeline":  "prepare_reddit_data",
+    "network_access":  false,
+    "input":  "data\\processed\\final_intersection_dataset.csv",
+    "optional_inputs":  {
+                            "moderated_posts_scores":  {
+                                                           "path":  "data\\interim\\reddit\\auxiliary\\moderated_posts_scores.parquet",
+                                                           "available":  true
+                                                       },
+                            "post_texts":  {
+                                               "path":  "data\\interim\\reddit\\auxiliary\\post_texts.parquet",
+                                               "available":  true
+                                           }
+                        },
+    "populations":  {
+                        "cleaned":  189630,
+                        "density_filtered":  59098,
+                        "intersection":  58095
+                    },
+    "outputs":  {
+                    "filtered_votes":  "data\\interim\\reddit\\datasets\\filtered_votes.parquet",
+                    "splits_root":  "data\\splits\\reddit"
+                }
+}

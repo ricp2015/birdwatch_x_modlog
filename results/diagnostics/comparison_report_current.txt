@@ -1,294 +1,294 @@
 
 === full ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.738*          0.839*          0.856*          0.619
-  VirtualEnsembles             0.670           0.735           0.802           0.538
-  SubAdj                       0.649           0.618           0.802           0.497
-  BoC[val:none]                0.631           0.708           0.773           0.489
-  TeamFormation                0.627           0.640           0.810           0.443
-  GraphPropagation             0.614           0.592           0.806           0.421
-  KExpertsCausal               0.612           0.645           0.742           0.482
-  VAR                          0.612           0.637           0.747           0.476
-  BanditDR                     0.607           0.593           0.800           0.414
-  CN                           0.590           0.580           0.792           0.388
-  Net                          0.588           0.618           0.787           0.389
-  WNet                         0.588           0.618           0.787           0.389
-  RedditScore+Sub              0.586           0.650           0.776           0.397
-  RedditScore                  0.577           0.650           0.767           0.387
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.161           0.259           0.114           0.232
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:global]       *          0.731*          0.844*          0.847*          0.615      100.0%          3  all_test_items
+  VirtualEnsembles                 0.670           0.734           0.803           0.538      100.0%          0  all_test_items
+  SubAdj                           0.649           0.618           0.802           0.497      100.0%          0  all_test_items
+  BoC[val:none]                    0.631           0.708           0.773           0.489      100.0%          0  all_test_items
+  GraphPropagation                 0.614           0.592           0.806           0.421      100.0%          0  all_test_items
+  RoleNSGA2                        0.612           0.594           0.804           0.419      100.0%          0  all_test_items
+  NVSE                    0.609           0.617           0.787           0.430      100.0%        688  all_test_items
+  BanditDR                         0.607           0.593           0.800           0.414      100.0%          0  all_test_items
+  CN                               0.590           0.580           0.792           0.388      100.0%          0  all_test_items
+  WNet                             0.588           0.618           0.787           0.389      100.0%          0  all_test_items
+  Net                              0.588           0.618           0.787           0.389      100.0%          0  all_test_items
+  RedditScore+Sub                  0.586           0.650           0.776           0.397        7.4%      10261  items_with_observed_external_score
+  VAR                              0.586           0.594           0.781           0.390      100.0%       8354  all_test_items
+  RedditScore                      0.577           0.650           0.767           0.387        7.4%      10261  items_with_observed_external_score
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.154           0.264           0.090           0.228
 
 === intersection ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  BoC[val:subreddit]*          0.737           0.825*          0.936*          0.538
-  SEF                          0.701           0.827           0.919           0.483
-  VirtualEnsembles             0.674*          0.845           0.898           0.450
-  SubAdj                       0.647           0.619           0.898           0.396
-  GraphPropagation             0.639           0.668           0.891           0.388
-  TeamFormation                0.629           0.739           0.915           0.343
-  BanditDR                     0.621           0.660           0.895           0.347
-  VAR                          0.621           0.724           0.810           0.431
-  KExpertsCausal               0.614           0.708           0.794           0.433
-  RedditScore                  0.578           0.663           0.862           0.295
-  RedditScore+Sub              0.555           0.663           0.873           0.237
-  WNet                         0.541           0.619           0.896           0.185
-  CN                           0.535           0.561           0.875           0.194
-  Net                          0.529           0.610           0.904           0.154
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.208           0.284           0.142           0.384
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  BoC[val:subreddit]    *          0.737           0.825*          0.936*          0.538      100.0%          0  all_test_items
+  SEF[val:subreddit]               0.720           0.826           0.927           0.513      100.0%          0  all_test_items
+  VirtualEnsembles                 0.678*          0.845           0.901           0.456      100.0%          0  all_test_items
+  RoleNSGA2                        0.649           0.605           0.924           0.373      100.0%          0  all_test_items
+  SubAdj                           0.647           0.619           0.898           0.396      100.0%          0  all_test_items
+  GraphPropagation                 0.639           0.668           0.891           0.388      100.0%          0  all_test_items
+  BanditDR                         0.621           0.660           0.895           0.347      100.0%          0  all_test_items
+  NVSE                    0.613           0.726           0.893           0.332      100.0%          0  all_test_items
+  RedditScore                      0.578           0.663           0.862           0.295      100.0%          0  items_with_observed_external_score
+  VAR                              0.565           0.633           0.875           0.255      100.0%        507  all_test_items
+  RedditScore+Sub                  0.555           0.663           0.873           0.237      100.0%          0  items_with_observed_external_score
+  WNet                             0.541           0.619           0.896           0.185      100.0%          0  all_test_items
+  CN                               0.535           0.561           0.875           0.194      100.0%          0  all_test_items
+  Net                              0.529           0.610           0.904           0.154      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.208           0.285           0.074           0.384
 
 === intersection_chronological ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  VirtualEnsembles  *          0.731           0.840*          0.934*          0.529
-  BoC[val:full]                0.717*          0.842           0.927           0.508
-  SEF                          0.697           0.821           0.906           0.487
-  SubAdj                       0.674           0.421           0.903           0.445
-  RedditScore+Sub              0.671           0.719           0.914           0.428
-  TeamFormation                0.653           0.793           0.891           0.415
-  BanditDR                     0.634           0.492           0.916           0.352
-  RedditScore                  0.629           0.719           0.884           0.375
-  GraphPropagation             0.569           0.471           0.873           0.265
-  VAR                          0.525           0.614           0.779           0.271
-  KExpertsCausal               0.474           0.484           0.905           0.043
-  Net                          0.472           0.442           0.863           0.080
-  WNet                         0.465           0.421           0.874           0.056
-  CN                           0.461           0.309           0.894           0.027
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.271           0.533           0.154           0.502
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  BoC[val:full]         *          0.717*          0.842           0.927*          0.508      100.0%          0  all_test_items
+  VirtualEnsembles                 0.712           0.838           0.926           0.497      100.0%          0  all_test_items
+  SEF[val:subreddit]               0.682           0.809           0.908           0.457      100.0%          0  all_test_items
+  SubAdj                           0.674           0.421           0.903           0.445      100.0%          0  all_test_items
+  NVSE                    0.672           0.803           0.884           0.459      100.0%          0  all_test_items
+  RedditScore+Sub                  0.671           0.719           0.914           0.428      100.0%          0  items_with_observed_external_score
+  RoleNSGA2                        0.662           0.452*          0.928           0.395      100.0%          0  all_test_items
+  BanditDR                         0.634           0.492           0.916           0.352      100.0%          0  all_test_items
+  RedditScore                      0.629           0.719           0.884           0.375      100.0%          0  items_with_observed_external_score
+  GraphPropagation                 0.569           0.471           0.873           0.265      100.0%          0  all_test_items
+  VAR                              0.530           0.483           0.882           0.177      100.0%        512  all_test_items
+  Net                              0.472           0.442           0.863           0.080      100.0%          0  all_test_items
+  WNet                             0.465           0.421           0.874           0.056      100.0%          0  all_test_items
+  CN                               0.461           0.309           0.894           0.027      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.257           0.533           0.066           0.481
 
 === random ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.748*          0.859*          0.928*          0.568
-  BoC[val:full]                0.741           0.848           0.927           0.555
-  TeamFormation                0.694           0.812           0.905           0.483
-  VirtualEnsembles             0.680           0.840           0.898           0.462
-  SubAdj                       0.670           0.593           0.911           0.429
-  BanditDR                     0.661           0.653           0.900           0.421
-  GraphPropagation             0.631           0.635           0.894           0.368
-  VAR                          0.620           0.717           0.812           0.427
-  KExpertsCausal               0.559           0.556           0.894           0.225
-  WNet                         0.546           0.593           0.886           0.205
-  Net                          0.543           0.573           0.895           0.191
-  CN                           0.534           0.526           0.857           0.210
-  RedditScore                  0.532           0.597           0.886           0.179
-  RedditScore+Sub              0.498           0.597           0.903           0.093
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.250           0.333           0.116           0.474
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:global]       *          0.767*          0.865*          0.936*          0.598      100.0%          0  all_test_items
+  BoC[val:full]                    0.741           0.848           0.927           0.555      100.0%          0  all_test_items
+  VirtualEnsembles                 0.672           0.838           0.893           0.451      100.0%          0  all_test_items
+  SubAdj                           0.670           0.593           0.911           0.429      100.0%          0  all_test_items
+  BanditDR                         0.661           0.653           0.900           0.421      100.0%          0  all_test_items
+  NVSE                    0.650           0.779           0.870           0.431      100.0%          0  all_test_items
+  RoleNSGA2                        0.644           0.603           0.914           0.374      100.0%          0  all_test_items
+  GraphPropagation                 0.631           0.635           0.894           0.368      100.0%          0  all_test_items
+  VAR                              0.546           0.608           0.898           0.194      100.0%          0  all_test_items
+  WNet                             0.546           0.593           0.886           0.205      100.0%          0  all_test_items
+  Net                              0.543           0.573           0.895           0.191      100.0%          0  all_test_items
+  CN                               0.534           0.526           0.857           0.210      100.0%          0  all_test_items
+  RedditScore                      0.532           0.597           0.886           0.179      100.0%          0  items_with_observed_external_score
+  RedditScore+Sub                  0.498           0.597           0.903           0.093      100.0%          0  items_with_observed_external_score
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.269           0.339           0.079           0.505
 
 === windows/full/w020 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.701*          0.837           0.886*          0.516
-  BoC[val:none]                0.690           0.815           0.907           0.472
-  VirtualEnsembles             0.686           0.825           0.901           0.471
-  SubAdj                       0.684           0.602           0.897           0.472
-  BanditDR                     0.682           0.627           0.906           0.458
-  GraphPropagation             0.672           0.636           0.901           0.442
-  KExpertsCausal               0.614           0.631           0.852           0.376
-  RedditScore+Sub              0.606           0.683*          0.907           0.305
-  VAR                          0.601           0.607           0.856           0.346
-  TeamFormation                0.597           0.703           0.833           0.361
-  RedditScore                  0.589           0.683           0.865           0.313
-  Net                          0.568           0.581           0.865           0.272
-  WNet                         0.543           0.602           0.816           0.269
-  CN                           0.541           0.518           0.860           0.222
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.160           0.318           0.091           0.294
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:full]         *          0.715*          0.845*          0.915*          0.515      100.0%          0  all_test_items
+  BoC[val:none]                    0.690           0.815           0.907           0.472      100.0%          0  all_test_items
+  SubAdj                           0.684           0.602           0.897           0.472      100.0%          0  all_test_items
+  BanditDR                         0.682           0.627           0.906           0.458      100.0%          0  all_test_items
+  RoleNSGA2                        0.673           0.592           0.901           0.446      100.0%          0  all_test_items
+  GraphPropagation                 0.672           0.636           0.901           0.442      100.0%          0  all_test_items
+  VirtualEnsembles                 0.659           0.831           0.908           0.410      100.0%          0  all_test_items
+  RedditScore+Sub                  0.606           0.683           0.907           0.305      100.0%          0  items_with_observed_external_score
+  RedditScore                      0.589           0.683           0.865           0.313      100.0%          0  items_with_observed_external_score
+  Net                              0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  VAR                              0.567           0.591           0.864           0.270      100.0%        504  all_test_items
+  NVSE                    0.560           0.658           0.837           0.283      100.0%          0  all_test_items
+  WNet                             0.543           0.602           0.816           0.269      100.0%          0  all_test_items
+  CN                               0.541           0.518           0.860           0.222      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.174           0.327           0.099           0.292
 
 === windows/full/w040 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.760*          0.865*          0.927*          0.592
-  BoC[val:full]                0.729           0.850           0.924           0.534
-  VirtualEnsembles             0.719           0.854           0.919           0.519
-  GraphPropagation             0.677           0.636           0.908           0.446
-  BanditDR                     0.669           0.641           0.909           0.430
-  VAR                          0.645           0.679           0.869           0.420
-  SubAdj                       0.638           0.602           0.864           0.411
-  TeamFormation                0.632           0.737           0.897           0.367
-  KExpertsCausal               0.608           0.662           0.791           0.425
-  RedditScore+Sub              0.606           0.683           0.907           0.305
-  RedditScore                  0.589           0.683           0.865           0.313
-  Net                          0.568           0.581           0.865           0.272
-  WNet                         0.545           0.602           0.814           0.275
-  CN                           0.537           0.523           0.878           0.197
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.222           0.341           0.136           0.395
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:full]         *          0.755*          0.863*          0.925*          0.585      100.0%          0  all_test_items
+  BoC[val:full]                    0.729           0.850           0.924           0.534      100.0%          0  all_test_items
+  VirtualEnsembles                 0.718           0.856           0.913           0.523      100.0%          0  all_test_items
+  GraphPropagation                 0.677           0.636           0.908           0.446      100.0%          0  all_test_items
+  BanditDR                         0.669           0.641           0.909           0.430      100.0%          0  all_test_items
+  RoleNSGA2                        0.668           0.611           0.901           0.435      100.0%          0  all_test_items
+  SubAdj                           0.638           0.602           0.864           0.411      100.0%          0  all_test_items
+  RedditScore+Sub                  0.606           0.683           0.907           0.305      100.0%          0  items_with_observed_external_score
+  RedditScore                      0.589           0.683           0.865           0.313      100.0%          0  items_with_observed_external_score
+  NVSE                    0.580           0.708           0.848           0.311      100.0%          0  all_test_items
+  VAR                              0.577           0.608           0.865           0.290      100.0%        559  all_test_items
+  Net                              0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  WNet                             0.545           0.602           0.814           0.275      100.0%          0  all_test_items
+  CN                               0.537           0.523           0.878           0.197      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.217           0.340           0.110           0.388
 
 === windows/full/w060 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.744*          0.876*          0.924*          0.565
-  VirtualEnsembles             0.739           0.857           0.920           0.557
-  BoC[val:full]                0.703           0.851           0.893           0.513
-  GraphPropagation             0.685           0.641           0.901           0.469
-  SubAdj                       0.682           0.602           0.895           0.469
-  BanditDR                     0.667           0.644           0.899           0.435
-  TeamFormation                0.652           0.760           0.877           0.427
-  KExpertsCausal               0.620           0.669           0.778           0.462
-  VAR                          0.617           0.661           0.799           0.435
-  RedditScore+Sub              0.606           0.683           0.907           0.305
-  RedditScore                  0.589           0.683           0.865           0.313
-  Net                          0.568           0.581           0.865           0.272
-  WNet                         0.545           0.602           0.814           0.275
-  CN                           0.535           0.526           0.887           0.183
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.210           0.350           0.146           0.382
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:global]       *          0.751*          0.860*          0.926*          0.576      100.0%          0  all_test_items
+  VirtualEnsembles                 0.725           0.858           0.912           0.538      100.0%          0  all_test_items
+  BoC[val:full]                    0.703           0.851           0.893           0.513      100.0%          0  all_test_items
+  GraphPropagation                 0.685           0.641           0.901           0.469      100.0%          0  all_test_items
+  SubAdj                           0.682           0.602           0.895           0.469      100.0%          0  all_test_items
+  RoleNSGA2                        0.668           0.611           0.905           0.431      100.0%          0  all_test_items
+  BanditDR                         0.667           0.644           0.899           0.435      100.0%          0  all_test_items
+  NVSE                    0.622           0.735           0.853           0.390      100.0%          0  all_test_items
+  RedditScore+Sub                  0.606           0.683           0.907           0.305      100.0%          0  items_with_observed_external_score
+  RedditScore                      0.589           0.683           0.865           0.313      100.0%          0  items_with_observed_external_score
+  VAR                              0.574           0.607           0.856           0.292      100.0%        641  all_test_items
+  Net                              0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  WNet                             0.545           0.602           0.814           0.275      100.0%          0  all_test_items
+  CN                               0.535           0.526           0.887           0.183      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.216           0.334           0.111           0.394
 
 === windows/full/w080 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.772*          0.877*          0.932*          0.613
-  BoC[val:subreddit]           0.757           0.852           0.930           0.584
-  VirtualEnsembles             0.735           0.865           0.922           0.548
-  SubAdj                       0.702           0.581           0.915           0.488
-  BanditDR                     0.699           0.638           0.914           0.485
-  GraphPropagation             0.681           0.636           0.901           0.461
-  TeamFormation                0.679           0.779           0.892           0.466
-  KExpertsCausal               0.620           0.670           0.765           0.475
-  RedditScore+Sub              0.606           0.683           0.907           0.305
-  VAR                          0.597           0.660           0.755           0.439
-  RedditScore                  0.589           0.683           0.865           0.313
-  Net                          0.568           0.581           0.865           0.272
-  WNet                         0.568           0.581           0.865           0.272
-  CN                           0.547           0.532           0.889           0.205
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.226           0.345           0.176           0.408
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:none]         *          0.780*          0.881*          0.937*          0.624      100.0%          0  all_test_items
+  BoC[val:subreddit]               0.757           0.852           0.930           0.584      100.0%          0  all_test_items
+  VirtualEnsembles                 0.744           0.863           0.924           0.565      100.0%          0  all_test_items
+  SubAdj                           0.702           0.581           0.915           0.488      100.0%          0  all_test_items
+  BanditDR                         0.699           0.638           0.914           0.485      100.0%          0  all_test_items
+  GraphPropagation                 0.681           0.636           0.901           0.461      100.0%          0  all_test_items
+  RoleNSGA2                        0.669           0.604           0.896           0.442      100.0%          0  all_test_items
+  NVSE                    0.640           0.762           0.869           0.411      100.0%          0  all_test_items
+  RedditScore+Sub                  0.606           0.683           0.907           0.305      100.0%          0  items_with_observed_external_score
+  RedditScore                      0.589           0.683           0.865           0.313      100.0%          0  items_with_observed_external_score
+  VAR                              0.574           0.603           0.849           0.300      100.0%        668  all_test_items
+  Net                              0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  WNet                             0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  CN                               0.547           0.532           0.889           0.205      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.234           0.350           0.088           0.419
 
 === windows/full/w100 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.758*          0.874*          0.929*          0.588
-  BoC[val:full]                0.746           0.848           0.921           0.571
-  VirtualEnsembles             0.733           0.866           0.916           0.549
-  BanditDR                     0.700           0.649           0.916           0.484
-  SubAdj                       0.691           0.596           0.903           0.479
-  GraphPropagation             0.682           0.632           0.900           0.465
-  TeamFormation                0.675           0.791           0.895           0.455
-  RedditScore+Sub              0.606           0.683           0.907           0.305
-  KExpertsCausal               0.603           0.712           0.737           0.468
-  RedditScore                  0.589           0.683           0.865           0.313
-  VAR                          0.586           0.660           0.768           0.404
-  Net                          0.568           0.581           0.865           0.272
-  WNet                         0.557           0.596           0.830           0.283
-  CN                           0.542           0.532           0.903           0.182
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.216           0.342           0.191           0.406
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:full]         *          0.770*          0.874*          0.933*          0.607      100.0%          0  all_test_items
+  BoC[val:full]                    0.746           0.848           0.921           0.571      100.0%          0  all_test_items
+  BanditDR                         0.700           0.649           0.916           0.484      100.0%          0  all_test_items
+  SubAdj                           0.691           0.596           0.903           0.479      100.0%          0  all_test_items
+  VirtualEnsembles                 0.685           0.866           0.888           0.481      100.0%          0  all_test_items
+  GraphPropagation                 0.682           0.632           0.900           0.465      100.0%          0  all_test_items
+  NVSE                    0.670           0.773           0.899           0.442      100.0%          0  all_test_items
+  RoleNSGA2                        0.670           0.614           0.896           0.443      100.0%          0  all_test_items
+  RedditScore+Sub                  0.606           0.683           0.907           0.305      100.0%          0  items_with_observed_external_score
+  RedditScore                      0.589           0.683           0.865           0.313      100.0%          0  items_with_observed_external_score
+  Net                              0.568           0.581           0.865           0.272      100.0%          0  all_test_items
+  VAR                              0.557           0.599           0.851           0.264      100.0%        691  all_test_items
+  WNet                             0.557           0.596           0.830           0.283      100.0%          0  all_test_items
+  CN                               0.542           0.532           0.903           0.182      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.228           0.342           0.102           0.425
 
 === windows/intersection/w020 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  VirtualEnsembles  *          0.732*          0.818*          0.915           0.549
-  KExpertsCausal               0.721           0.748           0.889*          0.553
-  SubAdj                       0.706           0.635           0.897           0.515
-  SEF                          0.700           0.816           0.889           0.511
-  GraphPropagation             0.698           0.650           0.906           0.491
-  VAR                          0.693           0.707           0.884           0.503
-  BanditDR                     0.686           0.650           0.904           0.468
-  BoC[val:global]              0.650           0.750           0.866           0.435
-  RedditScore+Sub              0.615           0.650           0.910           0.319
-  Net                          0.592           0.605           0.878           0.307
-  RedditScore                  0.583           0.650           0.859           0.307
-  WNet                         0.568           0.635           0.859           0.276
-  TeamFormation                0.565           0.678           0.848           0.282
-  CN                           0.516           0.524           0.798           0.235
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.216           0.294           0.117           0.318
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:none]         *          0.715           0.817           0.910*          0.520      100.0%          0  all_test_items
+  SubAdj                           0.706           0.635           0.897           0.515      100.0%          0  all_test_items
+  GraphPropagation                 0.698           0.650           0.906           0.491      100.0%          0  all_test_items
+  BanditDR                         0.686           0.650           0.904           0.468      100.0%          0  all_test_items
+  VirtualEnsembles                 0.683*          0.826           0.884           0.483      100.0%          0  all_test_items
+  RoleNSGA2                        0.672           0.621           0.888           0.455      100.0%          0  all_test_items
+  BoC[val:global]                  0.650           0.750           0.866           0.435      100.0%          0  all_test_items
+  VAR                              0.626           0.672           0.885           0.368      100.0%        527  all_test_items
+  RedditScore+Sub                  0.615           0.650*          0.910           0.319      100.0%          0  items_with_observed_external_score
+  Net                              0.592           0.605           0.878           0.307      100.0%          0  all_test_items
+  RedditScore                      0.583           0.650           0.859           0.307      100.0%          0  items_with_observed_external_score
+  WNet                             0.568           0.635           0.859           0.276      100.0%          0  all_test_items
+  NVSE                    0.532           0.626           0.798           0.265      100.0%          0  all_test_items
+  CN                               0.516           0.524           0.798           0.235      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.199           0.302           0.112           0.285
 
 === windows/intersection/w040 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.750           0.842*          0.924*          0.577
-  VirtualEnsembles             0.727*          0.848           0.918           0.536
-  BoC[val:full]                0.723           0.824           0.908           0.538
-  GraphPropagation             0.688           0.657           0.901           0.475
-  KExpertsCausal               0.685           0.733           0.859           0.511
-  SubAdj                       0.683           0.626           0.899           0.468
-  BanditDR                     0.682           0.662           0.907           0.456
-  VAR                          0.661           0.689           0.862           0.460
-  TeamFormation                0.619           0.732           0.863           0.374
-  RedditScore+Sub              0.615           0.650           0.910           0.319
-  Net                          0.592           0.605           0.878           0.307
-  RedditScore                  0.583           0.650           0.859           0.307
-  WNet                         0.572           0.626           0.869           0.276
-  CN                           0.559           0.544           0.892           0.225
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.192           0.304           0.065           0.352
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:subreddit]    *          0.749           0.840*          0.924*          0.573      100.0%          0  all_test_items
+  BoC[val:full]                    0.723           0.824           0.908           0.538      100.0%          0  all_test_items
+  VirtualEnsembles                 0.708*          0.843           0.907           0.508      100.0%          0  all_test_items
+  GraphPropagation                 0.688           0.657           0.901           0.475      100.0%          0  all_test_items
+  RoleNSGA2                        0.687           0.638           0.894           0.480      100.0%          0  all_test_items
+  SubAdj                           0.683           0.626           0.899           0.468      100.0%          0  all_test_items
+  BanditDR                         0.682           0.662           0.907           0.456      100.0%          0  all_test_items
+  RedditScore+Sub                  0.615           0.650           0.910           0.319      100.0%          0  items_with_observed_external_score
+  VAR                              0.605           0.643           0.875           0.334      100.0%        561  all_test_items
+  Net                              0.592           0.605           0.878           0.307      100.0%          0  all_test_items
+  RedditScore                      0.583           0.650           0.859           0.307      100.0%          0  items_with_observed_external_score
+  WNet                             0.572           0.626           0.869           0.276      100.0%          0  all_test_items
+  NVSE                    0.566           0.694           0.794           0.339      100.0%          0  all_test_items
+  CN                               0.559           0.544           0.892           0.225      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.190           0.300           0.131           0.348
 
 === windows/intersection/w060 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.755           0.839*          0.926*          0.584
-  BoC[val:subreddit]           0.738           0.846           0.909           0.567
-  VirtualEnsembles             0.723*          0.858           0.913           0.533
-  SubAdj                       0.683           0.626           0.899           0.468
-  BanditDR                     0.683           0.665           0.906           0.461
-  GraphPropagation             0.680           0.664           0.902           0.459
-  TeamFormation                0.646           0.747           0.876           0.416
-  VAR                          0.633           0.717           0.840           0.427
-  KExpertsCausal               0.633           0.718           0.827           0.439
-  RedditScore+Sub              0.615           0.650           0.910           0.319
-  Net                          0.592           0.605           0.878           0.307
-  RedditScore                  0.583           0.650           0.859           0.307
-  WNet                         0.572           0.626           0.869           0.276
-  CN                           0.545           0.526           0.878           0.212
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.211           0.331           0.099           0.373
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:none]         *          0.754           0.841*          0.928*          0.580      100.0%          0  all_test_items
+  BoC[val:subreddit]               0.738           0.846           0.909           0.567      100.0%          0  all_test_items
+  VirtualEnsembles                 0.715*          0.859           0.910           0.519      100.0%          0  all_test_items
+  SubAdj                           0.683           0.626           0.899           0.468      100.0%          0  all_test_items
+  BanditDR                         0.683           0.665           0.906           0.461      100.0%          0  all_test_items
+  GraphPropagation                 0.680           0.664           0.902           0.459      100.0%          0  all_test_items
+  RoleNSGA2                        0.668           0.633           0.897           0.440      100.0%          0  all_test_items
+  RedditScore+Sub                  0.615           0.650           0.910           0.319      100.0%          0  items_with_observed_external_score
+  NVSE                    0.605           0.725           0.837           0.372      100.0%          0  all_test_items
+  Net                              0.592           0.605           0.878           0.307      100.0%          0  all_test_items
+  RedditScore                      0.583           0.650           0.859           0.307      100.0%          0  items_with_observed_external_score
+  VAR                              0.573           0.638           0.856           0.291      100.0%        581  all_test_items
+  WNet                             0.572           0.626           0.869           0.276      100.0%          0  all_test_items
+  CN                               0.545           0.526           0.878           0.212      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.209           0.333           0.090           0.368
 
 === windows/intersection/w080 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.776*          0.856*          0.930*          0.623
-  BoC[val:full]                0.747           0.845           0.917           0.577
-  VirtualEnsembles             0.714           0.845           0.905           0.522
-  BanditDR                     0.695           0.666           0.912           0.478
-  SubAdj                       0.683           0.626           0.899           0.468
-  KExpertsCausal               0.678           0.714           0.846           0.511
-  TeamFormation                0.676           0.775           0.885           0.468
-  GraphPropagation             0.671           0.655           0.899           0.444
-  VAR                          0.638           0.700           0.833           0.444
-  RedditScore+Sub              0.615           0.650           0.910           0.319
-  Net                          0.592           0.605           0.878           0.307
-  RedditScore                  0.583           0.650           0.859           0.307
-  WNet                         0.572           0.626           0.869           0.276
-  CN                           0.557           0.537           0.876           0.238
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.220           0.319           0.098           0.385
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:global]       *          0.788*          0.866*          0.934*          0.642      100.0%          0  all_test_items
+  BoC[val:full]                    0.747           0.845           0.917           0.577      100.0%          0  all_test_items
+  BanditDR                         0.695           0.666           0.912           0.478      100.0%          0  all_test_items
+  RoleNSGA2                        0.685           0.640           0.901           0.469      100.0%          0  all_test_items
+  SubAdj                           0.683           0.626           0.899           0.468      100.0%          0  all_test_items
+  GraphPropagation                 0.671           0.655           0.899           0.444      100.0%          0  all_test_items
+  VirtualEnsembles                 0.668           0.843           0.897           0.440      100.0%          0  all_test_items
+  NVSE                    0.634           0.748           0.871           0.397      100.0%          0  all_test_items
+  RedditScore+Sub                  0.615           0.650           0.910           0.319      100.0%          0  items_with_observed_external_score
+  Net                              0.592           0.605           0.878           0.307      100.0%          0  all_test_items
+  RedditScore                      0.583           0.650           0.859           0.307      100.0%          0  items_with_observed_external_score
+  VAR                              0.582           0.627           0.861           0.302      100.0%        612  all_test_items
+  WNet                             0.572           0.626           0.869           0.276      100.0%          0  all_test_items
+  CN                               0.557           0.537           0.876           0.238      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.231           0.329           0.075           0.404
 
 === windows/intersection/w100 ===
 
-  Method                    macro_f1         roc_auc          f1_pos          f1_neg
-  ----------------------------------------------------------------------------------
-  SEF               *          0.773           0.856           0.929*          0.616
-  BoC[val:subreddit]           0.760*          0.860*          0.931           0.589
-  BanditDR                     0.721           0.664           0.916           0.526
-  SubAdj                       0.699           0.628           0.896           0.503
-  TeamFormation                0.695           0.790           0.896           0.494
-  VirtualEnsembles             0.676           0.852           0.895           0.456
-  KExpertsCausal               0.672           0.720           0.839           0.506
-  GraphPropagation             0.661           0.665           0.896           0.427
-  VAR                          0.616           0.700           0.792           0.441
-  RedditScore+Sub              0.615           0.650           0.910           0.319
-  Net                          0.592           0.605           0.878           0.307
-  RedditScore                  0.583           0.650           0.859           0.307
-  WNet                         0.572           0.628           0.869           0.275
-  CN                           0.566           0.544           0.877           0.255
-  ----------------------------------------------------------------------------------
-  gap (max-min)                0.207           0.316           0.140           0.361
+  Method                        macro_f1         roc_auc          f1_pos          f1_neg    Coverage   Fallback  AUC population
+  ---------------------------------------------------------------------------------------------------------------
+  SEF[val:none]         *          0.782*          0.869*          0.933*          0.630      100.0%          0  all_test_items
+  BoC[val:subreddit]               0.760           0.860           0.931           0.589      100.0%          0  all_test_items
+  BanditDR                         0.721           0.664           0.916           0.526      100.0%          0  all_test_items
+  SubAdj                           0.699           0.628           0.896           0.503      100.0%          0  all_test_items
+  VirtualEnsembles                 0.687           0.855           0.895           0.480      100.0%          0  all_test_items
+  RoleNSGA2                        0.662           0.630           0.894           0.430      100.0%          0  all_test_items
+  GraphPropagation                 0.661           0.665           0.896           0.427      100.0%          0  all_test_items
+  NVSE                    0.645           0.760           0.886           0.404      100.0%          0  all_test_items
+  RedditScore+Sub                  0.615           0.650           0.910           0.319      100.0%          0  items_with_observed_external_score
+  Net                              0.592           0.605           0.878           0.307      100.0%          0  all_test_items
+  RedditScore                      0.583           0.650           0.859           0.307      100.0%          0  items_with_observed_external_score
+  VAR                              0.578           0.639           0.855           0.302      100.0%        661  all_test_items
+  WNet                             0.572           0.628           0.869           0.275      100.0%          0  all_test_items
+  CN                               0.566           0.544           0.877           0.255      100.0%          0  all_test_items
+  ---------------------------------------------------------------------------------------------------------------
+  gap (max-min)                    0.216           0.325           0.079           0.375
