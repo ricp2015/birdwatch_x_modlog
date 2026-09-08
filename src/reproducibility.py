@@ -413,6 +413,8 @@ def validate_reproduction_config(
         packages.update({"faiss", "sentence_transformers", "xgboost"})
     if "team-formation" in config.methods:
         packages.add("xgboost")
+    if "community-notes" in config.methods:
+        packages.add("wandb")
     if config.graphs:
         packages.update({"matplotlib", "seaborn"})
     missing_packages = sorted(name for name in packages if importlib.util.find_spec(name) is None)
@@ -484,7 +486,8 @@ def validate_reproduction_config(
 
     needs_causal = bool({"nvse", "sef", "team-formation"} & set(config.methods))
     will_build_causal = (
-        not config.causal_features_are_precomputed
+        needs_causal
+        and not config.causal_features_are_precomputed
         and config.prepare_user_features
         and (config.force or not config.causal_features.is_file())
     )
