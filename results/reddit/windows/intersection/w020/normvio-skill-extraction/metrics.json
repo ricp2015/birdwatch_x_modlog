@@ -1,0 +1,23 @@
+{
+  "threshold": -0.6872909698996655,
+  "macro_f1": 0.5449985427151537,
+  "macro_precision": 0.5421711057304277,
+  "macro_recall": 0.5523302397008747,
+  "f1_pos": 0.8599651365485182,
+  "f1_neg": 0.23003194888178913,
+  "f1_approve": 0.8599651365485182,
+  "f1_remove": 0.23003194888178913,
+  "precision_pos": 0.8809523809523809,
+  "recall_pos": 0.8399545970488081,
+  "precision_neg": 0.2033898305084746,
+  "recall_neg": 0.2647058823529412,
+  "roc_auc": 0.6435200640982841,
+  "n_items": 1017,
+  "split": "windows/intersection/w020",
+  "n_train_items": 612,
+  "n_val_items": 1020,
+  "n_test_items": 1020,
+  "coverage_test": 0.9970588235294118,
+  "user_profile": "causal train-only activity/tenure/social metadata",
+  "collection_time_karma_used": false
+}

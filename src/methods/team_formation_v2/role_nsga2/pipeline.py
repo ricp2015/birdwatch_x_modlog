@@ -100,7 +100,7 @@ def score_cases(
         .drop_duplicates("item_id")
         [["item_id", "community", "label", "timestamp"]]
     )
-    for case_number, row in enumerate(ordered.itertuples(index=False), start=1):
+    for row in ordered.itertuples(index=False):
         optimizer = optimizers.get(str(row.community))
         if optimizer is None:
             item_rows.append(
@@ -162,8 +162,6 @@ def score_cases(
         team["pareto_front_size"] = int(front_size)
         team["pareto_ideal_distance"] = float(ideal_distance)
         member_rows.append(team)
-        if case_number % 100 == 0:
-            print(f"  composed {case_number:,}/{len(ordered):,} cases")
     members = pd.concat(member_rows, ignore_index=True) if member_rows else pd.DataFrame()
     return pd.DataFrame(item_rows), members
 

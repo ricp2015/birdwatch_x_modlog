@@ -1,0 +1,95 @@
+{
+  "val": {
+    "macro_f1": 0.6289429528699055,
+    "f1_pos": 0.8127176104086494,
+    "f1_neg": 0.44516829533116176,
+    "n_items": 14598,
+    "roc_auc": 0.6110391353667679
+  },
+  "test": {
+    "macro_f1": 0.6127201554072692,
+    "f1_pos": 0.806134126802472,
+    "f1_neg": 0.4193061840120664,
+    "n_items": 14569,
+    "roc_auc": 0.6181521622655085
+  },
+  "coverage": {
+    "val_eligible_items": 14598,
+    "val_total_items": 14775,
+    "test_eligible_items": 14569,
+    "test_total_items": 14775
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7568596796044755,
+      "accuracy": 0.820392547365111,
+      "n_votes": 38161,
+      "post_embedding_coverage": 0.9998646362098139,
+      "roc_auc": 0.847359031827303
+    },
+    "test": {
+      "macro_f1": 0.7497514861652849,
+      "accuracy": 0.8148001791406517,
+      "n_votes": 37959,
+      "post_embedding_coverage": 0.9996615905245347,
+      "roc_auc": 0.8441396933543088
+    }
+  },
+  "composition": {
+    "algorithm": "NSGA-II",
+    "objectives": [
+      "ideological_diversity",
+      "case_topical_expertise",
+      "moderator_proximity_mix",
+      "familiarity"
+    ],
+    "objective_definitions": {
+      "ideological_diversity": "mean pairwise distance between prefix-only CN MF user factors",
+      "case_topical_expertise": "mean case-specific user/content cosine affinity",
+      "moderator_proximity_mix": "coverage of both the community-relative high and middle agreement bands",
+      "familiarity": "mean normalized number of prefix cases previously shared by member pairs"
+    },
+    "pareto_choice": "ordinary four-objective nondominated sorting; final panel is the closest-to-ideal normalized compromise on the first front",
+    "team_size": 3,
+    "population_size": 32,
+    "generations": 20,
+    "roles": [
+      "periphery",
+      "core"
+    ],
+    "roles_are_per_community": true,
+    "role_assignment": "core is the maximal k-core of the prefix co-voting graph; all other observed candidates are periphery",
+    "role_use": "candidate representation and composition audit, not an additional fifth objective",
+    "case_affinity": "cosine similarity to prefix-only user content centroid",
+    "ideology_fit": "official Community Notes one-factor MF on simulator-prefix votes",
+    "familiarity_fit": "community-specific simulator-prefix shared-case counts"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 31025,
+    "simulator_votes": 72280,
+    "policy_items": 13297,
+    "policy_votes_ignored_except_case_labels": 41230,
+    "cut_timestamp": 1578483628.0,
+    "unused_policy_suffix_items": 13297,
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_composition": false,
+    "votes_used_for_panel_decision": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 7982,
+    "n_candidate_communities": 137,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "full/fold_00",
+    "split_type": "stratified_item_kfold",
+    "cv_protocol": "stratified_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

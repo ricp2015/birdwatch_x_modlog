@@ -126,5 +126,12 @@
     "n_candidate_communities": 13,
     "simulated_estimand": true,
     "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "intersection_chronological",
+    "split_type": "chronological",
+    "strict_temporal_order": true,
+    "prospective_interpretation": true,
+    "note": "Outer TRAIN strictly precedes VAL/TEST."
   }
 }

@@ -789,7 +789,7 @@ def evaluate_all_splits(
             lambda_y_grid,
         )
         # Persist after each split so partial progress survives an interrupted long run.
-        _write_json(output_dir / "ma_qsmf_all_splits.json", summary)
+        _write_json(output_dir / "summaries" / "ma_qsmf.json", summary)
     return summary
 
 

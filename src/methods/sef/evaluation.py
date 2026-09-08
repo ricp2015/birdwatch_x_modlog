@@ -21,6 +21,7 @@ from .runtime import (
     log,
 )
 from .features import _compute_weighted_votes, compute_expert_weights
+from .data import TemporalUserProfiles
 from .modeling import (
     _items_with_real_expert_signal,
     _net_vote_predictions,
@@ -38,8 +39,7 @@ def grid_search_hyperparams(
     prec_df: pd.DataFrame,
     post_emb: np.ndarray,
     post_id2idx: Dict[str, int],
-    user_emb: np.ndarray,
-    user_id2idx: Dict[str, int],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     lambda_smooth: float,
     use_net_vote_fallback: bool = False,
@@ -74,8 +74,7 @@ def grid_search_hyperparams(
                 prec_df,
                 post_emb,
                 post_id2idx,
-                user_emb,
-                user_id2idx,
+                user_profiles,
                 faiss_index,
                 k,
                 alpha,

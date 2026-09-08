@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from . import runtime
+from .data import TemporalUserProfiles, build_faiss_index
 from .runtime import (
     LAMBDA_SMOOTH,
     NEG_RELIABILITY_THR,
@@ -17,7 +18,6 @@ from .runtime import (
     _causal_metadata_scores,
     log,
 )
-from .data import build_faiss_index
 
 # 4. SIGNAL COMPUTATION
 
@@ -165,8 +165,7 @@ def compute_expert_weights(
     prec_df: pd.DataFrame,
     post_emb: np.ndarray,
     post_id2idx: Dict[str, int],
-    user_emb: np.ndarray,
-    user_id2idx: Dict[str, int],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     k_neighbors: int,
     alpha: float,
@@ -219,6 +218,9 @@ def compute_expert_weights(
                 "has_history",
                 "has_local_evidence",
                 "has_user_embedding",
+                "semantic_profile_doc_count",
+                "semantic_profile_latest_document_utc",
+                "semantic_profile_cutoff_utc",
                 "has_real_expert_signal",
             ]
         )
@@ -234,6 +236,13 @@ def compute_expert_weights(
         ["item_id", "username", "vote"]
     ].itertuples(index=False):
         test_votes_by_post.setdefault(row.item_id, []).append((row.username, int(row.vote)))
+    item_cutoffs = (
+        vote_df[vote_df["item_id"].isin(valid_ids)]
+        .groupby("item_id")["timestamp"]
+        .max()
+        .astype(float)
+        .to_dict()
+    )
 
     # Build the exact reference-only index.  IndexFlatIP is exact and cheap to
     # rebuild for the item sets used by each split/fold.
@@ -270,14 +279,11 @@ def compute_expert_weights(
         if not voters:
             continue
 
-        # Segnale C per tutti i votanti in un'unica operazione.
-        known = [(i, u) for i, (u, _) in enumerate(voters) if u in user_id2idx]
-        sig_c_map: Dict[str, float] = {}
-        if known and user_emb.shape[0] > 0:
-            uidxs = [user_id2idx[u] for _, u in known]
-            raw_c = np.clip(user_emb[uidxs] @ p_vec, 0.0, 1.0)
-            for (_, u), c in zip(known, raw_c):
-                sig_c_map[u] = float(c)
+        # Signal C uses only documents strictly older than this case.
+        cutoff = float(item_cutoffs[item_id])
+        temporal_profiles = user_profiles.lookup(
+            [username for username, _ in voters], cutoff, p_vec
+        )
 
         for uname, direction in voters:
             has_history = (uname, direction, subreddit) in sub_map or (
@@ -310,18 +316,17 @@ def compute_expert_weights(
                 ) / local_denominator
 
             has_local_evidence = loc_weight > 0.0
-            has_user_embedding = uname in sig_c_map
+            profile = temporal_profiles.get(uname)
+            has_user_embedding = profile is not None
             # Unknown profiles are neutral.  Falling back to reliability made
             # unseen upvoters systematically more influential than downvoters.
-            raw_c = sig_c_map.get(uname, 0.5)
+            raw_c, profile_doc_count, profile_latest = profile or (0.5, 0, np.nan)
             signal_c_d = raw_c if direction == -1 else (1.0 - raw_c)
             semantic_w = alpha * local_rel + beta * reliability + gamma * signal_c_d
             metadata_score = metadata_map.get((item_id, uname), 0.5)
             expert_w = (
                 (1.0 - runtime.causal_metadata_weight) * semantic_w
                 + runtime.causal_metadata_weight * metadata_score
-                if runtime.causal_metadata_mode != "none"
-                else semantic_w
             )
 
             rows.append(
@@ -342,6 +347,9 @@ def compute_expert_weights(
                     "has_history": bool(has_history),
                     "has_local_evidence": bool(has_local_evidence),
                     "has_user_embedding": bool(has_user_embedding),
+                    "semantic_profile_doc_count": int(profile_doc_count),
+                    "semantic_profile_latest_document_utc": float(profile_latest),
+                    "semantic_profile_cutoff_utc": cutoff,
                     "has_real_expert_signal": bool(
                         has_history or has_local_evidence or has_user_embedding
                     ),
@@ -367,6 +375,9 @@ def compute_expert_weights(
                 "has_history",
                 "has_local_evidence",
                 "has_user_embedding",
+                "semantic_profile_doc_count",
+                "semantic_profile_latest_document_utc",
+                "semantic_profile_cutoff_utc",
                 "has_real_expert_signal",
             ]
         )
@@ -563,8 +574,7 @@ def build_reference_heldout_train_features(
     vote_df: pd.DataFrame,
     post_emb: np.ndarray,
     post_id2idx: Dict[str, int],
-    user_emb: np.ndarray,
-    user_id2idx: Dict[str, int],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     k_neighbors: int,
     alpha: float,
@@ -588,8 +598,7 @@ def build_reference_heldout_train_features(
         precision,
         post_emb,
         post_id2idx,
-        user_emb,
-        user_id2idx,
+        user_profiles,
         faiss_index,
         k_neighbors,
         alpha,

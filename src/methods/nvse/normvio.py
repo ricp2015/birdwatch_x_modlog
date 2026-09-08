@@ -19,7 +19,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.data_preparation.interim_paths import POST_TEXTS  # noqa: E402
+from src.utils.splits import discover_splits  # noqa: E402
+from src.utils.tabular import read_table  # noqa: E402
 
 # Constants
 BERT_TYPE = "DeepPavlov/bert-base-cased-conversational"
@@ -209,10 +210,11 @@ def run_inference_all_categories(
     tokenizer: BertTokenizer,
     device: torch.device,
     batch_size: int,
+    model_source: str | Path | None = None,
 ) -> Dict[str, np.ndarray]:
     """Run the inference all categories workflow."""
     scores: Dict[str, np.ndarray] = {}
-    model_source = resolve_bert_source()
+    model_source = model_source or resolve_bert_source()
     print(f"BERT source: {model_source}")
     for cat in tqdm(CATEGORIES, desc="NormVio categories"):
         model_dir = models_dir / cat
@@ -240,26 +242,21 @@ def run_inference_all_categories(
     return scores
 
 
-ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")
-
-
 def load_votes(votes_dir: Path) -> pd.DataFrame:
-    """Load votes from its configured source."""
-    if ORIGINAL_CSV.exists():
-        votes = pd.read_csv(ORIGINAL_CSV)
-        print(
-            f"Votes: {len(votes):,} rows | {votes['item_id'].nunique():,} posts | "
-            f"source={ORIGINAL_CSV}"
-        )
-    else:
-        print(f"Votes fallback: {ORIGINAL_CSV} missing; using splits")
-        splits_dir = votes_dir / "splits"
-        dfs = []
-        for split in ("train_votes", "val_votes", "test_votes"):
-            p = splits_dir / f"{split}.parquet"
-            if p.exists():
-                dfs.append(pd.read_parquet(p))
-        votes = pd.concat(dfs, ignore_index=True)
+    """Load the union of the explicitly configured prepared splits."""
+    splits = discover_splits(votes_dir)
+    if not splits:
+        raise FileNotFoundError(f"No complete prepared split found under {votes_dir}")
+    frames = []
+    for split_path in splits.values():
+        for partition in ("train", "val", "test"):
+            frames.append(pd.read_parquet(split_path / f"{partition}_votes.parquet"))
+    votes = pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["username", "item_id"], keep="first"
+    )
+    print(
+        f"Votes: {len(votes):,} rows | {votes['item_id'].nunique():,} posts | source={votes_dir}"
+    )
     votes["vote"] = votes["vote"].astype(float)
     # Labels are +1 for approve and -1 for remove.
     if "label" not in votes.columns:
@@ -309,10 +306,8 @@ def _build_post_text(row: pd.Series) -> str:
     return f"r/{subreddit} {content}" if content else ""
 
 
-POST_TEXTS_PATH = POST_TEXTS
-DEFAULT_VIOLATION_SCORES = Path(
-    "results/reddit/kfold/normvio-skill-extraction/post_violation_scores.parquet"
-)
+POST_TEXTS_PATH = Path("data/interim/reddit/auxiliary/post_texts.parquet")
+DEFAULT_VIOLATION_SCORES = Path("cache/nvse/post_violation_scores.parquet")
 
 
 def score_violations(
@@ -324,27 +319,29 @@ def score_violations(
     device: torch.device,
     batch_size: int,
     max_posts: int = None,
+    post_texts_path: Path = POST_TEXTS_PATH,
+    model_source: str | Path | None = None,
 ) -> pd.DataFrame:
     """Score every post with the available violation models."""
     votes = load_votes(votes_dir)
     items = votes.drop_duplicates("item_id")[["item_id", "community"]].copy()
 
     # Use canonical post texts, then the low-coverage legacy document fallback.
-    if POST_TEXTS_PATH.exists():
-        post_texts = pd.read_parquet(POST_TEXTS_PATH)
+    if post_texts_path.exists():
+        post_texts = read_table(post_texts_path)
         required = {"item_id", "title", "selftext"}
         missing = required - set(post_texts.columns)
         if missing:
             raise ValueError(
-                f"{POST_TEXTS_PATH} is missing canonical post-text columns: {sorted(missing)}"
+                f"{post_texts_path} is missing canonical post-text columns: {sorted(missing)}"
             )
         post_texts = post_texts[["item_id", "title", "selftext"]]
         posts = items.merge(post_texts, on="item_id", how="left")
         n_missing = posts["title"].isna().sum()
-        source = POST_TEXTS_PATH
+        source = post_texts_path
     else:
         print(
-            f"Post text fallback: {POST_TEXTS_PATH} missing; "
+            f"Post text fallback: {post_texts_path} missing; "
             "run `python -m src.data_preparation.fetch_reddit_auxiliary_data "
             "--section post-texts`"
         )
@@ -363,7 +360,14 @@ def score_violations(
     posts["input_text"] = posts.apply(_build_post_text, axis=1)
     texts = posts["input_text"].tolist()
 
-    scores = run_inference_all_categories(texts, models_dir, tokenizer, device, batch_size)
+    scores = run_inference_all_categories(
+        texts,
+        models_dir,
+        tokenizer,
+        device,
+        batch_size,
+        model_source=model_source,
+    )
 
     for cat, arr in scores.items():
         posts[f"score_{cat}"] = arr

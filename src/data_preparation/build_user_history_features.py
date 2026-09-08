@@ -21,12 +21,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.data_preparation.interim_paths import (
-    AUTHOR_INDEX,
-    CAUSAL_USER_VOTE_FEATURES,
-    POST_TEXTS,
-    TEMPORAL_FEATURE_ROOT,
-)
+from src.utils.tabular import read_table
 
 try:
     from tqdm import tqdm
@@ -64,12 +59,12 @@ except ImportError:
 
 
 DEFAULT_INPUT_DIR = Path("data/raw/user_contributions/user_contributions")
-DEFAULT_AUTHOR_INDEX = AUTHOR_INDEX
-DEFAULT_FEATURE_ROOT = TEMPORAL_FEATURE_ROOT
+DEFAULT_AUTHOR_INDEX = Path("data/interim/reddit/build_state/author_index.sqlite")
+DEFAULT_FEATURE_ROOT = Path("data/interim/reddit/build_state/user_temporal_features")
 DEFAULT_VOTES = Path("data/processed/final_intersection_dataset.csv")
 DEFAULT_METADATA = Path("data/processed/user_metadata.csv")
-DEFAULT_POST_TEXTS = POST_TEXTS
-DEFAULT_OUTPUT = CAUSAL_USER_VOTE_FEATURES
+DEFAULT_POST_TEXTS = Path("data/interim/reddit/auxiliary/post_texts.parquet")
+DEFAULT_OUTPUT = Path("data/interim/reddit/features/causal_user_vote_features.parquet")
 
 FIELD_ID = "id"
 FIELD_NAME = "name"
@@ -643,7 +638,7 @@ def audit_timestamp_semantics(
         "n_rows_compared_to_post_creation": 0,
     }
     if post_texts_path.exists():
-        posts = pd.read_parquet(post_texts_path, columns=["item_id", "created_utc"])
+        posts = read_table(post_texts_path, columns=["item_id", "created_utc"])
         posts = posts.drop_duplicates("item_id", keep="last").copy()
         left = votes[["item_id"]].copy()
         left["item_id"] = left["item_id"].astype(str)
@@ -800,7 +795,7 @@ def build_features(
     progress = tqdm(total=7, desc="Building causal features", unit="step")
     try:
         progress.set_postfix_str("loading votes")
-        votes = pd.read_csv(votes_path, low_memory=False)
+        votes = read_table(votes_path)
         required = {"username", "item_id", "timestamp", "community"}
         missing = required - set(votes.columns)
         if missing:
@@ -913,7 +908,7 @@ def build_features(
 
         progress.set_postfix_str("account tenure")
         if metadata_path.exists():
-            metadata = pd.read_csv(metadata_path, low_memory=False)
+            metadata = read_table(metadata_path)
             metadata["_user_key"] = _user_key(metadata["username"])
             metadata["account_created_utc"] = pd.to_numeric(
                 metadata["account_created_utc"], errors="coerce"

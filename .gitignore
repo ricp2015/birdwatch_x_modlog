@@ -11,7 +11,8 @@ msc_thesis/
 reports/
 data/interim/reddit/auxiliary/
 data/interim/reddit/build_state/
-results/
+!results/.gitkeep
+!results/README.md
 
 .git/
 .DS_Store

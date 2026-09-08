@@ -1,0 +1,55 @@
+{
+  "split_type": "stratified_item_kfold",
+  "split_unit": "item_id",
+  "seed": 10,
+  "n_source_votes": 58095,
+  "n_source_items": 5104,
+  "n_source_users": 1902,
+  "partitions": {
+    "train": {
+      "n_votes": 35238,
+      "n_items": 3100,
+      "n_users": 1902,
+      "item_fraction": 0.6073667711598746,
+      "vote_time_start": "2017-09-14T10:34:51+00:00",
+      "vote_time_end": "2022-02-17T06:52:27+00:00",
+      "users_seen_in_train_fraction": 1.0
+    },
+    "val": {
+      "n_votes": 11193,
+      "n_items": 996,
+      "n_users": 1823,
+      "item_fraction": 0.195141065830721,
+      "vote_time_start": "2017-08-21T17:48:57+00:00",
+      "vote_time_end": "2020-10-25T18:54:57+00:00",
+      "users_seen_in_train_fraction": 1.0
+    },
+    "test": {
+      "n_votes": 11664,
+      "n_items": 1008,
+      "n_users": 1840,
+      "item_fraction": 0.1974921630094044,
+      "vote_time_start": "2018-02-17T18:56:47+00:00",
+      "vote_time_end": "2022-02-07T06:26:06+00:00",
+      "users_seen_in_train_fraction": 1.0
+    }
+  },
+  "checks": {
+    "item_overlap": 0,
+    "all_source_items_preserved": true,
+    "all_source_votes_preserved": true,
+    "each_item_is_test_once": true,
+    "each_item_is_validation_once": true
+  },
+  "dataset": "intersection",
+  "source_split": "intersection",
+  "cv_protocol": "stratified_item",
+  "fold_index": 3,
+  "fold_name": "fold_03",
+  "n_folds": 5,
+  "n_population_votes": 58095,
+  "n_population_items": 5104,
+  "n_unused_future_votes": 0,
+  "n_unused_future_items": 0,
+  "validation_fold_index": 4
+}

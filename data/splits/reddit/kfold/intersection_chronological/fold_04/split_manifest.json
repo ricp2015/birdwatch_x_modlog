@@ -1,0 +1,57 @@
+{
+  "split_type": "expanding_window_chronological_kfold",
+  "split_unit": "item_id",
+  "seed": null,
+  "n_source_votes": 58095,
+  "n_source_items": 5104,
+  "n_source_users": 1902,
+  "partitions": {
+    "train": {
+      "n_votes": 46074,
+      "n_items": 4083,
+      "n_users": 1879,
+      "item_fraction": 0.799960815047022,
+      "vote_time_start": "2017-08-21T17:48:57+00:00",
+      "vote_time_end": "2020-03-25T01:41:25+00:00",
+      "users_seen_in_train_fraction": 1.0
+    },
+    "val": {
+      "n_votes": 6527,
+      "n_items": 510,
+      "n_users": 938,
+      "item_fraction": 0.09992163009404388,
+      "vote_time_start": "2019-11-16T21:05:14+00:00",
+      "vote_time_end": "2020-04-17T15:40:45+00:00",
+      "users_seen_in_train_fraction": 0.9818763326226013
+    },
+    "test": {
+      "n_votes": 5494,
+      "n_items": 511,
+      "n_users": 897,
+      "item_fraction": 0.10011755485893417,
+      "vote_time_start": "2019-09-24T16:12:21+00:00",
+      "vote_time_end": "2022-02-17T06:52:27+00:00",
+      "users_seen_in_train_fraction": 0.9754738015607581
+    }
+  },
+  "checks": {
+    "item_overlap": 0,
+    "all_source_items_preserved": true,
+    "all_source_votes_preserved": true,
+    "strict_temporal_order": true
+  },
+  "dataset": "intersection_chronological",
+  "source_split": "intersection_chronological",
+  "cv_protocol": "expanding_window_chronological",
+  "fold_index": 4,
+  "fold_name": "fold_04",
+  "n_folds": 5,
+  "n_population_votes": 58095,
+  "n_population_items": 5104,
+  "n_unused_future_votes": 0,
+  "n_unused_future_items": 0,
+  "item_time_definition": "maximum vote timestamp per item (case completion)",
+  "tie_policy": "equal boundary timestamps stay in the earlier partition",
+  "initial_train_fraction_target": 0.4,
+  "future_data_policy": "items after TEST are excluded from the fold"
+}

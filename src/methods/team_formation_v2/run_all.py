@@ -1,4 +1,4 @@
-"""Run every active counterfactual team-formation method chronologically."""
+"""Run every active counterfactual team-formation method on prepared splits."""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.data_preparation.interim_paths import CAUSAL_USER_VOTE_FEATURES  # noqa: E402
+from src.methods.team_formation_v2.shared_features import load_split_manifest  # noqa: E402
+from src.utils.splits import discover_splits  # noqa: E402
 
 CHRONOLOGICAL_SPLIT = "intersection_chronological"
-DEFAULT_VOTES_DIR = f"data/splits/reddit/{CHRONOLOGICAL_SPLIT}"
+DEFAULT_VOTES_DIR = "data/splits/reddit"
 DEFAULT_OUT_ROOT = "results/reddit"
-DEFAULT_CAUSAL_FEATURES = str(CAUSAL_USER_VOTE_FEATURES)
+DEFAULT_CAUSAL_FEATURES = "data/interim/reddit/features/causal_user_vote_features.parquet"
 DEFAULT_EMBEDDING_DIR = "cache/embeddings"
 DEFAULT_TEAM_SIZE = 3
 
@@ -32,7 +33,7 @@ PANEL_METHODS = frozenset(METHODS) - {"boc_stacking"}
 
 
 def write_summary(path: Path, summary: dict[str, str]) -> None:
-    """Persist progress so a long chronological run can be inspected or resumed."""
+    """Persist progress so a long multi-split run can be inspected or resumed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -59,22 +60,73 @@ def has_active_metrics(path: Path, method: str) -> bool:
     return method not in PANEL_METHODS or _configured_team_size(payload) == DEFAULT_TEAM_SIZE
 
 
-def resolve_chronological_split(votes_path: Path) -> Path:
-    """Resolve the sole valid pre-case split accepted by this runner."""
+def resolve_splits(votes_path: Path) -> dict[str, Path]:
+    """Resolve one direct prepared split or every canonical split below a root."""
+    splits = discover_splits(votes_path)
     direct = all(
-        (votes_path / f"{partition}_votes.parquet").exists()
-        for partition in ("train", "val", "test")
+        (votes_path / f"{part}_votes.parquet").exists() for part in ("train", "val", "test")
     )
-    split_path = votes_path if direct else votes_path / CHRONOLOGICAL_SPLIT
-    if split_path.name != CHRONOLOGICAL_SPLIT or not all(
-        (split_path / f"{partition}_votes.parquet").exists()
-        for partition in ("train", "val", "test")
+    if (
+        direct
+        and votes_path.parent.name in {"full", "intersection"}
+        and votes_path.parent.parent.name == "windows"
     ):
-        raise FileNotFoundError(
-            "Team-formation-v2 requires the complete "
-            f"{CHRONOLOGICAL_SPLIT} split; received {votes_path}"
-        )
-    return split_path
+        splits = {f"windows/{votes_path.parent.name}/{votes_path.name}": votes_path}
+    if not splits:
+        raise FileNotFoundError(f"No complete prepared split found under {votes_path}")
+    incomplete = {
+        name: [
+            part
+            for part in ("train", "val", "test")
+            if not (path / f"{part}_votes.parquet").exists()
+        ]
+        for name, path in splits.items()
+    }
+    incomplete = {name: parts for name, parts in incomplete.items() if parts}
+    if incomplete:
+        raise FileNotFoundError(f"Incomplete prepared splits: {incomplete}")
+    return splits
+
+
+def resolve_chronological_split(votes_path: Path) -> Path:
+    """Backward-compatible resolver used by the chronological K-sensitivity runner."""
+    splits = resolve_splits(votes_path)
+    if CHRONOLOGICAL_SPLIT in splits:
+        return splits[CHRONOLOGICAL_SPLIT]
+    if len(splits) == 1:
+        name, path = next(iter(splits.items()))
+        if name == CHRONOLOGICAL_SPLIT:
+            return path
+    raise FileNotFoundError(f"{CHRONOLOGICAL_SPLIT} was not found under {votes_path}")
+
+
+def annotate_outer_protocol(metrics_path: Path, split_name: str, split_path: Path) -> None:
+    """Record whether an output has a prospective or seeded-item outer protocol."""
+    if not metrics_path.exists():
+        return
+    manifest = load_split_manifest(split_path)
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    split_type = manifest.get("split_type", "unknown")
+    cv_protocol = manifest.get("cv_protocol")
+    checks = manifest.get("checks", {})
+    chronological = (
+        split_type == "chronological" or cv_protocol == "expanding_window_chronological"
+    )
+    prospective = chronological and checks.get("strict_temporal_order") is True
+    payload["outer_split_protocol"] = {
+        "split": split_name,
+        "split_type": split_type,
+        "cv_protocol": cv_protocol,
+        "strict_temporal_order": bool(prospective),
+        "prospective_interpretation": bool(prospective),
+        "note": (
+            "Outer TRAIN strictly precedes VAL/TEST."
+            if prospective
+            else "Comparative seeded-item/window benchmark; the internal TRAIN prefix is "
+            "chronological, but outer TRAIN need not precede VAL/TEST."
+        ),
+    }
+    metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def build_command(
@@ -105,7 +157,7 @@ def build_command(
 
 
 def main() -> None:
-    """Run every active method on the strictly ordered pre-case split."""
+    """Run every active method on all discovered prepared splits."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--votes-dir", default=DEFAULT_VOTES_DIR)
     parser.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
@@ -121,59 +173,58 @@ def main() -> None:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the chronological execution matrix without starting subprocesses.",
+        help="Print the split-by-method execution matrix without starting subprocesses.",
     )
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip a method when its active chronological metrics.json already exists.",
+        help="Skip a method when its active metrics.json already exists for that split.",
     )
     args = parser.parse_args()
 
-    split_path = resolve_chronological_split(Path(args.votes_dir))
+    splits = resolve_splits(Path(args.votes_dir))
     out_root = Path(args.out_root)
-    print(f"Chronological split: {split_path}")
+    print(f"Prepared splits: {len(splits)}")
 
-    summary_filename = "tfr_v2_run_plan.json" if args.dry_run else "tfr_v2_run_summary.json"
-    summary_path = out_root / summary_filename
+    summary_filename = "team_formation_plan.json" if args.dry_run else "team_formation.json"
+    summary_path = out_root / "summaries" / summary_filename
     summary: dict[str, str] = {}
-    for method in args.methods:
-        out_dir = out_root / CHRONOLOGICAL_SPLIT / method
-        run_name = f"{CHRONOLOGICAL_SPLIT}/{method}"
-        command = build_command(
-            method,
-            split_path,
-            out_dir,
-            args.causal_features,
-            args.embedding_dir,
-        )
-        print(f"Running {run_name}")
-        if args.skip_existing and has_active_metrics(out_dir / "metrics.json", method):
-            summary[run_name] = "SKIPPED (active metrics.json exists)"
-            print(summary[run_name])
+    for split_name, split_path in splits.items():
+        for method in args.methods:
+            out_dir = out_root.joinpath(*split_name.split("/"), method)
+            run_name = f"{split_name}/{method}"
+            command = build_command(
+                method,
+                split_path,
+                out_dir,
+                args.causal_features,
+                args.embedding_dir,
+            )
+            print(f"Running {run_name}")
+            if args.skip_existing and has_active_metrics(out_dir / "metrics.json", method):
+                summary[run_name] = "SKIPPED (active metrics.json exists)"
+                print(summary[run_name])
+                write_summary(summary_path, summary)
+                continue
+            if args.dry_run:
+                print(subprocess.list2cmdline(command))
+                summary[run_name] = "DRY RUN"
+                write_summary(summary_path, summary)
+                continue
+            result = subprocess.run(command, cwd=_PROJECT_ROOT, check=False)
+            summary[run_name] = (
+                "OK" if result.returncode == 0 else f"FAILED (exit {result.returncode})"
+            )
+            if result.returncode == 0:
+                annotate_outer_protocol(out_dir / "metrics.json", split_name, split_path)
             write_summary(summary_path, summary)
-            continue
-        if args.dry_run:
-            print(subprocess.list2cmdline(command))
-            summary[run_name] = "DRY RUN"
-            write_summary(summary_path, summary)
-            continue
-        result = subprocess.run(command, cwd=_PROJECT_ROOT, check=False)
-        summary[run_name] = (
-            "OK" if result.returncode == 0 else f"FAILED (exit {result.returncode})"
-        )
-        write_summary(summary_path, summary)
 
     print("Summary")
     for run_name, status in summary.items():
         print(f"{run_name}: {status}")
 
     write_summary(summary_path, summary)
-    failures = {
-        name: status
-        for name, status in summary.items()
-        if status.startswith("FAILED")
-    }
+    failures = {name: status for name, status in summary.items() if status.startswith("FAILED")}
     if failures:
         print(f"Failed runs: {len(failures)} | details={summary_path}")
         raise SystemExit(1)

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "split_type": "kfold_root",
+  "n_folds": 5,
+  "seed": 10,
+  "datasets": [
+    {
+      "dataset": "full",
+      "folder": "full",
+      "protocol": "stratified_item"
+    },
+    {
+      "dataset": "intersection",
+      "folder": "intersection",
+      "protocol": "stratified_item"
+    },
+    {
+      "dataset": "intersection_chronological",
+      "folder": "intersection_chronological",
+      "protocol": "expanding_window_chronological"
+    }
+  ]
+}

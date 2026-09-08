@@ -1,0 +1,136 @@
+{
+  "policy_train": {
+    "macro_f1": 0.627939313201556,
+    "f1_pos": 0.8882773802971932,
+    "f1_neg": 0.367601246105919,
+    "n_items": 1069,
+    "roc_auc": 0.7815622944143353
+  },
+  "val": {
+    "macro_f1": 0.6667191518396053,
+    "f1_pos": 0.9042145593869731,
+    "f1_neg": 0.4292237442922374,
+    "n_items": 762,
+    "roc_auc": 0.735915601180231
+  },
+  "test": {
+    "macro_f1": 0.6041480196912061,
+    "f1_pos": 0.8871951219512195,
+    "f1_neg": 0.3211009174311927,
+    "n_items": 765,
+    "roc_auc": 0.739390977443609
+  },
+  "coverage": {
+    "policy_train_eligible_items": 1069,
+    "policy_train_total_items": 1072,
+    "val_eligible_items": 762,
+    "val_total_items": 765,
+    "test_eligible_items": 765,
+    "test_total_items": 767
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7937128464655103,
+      "accuracy": 0.8869200279785497,
+      "n_votes": 8578,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.889863776564874
+    },
+    "test": {
+      "macro_f1": 0.8057799800271852,
+      "accuracy": 0.8946044810242341,
+      "n_votes": 8748,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8958906534573161
+    }
+  },
+  "graph_attention": {
+    "selected": {
+      "name": "skill_affinity",
+      "weights": {
+        "attention_graph": 1.0,
+        "attention_alignment": 1.0,
+        "attention_domain_affinity": 0.75,
+        "attention_local_experience": 0.5,
+        "attention_tenure": 0.25
+      },
+      "policy_train_auc": 0.7815622944143353
+    },
+    "candidates": [
+      {
+        "name": "graph_only",
+        "weights": {
+          "attention_graph": 1.0
+        },
+        "policy_train_auc": 0.5930578615958146
+      },
+      {
+        "name": "skill_affinity",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25
+        },
+        "policy_train_auc": 0.7815622944143353
+      },
+      {
+        "name": "full_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.6974444722909683
+      },
+      {
+        "name": "content_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_case_affinity": 1.0,
+          "attention_domain_affinity": 0.5,
+          "attention_local_experience": 0.5,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.7286073431283482
+      }
+    ],
+    "n_graph_users": 1833,
+    "graph_fit": "simulator-prefix co-votes and tenure similarity with a per-case content-affinity restart vector",
+    "topic_conditioned_restart": true,
+    "aggregation": "softmax attention over continuous selected-panel scores"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 2500,
+    "simulator_votes": 27923,
+    "policy_items": 1072,
+    "policy_votes_ignored_except_case_labels": 12846,
+    "cut_timestamp": 1582726813.0,
+    "policy_suffix_use": "attention-family selection only",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2724,
+    "n_candidate_communities": 12,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "intersection",
+    "split_type": "seeded_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

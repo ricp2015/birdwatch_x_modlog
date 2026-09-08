@@ -1,20 +1,20 @@
-"""Generate thesis tables, figures, bootstrap results, and E1 summaries."""
+"""Generate thesis tables, figures, bootstrap results, and CN-extension summaries."""
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 import itertools
 import json
 import logging
-import math
+import os
 from pathlib import Path
 import sys
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Annotated, Any, Mapping, Sequence
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+os.environ.setdefault("MPLCONFIGDIR", str((_PROJECT_ROOT / "cache" / "matplotlib").resolve()))
 
 import matplotlib  # noqa: E402
 
@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from src.utils.splits import discover_splits, load_vote_partitions  # noqa: E402
+import typer  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +41,7 @@ METRIC_LABELS = {
     "f1_neg": "F1 remove",
     "roc_auc": "ROC AUC",
 }
-METADATA_MODES = ("none", "global", "subreddit", "full")
-E1_VARIANTS = {
+CN_EXTENSION_VARIANTS = {
     "cn_inductive": "CN inductive",
     "qsmf": "QSMF",
     "ma_mf": "MA-MF",
@@ -97,25 +97,19 @@ METHOD_SPECS: dict[str, MethodSpec] = {
         score_columns=("nvse_score", "score"),
     ),
     "VAR": MethodSpec("VAR", "var", prediction_files=("item_scores.parquet",)),
-    "Bandit": MethodSpec(
-        "Bandit", "bandit", supported_splits=("intersection_chronological",)
-    ),
+    "Bandit": MethodSpec("Bandit", "bandit"),
     "GraphPropagation": MethodSpec(
         "GraphPropagation",
         "graph_propagation",
-        supported_splits=("intersection_chronological",),
     ),
     "RoleNSGA2": MethodSpec(
-        "Role-NSGA2", "role_nsga2", supported_splits=("intersection_chronological",)
+        "Role-NSGA2", "role_nsga2"
     ),
     "VirtualEnsembles": MethodSpec(
         "VirtualEnsembles",
         "virtual_ensembles",
-        supported_splits=("intersection_chronological",),
     ),
-    "BoC": MethodSpec(
-        "BoC", "boc_stacking", supported_splits=("intersection_chronological",)
-    ),
+    "BoC": MethodSpec("BoC", "boc_stacking"),
 }
 
 BOOTSTRAP_TOP_METHODS = ("SEF", "BoC", "VirtualEnsembles", "SubAdj")
@@ -178,15 +172,6 @@ def _test_payload(metrics: Mapping[str, Any]) -> dict[str, Any]:
     return dict(test) if isinstance(test, Mapping) else dict(metrics)
 
 
-def _validation_macro_f1(metrics: Mapping[str, Any]) -> float | None:
-    validation = metrics.get("val")
-    if isinstance(validation, Mapping):
-        value = validation.get("macro_f1")
-        return float(value) if isinstance(value, (int, float)) else None
-    value = metrics.get("val_macro_f1")
-    return float(value) if isinstance(value, (int, float)) else None
-
-
 def _split_result_dir(results_root: Path, split_name: str) -> Path:
     return results_root.joinpath(*split_name.split("/"))
 
@@ -198,47 +183,21 @@ def _fixed_method_dir(results_root: Path, split_name: str, method: str) -> Path 
     return _split_result_dir(results_root, split_name) / spec.relative_dir
 
 
-def _select_mode(
-    candidates: Iterable[tuple[str, Path]],
-) -> tuple[str, Path, dict[str, Any]] | None:
-    """Select one configuration strictly by validation Macro-F1."""
-    eligible: list[tuple[float, int, str, Path, dict[str, Any]]] = []
-    for mode, metrics_path in candidates:
-        if not metrics_path.exists():
-            continue
-        metrics = _read_json(metrics_path)
-        validation_score = _validation_macro_f1(metrics)
-        if validation_score is None or not math.isfinite(validation_score):
-            continue
-        eligible.append(
-            (validation_score, -METADATA_MODES.index(mode), mode, metrics_path.parent, metrics)
-        )
-    if not eligible:
-        return None
-    _, _, mode, directory, metrics = max(eligible)
-    return mode, directory, metrics
-
-
 def resolve_method(
     results_root: Path, split_name: str, method: str
-) -> tuple[Path, dict[str, Any], str | None] | None:
-    """Resolve one canonical method, including validation-only mode selection."""
+) -> tuple[Path, dict[str, Any]] | None:
+    """Resolve one canonical method result."""
     if not method_supports_split(method, split_name):
         return None
     if method == "SEF":
-        if split_name == "intersection_chronological":
+        directory = _split_result_dir(results_root, split_name) / "expertise"
+        metrics_path = directory / "metrics.json"
+        if not metrics_path.exists():
             return None
-        selected = _select_mode(
-            (
-                mode,
-                results_root.joinpath(mode, *split_name.split("/"), "expertise", "metrics.json"),
-            )
-            for mode in METADATA_MODES
-        )
-        if selected is None:
+        metrics = _read_json(metrics_path)
+        if metrics.get("status") == "excluded":
             return None
-        mode, directory, metrics = selected
-        return directory, metrics, mode
+        return directory, metrics
 
     directory = _fixed_method_dir(results_root, split_name, method)
     if directory is None:
@@ -246,7 +205,7 @@ def resolve_method(
     metrics_path = directory / "metrics.json"
     if not metrics_path.exists():
         return None
-    return directory, _read_json(metrics_path), None
+    return directory, _read_json(metrics_path)
 
 
 def canonical_methods(include_appendix: bool = True) -> list[str]:
@@ -260,8 +219,6 @@ def canonical_methods(include_appendix: bool = True) -> list[str]:
 
 def method_supports_split(method: str, split_name: str) -> bool:
     """Return whether a method is defined for the requested evaluation split."""
-    if method == "SEF":
-        return split_name != "intersection_chronological"
     spec = METHOD_SPECS.get(method)
     return spec is None or spec.supported_splits is None or split_name in spec.supported_splits
 
@@ -277,11 +234,37 @@ def methods_for_split(split_name: str) -> list[str]:
     return [method for method in methods if method_supports_split(method, split_name)]
 
 
+def collect_method_split_matrix(results_root: Path, splits_root: Path) -> pd.DataFrame:
+    """Inventory every discovered split x canonical-method combination."""
+    rows: list[dict[str, Any]] = []
+    for split_name in discover_splits(splits_root):
+        for method in canonical_methods(include_appendix=True):
+            supported = method_supports_split(method, split_name)
+            resolved = resolve_method(results_root, split_name, method) if supported else None
+            directory = resolved[0] if resolved else None
+            rows.append(
+                {
+                    "split": split_name,
+                    "method": method,
+                    "label": method_label(method),
+                    "supported": supported,
+                    "status": (
+                        "available"
+                        if resolved is not None
+                        else "missing"
+                        if supported
+                        else "not_applicable"
+                    ),
+                    "result_dir": str(directory) if directory is not None else None,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _metric_row(
     split_name: str,
     method: str,
     metrics: Mapping[str, Any],
-    selected_mode: str | None,
 ) -> dict[str, Any]:
     payload = _test_payload(metrics)
     n_items = payload.get("n_items", payload.get("n_test", payload.get("n_items_test")))
@@ -298,11 +281,7 @@ def _metric_row(
         else:
             eligible = root_coverage.get("test_eligible_items")
             total = root_coverage.get("test_total_items")
-        if (
-            isinstance(eligible, (int, float))
-            and isinstance(total, (int, float))
-            and total
-        ):
+        if isinstance(eligible, (int, float)) and isinstance(total, (int, float)) and total:
             n_test_items = int(total)
             coverage = float(eligible) / float(total)
     if coverage is None and n_items is not None and n_test_items:
@@ -321,7 +300,6 @@ def _metric_row(
     row: dict[str, Any] = {
         "split": split_name,
         "method": method,
-        "selected_mode": selected_mode,
         "n_items": n_items,
         "n_test_items": n_test_items,
         "score_coverage": float(coverage),
@@ -345,19 +323,6 @@ def collect_benchmark(
     for split_name in split_names:
         for method in canonical_methods(include_appendix=include_appendix):
             if not method_supports_split(method, split_name):
-                if method == "SEF" and split_name == "intersection_chronological":
-                    findings.append(
-                        {
-                            "severity": "INFO",
-                            "code": "unsupported_method_split",
-                            "split": split_name,
-                            "method": method,
-                            "message": (
-                                "SEF is intentionally excluded from chronological "
-                                "evaluation."
-                            ),
-                        }
-                    )
                 continue
             resolved = resolve_method(results_root, split_name, method)
             if resolved is None:
@@ -371,8 +336,8 @@ def collect_benchmark(
                     }
                 )
                 continue
-            _, metrics, selected_mode = resolved
-            row = _metric_row(split_name, method, metrics, selected_mode)
+            _, metrics = resolved
+            row = _metric_row(split_name, method, metrics)
             rows.append(row)
             if row["score_coverage"] < 0.999999:
                 findings.append(
@@ -482,7 +447,7 @@ def load_predictions(results_root: Path, split_name: str, method: str) -> pd.Dat
     resolved = resolve_method(results_root, split_name, method)
     if resolved is None:
         raise FileNotFoundError(f"No eligible {method} result for {split_name}")
-    directory, metrics, _ = resolved
+    directory, metrics = resolved
     spec = _prediction_spec(method)
     prediction_path = _first_existing(directory, spec.prediction_files)
     if prediction_path is None:
@@ -903,20 +868,22 @@ def paired_bootstrap(
     return result
 
 
-def collect_e1(results_root: Path, split_names: Sequence[str]) -> pd.DataFrame:
-    """Collect the E1 CN-extension ablation separately from T1."""
+def collect_cn_extensions(
+    results_root: Path, split_names: Sequence[str]
+) -> pd.DataFrame:
+    """Collect the Community Notes extension ablation."""
     rows: list[dict[str, Any]] = []
     for split_name in split_names:
         cn = resolve_method(results_root, split_name, "CN")
         if cn is not None:
-            rows.append(_metric_row(split_name, "CN", cn[1], None))
+            rows.append(_metric_row(split_name, "CN", cn[1]))
         split_dir = _split_result_dir(results_root, split_name)
-        for variant, label in E1_VARIANTS.items():
+        for variant, label in CN_EXTENSION_VARIANTS.items():
             metrics_path = split_dir / "ma_qsmf" / variant / "metrics.json"
             if not metrics_path.exists():
                 continue
             metrics = _read_json(metrics_path)
-            row = _metric_row(split_name, label, metrics, None)
+            row = _metric_row(split_name, label, metrics)
             row["selected_lambda_y"] = metrics.get("selected_lambda_y")
             row["moderator_aligned"] = metrics.get("moderator_aligned")
             row["learn_rho"] = metrics.get("learn_rho")
@@ -944,10 +911,9 @@ def _write_table(frame: pd.DataFrame, stem: Path) -> None:
 
 
 def _save_figure(fig: plt.Figure, output_stem: Path) -> None:
-    """Save the report-facing raster and vector versions of one figure."""
+    """Save one report-facing PNG figure."""
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1001,6 +967,85 @@ def _plot_benchmark(frame: pd.DataFrame, output_dir: Path) -> None:
             )
 
 
+def _kfold_dataset(split_name: str) -> str:
+    parts = split_name.split("/")
+    if len(parts) != 2 or not parts[1].startswith("fold_"):
+        raise ValueError(f"Unexpected K-fold split name: {split_name}")
+    return parts[0]
+
+
+def _plot_kfold_metric(
+    frame: pd.DataFrame, dataset: str, metric: str, output_stem: Path
+) -> None:
+    """Plot method means with sample-standard-deviation error bars."""
+    subset = frame[frame["dataset"] == dataset]
+    metric_order = subset.groupby("method", sort=False)[metric].mean().sort_values(ascending=False)
+    methods = metric_order.index.tolist()
+    grouped = subset.groupby("method", sort=False)[metric]
+    means = grouped.mean().reindex(methods)
+    deviations = grouped.std(ddof=1).reindex(methods).fillna(0.0)
+    counts = grouped.count().reindex(methods).fillna(0).astype(int)
+    valid = means.notna()
+    methods = [method for method, keep in zip(methods, valid, strict=True) if keep]
+    means, deviations, counts = means[valid], deviations[valid], counts[valid]
+    if not methods:
+        return
+
+    fig, axis = plt.subplots(figsize=(max(11.0, 0.82 * len(methods)), 6.2))
+    x = np.arange(len(methods))
+    bars = axis.bar(
+        x,
+        means.to_numpy(dtype=float),
+        yerr=deviations.to_numpy(dtype=float),
+        capsize=4,
+        color=[METHOD_COLORS.get(method, "#8c8c8c") for method in methods],
+        alpha=0.92,
+        width=0.8,
+    )
+    axis.bar_label(bars, labels=[f"{value:.2f}" for value in means], padding=6, fontsize=9)
+    n_folds = int(counts.max())
+    axis.set_title(
+        f"{METRIC_LABELS[metric]} - K-fold {dataset}\nn = {n_folds}", fontsize=15, pad=14
+    )
+    axis.set_ylabel(METRIC_LABELS[metric])
+    axis.set_ylim(0, 1)
+    axis.set_xticks(x)
+    axis.set_xticklabels(
+        [method_label(method) for method in methods], rotation=28, ha="right", fontsize=9
+    )
+    axis.grid(axis="y", linestyle="--", alpha=0.28)
+    axis.set_axisbelow(True)
+    fig.tight_layout()
+    _save_figure(fig, output_stem)
+
+
+def run_kfold_graphs(results_root: Path, splits_root: Path, output_dir: Path) -> int:
+    """Generate K-fold figures, or skip cleanly when K-fold inputs are absent."""
+    kfold_results = results_root if results_root.name == "kfold" else results_root / "kfold"
+    kfold_splits = splits_root if splits_root.name == "kfold" else splits_root / "kfold"
+    if not kfold_results.is_dir() or not kfold_splits.is_dir():
+        log.info("K-fold inputs not found; skipping K-fold graphs.")
+        return 0
+    splits = discover_splits(kfold_splits)
+    if not splits:
+        log.info("No prepared K-fold splits found; skipping K-fold graphs.")
+        return 0
+    fold_metrics, _ = collect_benchmark(kfold_results, list(splits))
+    if fold_metrics.empty:
+        log.info("No K-fold method results found; skipping K-fold graphs.")
+        return 0
+    fold_metrics.insert(0, "dataset", fold_metrics["split"].map(_kfold_dataset))
+    figures_dir = output_dir / "figures"
+    generated = 0
+    for dataset in sorted(fold_metrics["dataset"].unique()):
+        for metric in METRICS:
+            output_stem = figures_dir / f"{metric}__kfold_{dataset}"
+            _plot_kfold_metric(fold_metrics, dataset, metric, output_stem)
+            generated += int(output_stem.with_suffix(".png").exists())
+    log.info("K-fold graphs saved to %s (%d figures)", figures_dir, generated)
+    return generated
+
+
 def _plot_scaling(frame: pd.DataFrame, population: str, output_stem: Path) -> None:
     """Aggregate all training windows of one population into bar-chart figures."""
     prefix = f"windows/{population}/"
@@ -1019,9 +1064,7 @@ def _plot_scaling(frame: pd.DataFrame, population: str, output_stem: Path) -> No
             )
             labels = [method_label(method) for method in window_rows["method"]]
             values = window_rows[metric].to_numpy(dtype=float)
-            colors = [
-                METHOD_COLORS.get(method, "#8c8c8c") for method in window_rows["method"]
-            ]
+            colors = [METHOD_COLORS.get(method, "#8c8c8c") for method in window_rows["method"]]
             bars = axis.bar(labels, values, color=colors, alpha=0.92)
             axis.bar_label(
                 bars, labels=[f"{value:.2f}" for value in values], padding=2, fontsize=7
@@ -1037,17 +1080,15 @@ def _plot_scaling(frame: pd.DataFrame, population: str, output_stem: Path) -> No
             axis.remove()
         axes[0, 0].set_ylabel(METRIC_LABELS[metric])
         axes[1, 0].set_ylabel(METRIC_LABELS[metric])
-        fig.suptitle(
-            f"{METRIC_LABELS[metric]} - windowed {population}", fontsize=16, y=1.01
-        )
+        fig.suptitle(f"{METRIC_LABELS[metric]} - windowed {population}", fontsize=16, y=1.01)
         fig.tight_layout()
         _save_figure(fig, output_stem.parent / f"{metric}__windows_{population}")
 
 
-def _plot_e1(frame: pd.DataFrame, output_stem: Path) -> None:
+def _plot_cn_extensions(frame: pd.DataFrame, output_stem: Path) -> None:
     if frame.empty:
         return
-    methods = ["CN", *E1_VARIANTS.values()]
+    methods = ["CN", *CN_EXTENSION_VARIANTS.values()]
     available = [method for method in methods if method in set(frame["method"])]
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     x = np.arange(len(FIXED_SPLITS))
@@ -1066,11 +1107,10 @@ def _plot_e1(frame: pd.DataFrame, output_stem: Path) -> None:
         axis.grid(linestyle="--", alpha=0.35)
     axes[0].set_ylabel("Test performance")
     axes[0].legend(fontsize=8)
-    fig.suptitle("E1: Community Notes extensions", fontsize=14)
+    fig.suptitle("Community Notes extensions", fontsize=14)
     fig.tight_layout()
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1078,7 +1118,8 @@ def _render_report(
     benchmark: pd.DataFrame,
     split_stats: pd.DataFrame,
     bootstrap: pd.DataFrame,
-    e1: pd.DataFrame,
+    cn_extensions: pd.DataFrame,
+    method_split_matrix: pd.DataFrame,
     findings: Sequence[Mapping[str, Any]],
 ) -> str:
     """Render a compact index of generated, narrative-ready evidence."""
@@ -1087,9 +1128,9 @@ def _render_report(
         "# Benchmark report bundle",
         "",
         "All method variants shown below are selected without using TEST outcomes.",
-        "SEF is intentionally excluded from chronological evaluation because its user profiles are static/transductive.",
+        "SEF uses time-indexed user profiles containing only documents published before each case.",
         "Windowed splits are scaling trajectories sharing validation and test populations; they are not independent replications.",
-        "Team Formation v2 denotes the active counterfactual methods evaluated over prefix-eligible community pools; pre-clarification implementations are archived and excluded.",
+        "Team Formation v2 uses chronologically ordered prefixes inside TRAIN on every split; only the chronological outer split has a prospective interpretation.",
         "",
         "## Audit summary",
         "",
@@ -1102,9 +1143,10 @@ def _render_report(
         f"- Benchmark rows: {len(benchmark)}",
         f"- Split-statistic rows: {len(split_stats)}",
         f"- Paired-bootstrap contrasts: {len(bootstrap)}",
-        f"- E1 rows: {len(e1)}",
+        f"- Community Notes extension rows: {len(cn_extensions)}",
+        f"- Split x method combinations inventoried: {len(method_split_matrix)}",
         "",
-        "See `tables/` for machine-readable and Markdown tables and `figures/` for PNG/PDF figures.",
+        "See `tables/` for machine-readable and Markdown tables and `figures/` for PNG figures.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -1127,10 +1169,13 @@ def run_report(
     if not split_names:
         raise FileNotFoundError(f"No prepared splits found under {splits_root}")
 
+    method_split_matrix = collect_method_split_matrix(results_root, splits_root)
+    _write_table(method_split_matrix, tables_dir / "method_split_matrix")
+
     benchmark = pd.DataFrame()
     split_statistics = pd.DataFrame()
     bootstrap_results = pd.DataFrame()
-    e1 = pd.DataFrame()
+    cn_extensions = pd.DataFrame()
     findings: list[dict[str, Any]] = []
 
     needs_benchmark = bool(sections & {"audit", "benchmark", "scaling", "all"})
@@ -1181,10 +1226,14 @@ def run_report(
         )
         _write_table(bootstrap_results, tables_dir / "paired_bootstrap")
 
-    if sections & {"e1", "all"}:
-        e1 = collect_e1(results_root, FIXED_SPLITS)
-        _write_table(e1, tables_dir / "e1_ablation")
-        _plot_e1(e1, figures_dir / "e1_ablation")
+    if sections & {"cn-extensions", "all"}:
+        cn_extensions = collect_cn_extensions(results_root, FIXED_SPLITS)
+        _write_table(
+            cn_extensions, tables_dir / "community_notes_extension_ablation"
+        )
+        _plot_cn_extensions(
+            cn_extensions, figures_dir / "community_notes_extension_ablation"
+        )
 
     (output_dir / "audit.json").write_text(
         json.dumps(findings, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -1193,7 +1242,8 @@ def run_report(
         benchmark,
         split_statistics,
         bootstrap_results,
-        e1,
+        cn_extensions,
+        method_split_matrix,
         findings,
     )
     (output_dir / "report.md").write_text(report, encoding="utf-8")
@@ -1212,7 +1262,15 @@ def run_report(
 
 
 def _parse_sections(values: Sequence[str]) -> set[str]:
-    valid = {"all", "audit", "splits", "benchmark", "scaling", "bootstrap", "e1"}
+    valid = {
+        "all",
+        "audit",
+        "splits",
+        "benchmark",
+        "scaling",
+        "bootstrap",
+        "cn-extensions",
+    }
     sections = set(values)
     unknown = sections - valid
     if unknown:
@@ -1220,41 +1278,49 @@ def _parse_sections(values: Sequence[str]) -> set[str]:
     return {"all"} if "all" in sections else sections
 
 
-def main() -> None:
+def main(
+    section: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--section",
+            help=(
+                "Repeat to run all, audit, splits, benchmark, scaling, bootstrap, "
+                "or cn-extensions."
+            ),
+        ),
+    ] = None,
+    results_root: Annotated[Path, typer.Option()] = Path("results/reddit"),
+    splits_root: Annotated[Path, typer.Option()] = Path("data/splits/reddit"),
+    output_dir: Annotated[Path, typer.Option()] = Path("results/report"),
+    bootstrap_iterations: Annotated[int, typer.Option(min=1)] = 10_000,
+    seed: Annotated[int, typer.Option()] = 10,
+    strict_audit: Annotated[bool, typer.Option()] = False,
+    log_level: Annotated[str, typer.Option()] = "INFO",
+    k_fold_only: Annotated[bool, typer.Option("--k-fold-only")] = False,
+) -> None:
     """Run the unified comparison workflow."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--section",
-        action="append",
-        default=None,
-        help="Section to run: all, audit, splits, benchmark, scaling, bootstrap, or e1.",
-    )
-    parser.add_argument("--results-root", type=Path, default=Path("results/reddit"))
-    parser.add_argument("--splits-root", type=Path, default=Path("data/splits/reddit"))
-    parser.add_argument("--output-dir", type=Path, default=Path("results/report"))
-    parser.add_argument("--bootstrap-iterations", type=int, default=10_000)
-    parser.add_argument("--seed", type=int, default=10)
-    parser.add_argument(
-        "--strict-audit",
-        action="store_true",
-        help="Exit with an error when prediction artifacts fail the audit.",
-    )
-    parser.add_argument("--log-level", default="INFO")
-    args = parser.parse_args()
-    logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(message)s")
-    sections = _parse_sections(args.section or ["all"])
-    if args.bootstrap_iterations <= 0:
-        parser.error("--bootstrap-iterations must be positive")
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise typer.BadParameter(f"Unknown log level: {log_level}", param_hint="--log-level")
+    logging.basicConfig(level=numeric_level, format="%(message)s")
+    if k_fold_only:
+        run_kfold_graphs(results_root, splits_root, output_dir)
+        return
+    try:
+        sections = _parse_sections(section or ["all"])
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--section") from error
     run_report(
-        results_root=args.results_root,
-        splits_root=args.splits_root,
-        output_dir=args.output_dir,
+        results_root=results_root,
+        splits_root=splits_root,
+        output_dir=output_dir,
         sections=sections,
-        bootstrap_iterations=args.bootstrap_iterations,
-        seed=args.seed,
-        strict_audit=args.strict_audit,
+        bootstrap_iterations=bootstrap_iterations,
+        seed=seed,
+        strict_audit=strict_audit,
     )
+    run_kfold_graphs(results_root, splits_root, output_dir / "kfold")
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

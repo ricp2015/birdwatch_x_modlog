@@ -1,0 +1,188 @@
+{
+  "protocol": {
+    "split": "intersection_chronological",
+    "team_size": 3,
+    "comparison": "same data, simulator protocol, and K; implementation only changed",
+    "test_used_for_selection": false
+  },
+  "methods": {
+    "virtual_ensembles": {
+      "old_metrics_path": "archive\\legacy_data_artifacts\\team_formation_v2_pre_spec_fidelity\\intersection_chronological\\virtual_ensembles\\metrics.json",
+      "new_metrics_path": "results\\reddit\\intersection_chronological\\virtual_ensembles\\metrics.json",
+      "splits": {
+        "val": {
+          "macro_f1": {
+            "old": 0.7192187922865845,
+            "spec_faithful": 0.7403109734486,
+            "delta": 0.0210921811620155
+          },
+          "f1_neg": {
+            "old": 0.5201793721973094,
+            "spec_faithful": 0.5463917525773195,
+            "delta": 0.02621238038001017
+          },
+          "roc_auc": {
+            "old": 0.8152402402402402,
+            "spec_faithful": 0.5636336336336336,
+            "delta": -0.2516066066066066
+          }
+        },
+        "test": {
+          "macro_f1": {
+            "old": 0.7207975986277873,
+            "spec_faithful": 0.641345525041888,
+            "delta": -0.07945207358589923
+          },
+          "f1_neg": {
+            "old": 0.5188679245283019,
+            "spec_faithful": 0.37305699481865284,
+            "delta": -0.14581092970964904
+          },
+          "roc_auc": {
+            "old": 0.8053561253561253,
+            "spec_faithful": 0.6757671957671957,
+            "delta": -0.12958892958892965
+          }
+        }
+      }
+    },
+    "role_nsga2": {
+      "old_metrics_path": "archive\\legacy_data_artifacts\\team_formation_v2_pre_spec_fidelity\\intersection_chronological\\role_nsga2\\metrics.json",
+      "new_metrics_path": "results\\reddit\\intersection_chronological\\role_nsga2\\metrics.json",
+      "splits": {
+        "val": {
+          "macro_f1": {
+            "old": 0.7402679792179382,
+            "spec_faithful": 0.6810424858016602,
+            "delta": -0.05922549341627803
+          },
+          "f1_neg": {
+            "old": 0.5507246376811594,
+            "spec_faithful": 0.45535714285714285,
+            "delta": -0.09536749482401657
+          },
+          "roc_auc": {
+            "old": 0.574054054054054,
+            "spec_faithful": 0.5003303303303304,
+            "delta": -0.0737237237237236
+          }
+        },
+        "test": {
+          "macro_f1": {
+            "old": 0.6560744306624344,
+            "spec_faithful": 0.5915099503805337,
+            "delta": -0.06456448028190076
+          },
+          "f1_neg": {
+            "old": 0.39790575916230364,
+            "spec_faithful": 0.29767441860465116,
+            "delta": -0.10023134055765248
+          },
+          "roc_auc": {
+            "old": 0.6385510785510786,
+            "spec_faithful": 0.48509564509564507,
+            "delta": -0.15345543345543355
+          }
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "method": "virtual_ensembles",
+      "split": "val",
+      "metric": "macro_f1",
+      "old": 0.7192187922865845,
+      "spec_faithful": 0.7403109734486,
+      "delta": 0.0210921811620155
+    },
+    {
+      "method": "virtual_ensembles",
+      "split": "val",
+      "metric": "f1_neg",
+      "old": 0.5201793721973094,
+      "spec_faithful": 0.5463917525773195,
+      "delta": 0.02621238038001017
+    },
+    {
+      "method": "virtual_ensembles",
+      "split": "val",
+      "metric": "roc_auc",
+      "old": 0.8152402402402402,
+      "spec_faithful": 0.5636336336336336,
+      "delta": -0.2516066066066066
+    },
+    {
+      "method": "virtual_ensembles",
+      "split": "test",
+      "metric": "macro_f1",
+      "old": 0.7207975986277873,
+      "spec_faithful": 0.641345525041888,
+      "delta": -0.07945207358589923
+    },
+    {
+      "method": "virtual_ensembles",
+      "split": "test",
+      "metric": "f1_neg",
+      "old": 0.5188679245283019,
+      "spec_faithful": 0.37305699481865284,
+      "delta": -0.14581092970964904
+    },
+    {
+      "method": "virtual_ensembles",
+      "split": "test",
+      "metric": "roc_auc",
+      "old": 0.8053561253561253,
+      "spec_faithful": 0.6757671957671957,
+      "delta": -0.12958892958892965
+    },
+    {
+      "method": "role_nsga2",
+      "split": "val",
+      "metric": "macro_f1",
+      "old": 0.7402679792179382,
+      "spec_faithful": 0.6810424858016602,
+      "delta": -0.05922549341627803
+    },
+    {
+      "method": "role_nsga2",
+      "split": "val",
+      "metric": "f1_neg",
+      "old": 0.5507246376811594,
+      "spec_faithful": 0.45535714285714285,
+      "delta": -0.09536749482401657
+    },
+    {
+      "method": "role_nsga2",
+      "split": "val",
+      "metric": "roc_auc",
+      "old": 0.574054054054054,
+      "spec_faithful": 0.5003303303303304,
+      "delta": -0.0737237237237236
+    },
+    {
+      "method": "role_nsga2",
+      "split": "test",
+      "metric": "macro_f1",
+      "old": 0.6560744306624344,
+      "spec_faithful": 0.5915099503805337,
+      "delta": -0.06456448028190076
+    },
+    {
+      "method": "role_nsga2",
+      "split": "test",
+      "metric": "f1_neg",
+      "old": 0.39790575916230364,
+      "spec_faithful": 0.29767441860465116,
+      "delta": -0.10023134055765248
+    },
+    {
+      "method": "role_nsga2",
+      "split": "test",
+      "metric": "roc_auc",
+      "old": 0.6385510785510786,
+      "spec_faithful": 0.48509564509564507,
+      "delta": -0.15345543345543355
+    }
+  ]
+}

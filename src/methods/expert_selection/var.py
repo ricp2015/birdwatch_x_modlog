@@ -541,8 +541,8 @@ def evaluate_splits(
 
         summary[split_name] = metrics
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = output_dir / "all_splits_summary.json"
+    summary_path = output_dir / "summaries" / "var.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"VAR summary: {summary_path}")

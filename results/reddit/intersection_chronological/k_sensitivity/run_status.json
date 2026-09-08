@@ -1,0 +1,10 @@
+{
+  "bandit/k_003": "OK",
+  "bandit/k_005": "OK",
+  "bandit/k_007": "OK",
+  "bandit/k_010": "OK",
+  "graph_propagation/k_003": "OK",
+  "graph_propagation/k_005": "OK",
+  "graph_propagation/k_007": "OK",
+  "graph_propagation/k_010": "OK"
+}

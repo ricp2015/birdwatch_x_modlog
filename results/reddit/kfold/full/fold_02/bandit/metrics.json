@@ -1,0 +1,84 @@
+{
+  "policy_train": {
+    "macro_f1": 0.5930990592028481,
+    "f1_pos": 0.8294794844042114,
+    "f1_neg": 0.3567186340014848,
+    "n_items": 12857,
+    "roc_auc": 0.6274255362413729
+  },
+  "val": {
+    "macro_f1": 0.6312312273481533,
+    "f1_pos": 0.8313606834564385,
+    "f1_neg": 0.4311017712398679,
+    "n_items": 14568,
+    "roc_auc": 0.6950500491682452
+  },
+  "test": {
+    "macro_f1": 0.6135908786454243,
+    "f1_pos": 0.8241090053703786,
+    "f1_neg": 0.40307275192046993,
+    "n_items": 14585,
+    "roc_auc": 0.6926560913716024
+  },
+  "coverage": {
+    "val_eligible_items": 14568,
+    "val_total_items": 14774,
+    "test_eligible_items": 14585,
+    "test_total_items": 14774
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7483324622695366,
+      "accuracy": 0.8128998288798209,
+      "n_votes": 37985,
+      "post_embedding_coverage": 0.9997969405712739,
+      "roc_auc": 0.8457748637160973
+    },
+    "test": {
+      "macro_f1": 0.7549829395623975,
+      "accuracy": 0.818629763589663,
+      "n_votes": 38154,
+      "post_embedding_coverage": 0.9995938811425478,
+      "roc_auc": 0.852578227147063
+    }
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 31026,
+    "simulator_votes": 72422,
+    "policy_items": 13298,
+    "policy_votes_ignored_except_case_labels": 41069,
+    "cut_timestamp": 1578373583.0,
+    "candidate_universe": "users observed in simulator prefix within the case community",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "frozen per-user simulator outputs",
+    "bandit_feedback": "one selected-panel reward distributed across selected arms with normalized posterior-mean softmax weights",
+    "reward_unit": "panel decision from the trust-weighted continuous simulated score",
+    "selection_score": "posterior mean plus LinUCB uncertainty bonus",
+    "aggregation_weight": "softmax of selected-arm posterior means only",
+    "policy_train_exploration": true,
+    "validation_test_exploration": false,
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 8123,
+    "n_candidate_communities": 138,
+    "linucb_updates": 38257,
+    "linucb_total_update_weight": 12857.000000000033,
+    "ucb_alpha": 0.5,
+    "ridge": 1.0,
+    "softmax_temperature": 1.0,
+    "simulated_estimand": true,
+    "warning": "Downstream policy metrics measure a simulated team-formation world; simulator fidelity must be reported alongside them."
+  },
+  "outer_split_protocol": {
+    "split": "full/fold_02",
+    "split_type": "stratified_item_kfold",
+    "cv_protocol": "stratified_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

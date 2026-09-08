@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "split_type": "kfold_collection",
+  "dataset": "intersection",
+  "protocol": "stratified_item",
+  "n_folds": 5,
+  "seed": 10,
+  "n_population_votes": 58095,
+  "n_population_items": 5104,
+  "n_unique_test_items": 5104,
+  "test_population_fraction": 1.0,
+  "test_items_exhaust_population": true,
+  "checks": {
+    "test_item_overlap_across_folds": 0,
+    "test_coverage_matches_protocol": true
+  },
+  "folds": [
+    {
+      "fold": 0,
+      "folder": "fold_00",
+      "n_train_items": 3062,
+      "n_val_items": 1039,
+      "n_test_items": 1003
+    },
+    {
+      "fold": 1,
+      "folder": "fold_01",
+      "n_train_items": 3007,
+      "n_val_items": 1058,
+      "n_test_items": 1039
+    },
+    {
+      "fold": 2,
+      "folder": "fold_02",
+      "n_train_items": 3038,
+      "n_val_items": 1008,
+      "n_test_items": 1058
+    },
+    {
+      "fold": 3,
+      "folder": "fold_03",
+      "n_train_items": 3100,
+      "n_val_items": 996,
+      "n_test_items": 1008
+    },
+    {
+      "fold": 4,
+      "folder": "fold_04",
+      "n_train_items": 3105,
+      "n_val_items": 1003,
+      "n_test_items": 996
+    }
+  ],
+  "shared_item_fold_assignment": "full"
+}

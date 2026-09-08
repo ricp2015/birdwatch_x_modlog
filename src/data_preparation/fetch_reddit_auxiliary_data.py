@@ -13,12 +13,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import requests
+
+from src.utils.tabular import read_table
 from tqdm import tqdm
 
-from src.data_preparation.interim_paths import AUXILIARY_DIR, FILTERED_VOTES
-
 INPUT_CSV = Path("data/processed/final_intersection_dataset.csv")
-OUTPUT_DIR = AUXILIARY_DIR
+OUTPUT_DIR = Path("data/interim/reddit/auxiliary")
+FILTERED_VOTES = Path("data/interim/reddit/datasets/filtered_votes.parquet")
 ARCTIC_SHIFT_BASE = "https://arctic-shift.photon-reddit.com"
 
 API_TIMEOUT_SEC = 30
@@ -169,7 +170,7 @@ def _canonical_post_id(item: Dict, fallback: Optional[str] = None) -> Optional[s
 def _load_ids(input_csv: Path, column: str) -> List[str]:
     if not input_csv.exists():
         raise FileNotFoundError(input_csv)
-    values = pd.read_csv(input_csv, usecols=[column], low_memory=False)[column]
+    values = read_table(input_csv, columns=[column])[column]
     return values.dropna().astype(str).drop_duplicates().tolist()
 
 
@@ -251,7 +252,7 @@ def fetch_post_texts(
 
 
 def _infer_time_window(input_csv: Path) -> Tuple[Optional[str], Optional[str]]:
-    timestamps = pd.read_csv(input_csv, usecols=["timestamp"], low_memory=False)["timestamp"]
+    timestamps = read_table(input_csv, columns=["timestamp"])["timestamp"]
     numeric = pd.to_numeric(timestamps, errors="coerce")
     parsed = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce").dropna()
     if parsed.empty:
@@ -418,12 +419,7 @@ def fetch_reddit_scores(
     """Fetch Reddit score metadata for each unique moderated post."""
     if not votes_path.exists():
         raise FileNotFoundError(votes_path)
-    if votes_path.suffix.casefold() == ".csv":
-        votes = pd.read_csv(
-            votes_path, usecols=["item_id", "community", "label"], low_memory=False
-        )
-    else:
-        votes = pd.read_parquet(votes_path, columns=["item_id", "community", "label"])
+    votes = read_table(votes_path, columns=["item_id", "community", "label"])
     moderated = votes.drop_duplicates("item_id").reset_index(drop=True)
     output_path = output_dir / "moderated_posts_scores.parquet"
     existing = pd.read_parquet(output_path) if output_path.exists() else pd.DataFrame()

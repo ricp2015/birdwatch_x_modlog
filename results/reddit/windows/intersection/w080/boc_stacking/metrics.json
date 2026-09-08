@@ -1,0 +1,334 @@
+{
+  "stack_train": {
+    "macro_f1": 0.6795180808428616,
+    "f1_pos": 0.9008863819500403,
+    "f1_neg": 0.4581497797356828,
+    "n_items": 734,
+    "roc_auc": 0.8996176861702126
+  },
+  "val": {
+    "macro_f1": 0.6727196847455866,
+    "f1_pos": 0.9039677975848188,
+    "f1_neg": 0.4414715719063545,
+    "n_items": 1019,
+    "roc_auc": 0.7705126394577037
+  },
+  "test": {
+    "macro_f1": 0.6393651215048972,
+    "f1_pos": 0.891844997108155,
+    "f1_neg": 0.38688524590163936,
+    "n_items": 1017,
+    "roc_auc": 0.7897025439006476
+  },
+  "coverage": {
+    "stack_train": {
+      "eligible_items": 734,
+      "total_items": 736,
+      "mean_candidates": 466.9100817438692
+    },
+    "val": {
+      "eligible_items": 1019,
+      "total_items": 1020,
+      "mean_candidates": 411.6153091265947
+    },
+    "test": {
+      "eligible_items": 1017,
+      "total_items": 1020,
+      "mean_candidates": 408.34218289085544
+    }
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.8013196737504586,
+      "accuracy": 0.8877853284544346,
+      "n_votes": 11478,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8869548858209697
+    },
+    "test": {
+      "macro_f1": 0.7998026786998073,
+      "accuracy": 0.8916673803202877,
+      "n_votes": 11677,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8930077217608099
+    }
+  },
+  "boc_stacking": {
+    "interpretation": "everyone eligible is in the virtual team",
+    "n_user_slots": 1707,
+    "n_model_features": 51,
+    "raw_user_blocks": [
+      "simulated_vote_score",
+      "eligibility_mask"
+    ],
+    "representation": "separate stack-TRAIN TruncatedSVD projections",
+    "prediction_components": 16,
+    "eligibility_components": 4,
+    "prediction_explained_variance": 0.9891504645347595,
+    "eligibility_explained_variance": 0.8708356618881226,
+    "context_features": 31,
+    "classifier": "standardized class-balanced L2 logistic regression",
+    "regularization_c": 0.01,
+    "hyperparameter_search": {
+      "selected": {
+        "prediction_components": 16,
+        "eligibility_components": 4,
+        "regularization_c": 0.01,
+        "inner_tune_auc": 0.9590201465201466
+      },
+      "candidates": [
+        {
+          "prediction_components": 16,
+          "eligibility_components": 4,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9590201465201466
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 4,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9583333333333333
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 4,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9539835164835164
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 4,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.9480311355311355
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 8,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9583333333333334
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 8,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9576465201465201
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 8,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9537545787545787
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 8,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.94757326007326
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 12,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9585622710622711
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 12,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9578754578754578
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 12,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9537545787545787
+        },
+        {
+          "prediction_components": 16,
+          "eligibility_components": 12,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.9478021978021978
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 4,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9306318681318682
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 4,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9276556776556777
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 4,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9120879120879122
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 4,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.8981227106227107
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 8,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9301739926739927
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 8,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9288003663003663
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 8,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9125457875457875
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 8,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.8985805860805862
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 12,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9304029304029304
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 12,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9285714285714286
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 12,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9125457875457875
+        },
+        {
+          "prediction_components": 32,
+          "eligibility_components": 12,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.8985805860805862
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 4,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.93246336996337
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 4,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9237637362637363
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 4,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9120879120879122
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 4,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.9047619047619048
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 8,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9322344322344323
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 8,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9237637362637363
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 8,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9118589743589743
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 8,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.9040750915750916
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 12,
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.9322344322344323
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 12,
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.9237637362637363
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 12,
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.9118589743589743
+        },
+        {
+          "prediction_components": 64,
+          "eligibility_components": 12,
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.9043040293040293
+        }
+      ],
+      "selection_metric": "ROC-AUC",
+      "inner_split": {
+        "protocol": "chronological_inner_holdout",
+        "fit_items": 550,
+        "tune_items": 184,
+        "tuning_fraction": 0.25,
+        "cut_timestamp": 1587775560.0
+      }
+    },
+    "current_case_historical_votes_used": false
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 1715,
+    "simulator_votes": 19359,
+    "policy_items": 736,
+    "policy_votes_ignored_except_case_labels": 8616,
+    "cut_timestamp": 1582990287.0,
+    "policy_suffix_use": "chronological inner hyperparameter tuning, then full-suffix stacking-classifier refit",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "votes_used_for_item_representation": "all eligible users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2357,
+    "n_candidate_communities": 12,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated full-electorate world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "windows/intersection/w080",
+    "split_type": "nested_training_windows",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

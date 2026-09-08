@@ -12,9 +12,9 @@ import pandas as pd
 from scipy import sparse
 from sklearn.metrics import f1_score, roc_auc_score
 
-from src.data_preparation.interim_paths import CAUSAL_USER_VOTE_FEATURES
-
-DEFAULT_CAUSAL_FEATURES = CAUSAL_USER_VOTE_FEATURES
+DEFAULT_CAUSAL_FEATURES = Path(
+    "data/interim/reddit/features/causal_user_vote_features.parquet"
+)
 
 CAUSAL_GLOBAL_FEATURES = [
     "prior_n_posts",
@@ -142,30 +142,59 @@ def attach_causal_features(
     return enriched.drop(columns=["_user_key"])
 
 
+def load_split_manifest(votes_dir: Path) -> dict:
+    """Load a fixed-split manifest or the parent manifest of a training window."""
+    fixed_manifest = votes_dir / "split_manifest.json"
+    window_manifest = votes_dir.parent / "manifest.json"
+    if fixed_manifest.exists():
+        return json.loads(fixed_manifest.read_text(encoding="utf-8"))
+    if window_manifest.exists():
+        manifest = json.loads(window_manifest.read_text(encoding="utf-8"))
+        known_windows = {
+            str(entry.get("folder")) for entry in manifest.get("windows", [])
+        }
+        if (
+            manifest.get("split_type") == "nested_training_windows"
+            and votes_dir.name in known_windows
+        ):
+            return {**manifest, "selected_window": votes_dir.name}
+    raise FileNotFoundError(f"No prepared split manifest found for {votes_dir}")
+
+
 def load_and_enrich_splits(
     votes_dir: Path,
     causal_path: Path = DEFAULT_CAUSAL_FEATURES,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load the chronological split and attach the shared causal representation."""
-    manifest_path = votes_dir / "split_manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"Team-formation-v2 requires a chronological split manifest at {manifest_path}"
-        )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    checks = manifest.get("checks", {})
-    if (
-        manifest.get("split_type") != "chronological"
-        or checks.get("strict_temporal_order") is not True
-    ):
+    """Load any prepared split and attach the shared causal representation.
+
+    Team-formation still creates its simulator/policy prefix chronologically inside
+    TRAIN.  A chronological outer split additionally supports a prospective
+    interpretation; seeded-item and window splits are valid comparative benchmarks
+    but do not claim that outer TRAIN precedes VAL/TEST in wall-clock time.
+    """
+    manifest = load_split_manifest(votes_dir)
+    if manifest.get("split_unit") not in (None, "item_id"):
         raise ValueError(
-            "Team-formation-v2 is defined only for a strictly ordered chronological split"
+            "Team-formation-v2 requires item-disjoint prepared splits "
+            f"(split_unit='item_id'); received {manifest.get('split_unit')!r}"
+        )
+    missing = [
+        name
+        for name in ("train", "val", "test")
+        if not (votes_dir / f"{name}_votes.parquet").exists()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete prepared split at {votes_dir}; missing partitions: {missing}"
         )
     causal = load_causal_features(causal_path)
     frames = []
     for name in ("train", "val", "test"):
         votes = pd.read_parquet(votes_dir / f"{name}_votes.parquet").sort_values("timestamp")
         frames.append(attach_causal_features(votes, causal, verbose=True))
+    item_sets = [set(frame["item_id"].unique()) for frame in frames]
+    if any(item_sets[left] & item_sets[right] for left, right in ((0, 1), (0, 2), (1, 2))):
+        raise ValueError(f"Team-formation-v2 requires item-disjoint partitions: {votes_dir}")
     return tuple(frames)
 
 

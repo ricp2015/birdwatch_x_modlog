@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
+import sys
 from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
@@ -12,13 +14,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.utils.splits import discover_splits, load_split_data
-from sklearn.metrics import (
+from sklearn.metrics import (  # noqa: E402
     precision_recall_curve,
     precision_recall_fscore_support,
     roc_auc_score,
 )
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold  # noqa: E402
+from src.utils.splits import discover_splits, load_split_data, split_dataset  # noqa: E402
 
 _SCORING_ROOT = Path(__file__).parent.parent.parent / "external/community-notes/scoring/src"
 if not _SCORING_ROOT.exists():
@@ -28,8 +30,8 @@ if not _SCORING_ROOT.exists():
     )
 if str(_SCORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCORING_ROOT))
-from scoring import constants as c
-from scoring.matrix_factorization.matrix_factorization import MatrixFactorization
+from scoring import constants as c  # noqa: E402
+from scoring.matrix_factorization.matrix_factorization import MatrixFactorization  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -318,14 +320,14 @@ def evaluate(
 # User polarization
 def analyze_user_polarization(
     rater_params: pd.DataFrame,
-    step1_dir: Path,
+    votes_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """Analyze user polarization and return summary statistics."""
-    users_path = step1_dir / "users.parquet"
-    if not users_path.exists():
-        log.warning("users.parquet not found - skipping polarisation analysis")
-        return pd.DataFrame()
-    users = pd.read_parquet(users_path)
+    users = (
+        votes_df.groupby("username")["vote"]
+        .agg(n_votes="size", delete_rate=lambda values: float((values == -1).mean()))
+        .reset_index()
+    )
     merged = rater_params.rename(
         columns={
             c.raterParticipantIdKey: "username",
@@ -452,7 +454,6 @@ def evaluate_cn(
 
     note_params, rater_params, global_intercept = run_cn_mf(all_df)
 
-
     labeled_items = (
         all_df.drop_duplicates("item_id")[["item_id", "label"]]
         .dropna(subset=["label"])
@@ -477,7 +478,7 @@ def evaluate_cn(
         fold_cal_dfs.append(cal_df)
 
     user_params = build_user_params(rater_params, all_df)
-    user_analysis = analyze_user_polarization(rater_params, dataset_dir)
+    user_analysis = analyze_user_polarization(rater_params, all_df)
 
     save_outputs(
         output_dir,
@@ -514,6 +515,7 @@ def run_single_split_cn(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
+    dataset: str | None = None,
 ) -> Tuple[
     Optional[Dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[float]
 ]:
@@ -547,7 +549,7 @@ def run_single_split_cn(
 
     # Full splits use net vote when an item intercept is missing.
     fallback_scores = None
-    is_full_split = split_label in {"full", "splits_full"}
+    is_full_split = dataset == "full" or split_label in {"full", "splits_full"}
     if is_full_split:
         fallback_scores = test_df.groupby("item_id")["vote"].mean().to_dict()
 
@@ -592,18 +594,24 @@ def evaluate_splits(
     summary: Dict[str, Dict] = {}
 
     for split_name, split_path in splits.items():
-
         all_df, train_df, val_df, test_df = load_split_data(split_path)
 
         metrics, item_scores, cal_df, note_params, rater_params, global_intercept = (
-            run_single_split_cn(split_name, all_df, train_df, val_df, test_df)
+            run_single_split_cn(
+                split_name,
+                all_df,
+                train_df,
+                val_df,
+                test_df,
+                dataset=split_dataset(split_path, split_name),
+            )
         )
 
         if metrics is None:
             continue
 
         user_params = build_user_params(rater_params, all_df)
-        user_analysis = analyze_user_polarization(rater_params, votes_dir)
+        user_analysis = analyze_user_polarization(rater_params, all_df)
 
         split_out_dir = output_dir / split_name / method_name
         split_out_dir.mkdir(parents=True, exist_ok=True)
@@ -631,7 +639,8 @@ def evaluate_splits(
         }
         for name, m in summary.items()
     }
-    summary_path = output_dir / "all_splits_summary.json"
+    summary_path = output_dir / "summaries" / "community_notes.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w") as fh:
         json.dump(summary_slim, fh, indent=2)
     log.info("Split summary saved: %s", summary_path)

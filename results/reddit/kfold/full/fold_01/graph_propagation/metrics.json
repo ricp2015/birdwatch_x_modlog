@@ -1,0 +1,137 @@
+{
+  "policy_train": {
+    "macro_f1": 0.6319289165379967,
+    "f1_pos": 0.8224251128436603,
+    "f1_neg": 0.441432720232333,
+    "n_items": 12847,
+    "roc_auc": 0.6802621254036022
+  },
+  "val": {
+    "macro_f1": 0.6639923331862492,
+    "f1_pos": 0.8234801618679939,
+    "f1_neg": 0.5045045045045045,
+    "n_items": 14579,
+    "roc_auc": 0.717730125267441
+  },
+  "test": {
+    "macro_f1": 0.6507469672271925,
+    "f1_pos": 0.8190273471843043,
+    "f1_neg": 0.48246658727008074,
+    "n_items": 14584,
+    "roc_auc": 0.7260565722309185
+  },
+  "coverage": {
+    "policy_train_eligible_items": 12847,
+    "policy_train_total_items": 13297,
+    "val_eligible_items": 14579,
+    "val_total_items": 14774,
+    "test_eligible_items": 14584,
+    "test_total_items": 14775
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7539404301171844,
+      "accuracy": 0.8186559731613986,
+      "n_votes": 38154,
+      "post_embedding_coverage": 0.9995938811425478,
+      "roc_auc": 0.8517553157539618
+    },
+    "test": {
+      "macro_f1": 0.7541051871910589,
+      "accuracy": 0.8188726710515972,
+      "n_votes": 38161,
+      "post_embedding_coverage": 0.9998646362098139,
+      "roc_auc": 0.846163980640428
+    }
+  },
+  "graph_attention": {
+    "selected": {
+      "name": "skill_affinity",
+      "weights": {
+        "attention_graph": 1.0,
+        "attention_alignment": 1.0,
+        "attention_domain_affinity": 0.75,
+        "attention_local_experience": 0.5,
+        "attention_tenure": 0.25
+      },
+      "policy_train_auc": 0.6802621254036022
+    },
+    "candidates": [
+      {
+        "name": "graph_only",
+        "weights": {
+          "attention_graph": 1.0
+        },
+        "policy_train_auc": 0.6055527553496469
+      },
+      {
+        "name": "skill_affinity",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25
+        },
+        "policy_train_auc": 0.6802621254036022
+      },
+      {
+        "name": "full_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.6778968695110402
+      },
+      {
+        "name": "content_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_case_affinity": 1.0,
+          "attention_domain_affinity": 0.5,
+          "attention_local_experience": 0.5,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.6633723285841417
+      }
+    ],
+    "n_graph_users": 11178,
+    "graph_fit": "simulator-prefix co-votes and tenure similarity with a per-case content-affinity restart vector",
+    "topic_conditioned_restart": true,
+    "aggregation": "softmax attention over continuous selected-panel scores"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 31026,
+    "simulator_votes": 72754,
+    "policy_items": 13297,
+    "policy_votes_ignored_except_case_labels": 40561,
+    "cut_timestamp": 1578424073.0,
+    "policy_suffix_use": "attention-family selection only",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 8055,
+    "n_candidate_communities": 137,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "full/fold_01",
+    "split_type": "stratified_item_kfold",
+    "cv_protocol": "stratified_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "policy_train": {
+    "macro_f1": 0.6336635543298191,
+    "f1_pos": 0.9123783031988874,
+    "f1_neg": 0.35494880546075086,
+    "n_items": 1225,
+    "roc_auc": 0.7743636846787517
+  },
+  "val": {
+    "macro_f1": 0.6834495600423528,
+    "f1_pos": 0.9242761692650334,
+    "f1_neg": 0.4426229508196721,
+    "n_items": 510,
+    "roc_auc": 0.7662565263426924
+  },
+  "test": {
+    "macro_f1": 0.6248951342281879,
+    "f1_pos": 0.9060402684563759,
+    "f1_neg": 0.34375,
+    "n_items": 511,
+    "roc_auc": 0.8129960317460317
+  },
+  "coverage": {
+    "policy_train_eligible_items": 1225,
+    "policy_train_total_items": 1225,
+    "val_eligible_items": 510,
+    "val_total_items": 510,
+    "test_eligible_items": 511,
+    "test_total_items": 511
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7282439977187212,
+      "accuracy": 0.849394821510648,
+      "n_votes": 6527,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8376420980910145
+    },
+    "test": {
+      "macro_f1": 0.7532485581266068,
+      "accuracy": 0.84564979978158,
+      "n_votes": 5494,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8492190480838339
+    }
+  },
+  "graph_attention": {
+    "selected": {
+      "name": "skill_affinity",
+      "weights": {
+        "attention_graph": 1.0,
+        "attention_alignment": 1.0,
+        "attention_domain_affinity": 0.75,
+        "attention_local_experience": 0.5,
+        "attention_tenure": 0.25
+      },
+      "policy_train_auc": 0.7743636846787517
+    },
+    "candidates": [
+      {
+        "name": "graph_only",
+        "weights": {
+          "attention_graph": 1.0
+        },
+        "policy_train_auc": 0.5050200455212414
+      },
+      {
+        "name": "skill_affinity",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25
+        },
+        "policy_train_auc": 0.7743636846787517
+      },
+      {
+        "name": "full_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_domain_affinity": 0.75,
+          "attention_local_experience": 0.5,
+          "attention_tenure": 0.25,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.7586103312421291
+      },
+      {
+        "name": "content_social",
+        "weights": {
+          "attention_graph": 1.0,
+          "attention_alignment": 1.0,
+          "attention_case_affinity": 1.0,
+          "attention_domain_affinity": 0.5,
+          "attention_local_experience": 0.5,
+          "attention_social_core": 0.5
+        },
+        "policy_train_auc": 0.7335678717086641
+      }
+    ],
+    "n_graph_users": 1795,
+    "graph_fit": "simulator-prefix co-votes and tenure similarity with a per-case content-affinity restart vector",
+    "topic_conditioned_restart": true,
+    "aggregation": "softmax attention over continuous selected-panel scores"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 2858,
+    "simulator_votes": 31416,
+    "policy_items": 1225,
+    "policy_votes_ignored_except_case_labels": 14658,
+    "cut_timestamp": 1579783612.0,
+    "policy_suffix_use": "attention-family selection only",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2692,
+    "n_candidate_communities": 13,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "intersection_chronological/fold_04",
+    "split_type": "expanding_window_chronological_kfold",
+    "cv_protocol": "expanding_window_chronological",
+    "strict_temporal_order": true,
+    "prospective_interpretation": true,
+    "note": "Outer TRAIN strictly precedes VAL/TEST."
+  }
+}

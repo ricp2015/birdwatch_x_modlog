@@ -1,0 +1,83 @@
+{
+  "policy_train": {
+    "macro_f1": 0.6373327599388379,
+    "f1_pos": 0.9260416666666667,
+    "f1_neg": 0.3486238532110092,
+    "n_items": 1069,
+    "roc_auc": 0.7075514551549137
+  },
+  "val": {
+    "macro_f1": 0.6811541470336748,
+    "f1_pos": 0.9125475285171103,
+    "f1_neg": 0.44976076555023925,
+    "n_items": 762,
+    "roc_auc": 0.7227993607081387
+  },
+  "test": {
+    "macro_f1": 0.6118007662835249,
+    "f1_pos": 0.885823754789272,
+    "f1_neg": 0.3377777777777778,
+    "n_items": 765,
+    "roc_auc": 0.7316240601503758
+  },
+  "coverage": {
+    "val_eligible_items": 762,
+    "val_total_items": 765,
+    "test_eligible_items": 765,
+    "test_total_items": 767
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7937128464655103,
+      "accuracy": 0.8869200279785497,
+      "n_votes": 8578,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.889863776564874
+    },
+    "test": {
+      "macro_f1": 0.8057799800271852,
+      "accuracy": 0.8946044810242341,
+      "n_votes": 8748,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8958906534573161
+    }
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 2500,
+    "simulator_votes": 27923,
+    "policy_items": 1072,
+    "policy_votes_ignored_except_case_labels": 12846,
+    "cut_timestamp": 1582726813.0,
+    "candidate_universe": "users observed in simulator prefix within the case community",
+    "historical_case_voters_used_for_selection": false,
+    "votes_used_for_panel_decision": "frozen per-user simulator outputs",
+    "bandit_feedback": "one selected-panel reward distributed across selected arms with normalized posterior-mean softmax weights",
+    "reward_unit": "panel decision from the trust-weighted continuous simulated score",
+    "selection_score": "posterior mean plus LinUCB uncertainty bonus",
+    "aggregation_weight": "softmax of selected-arm posterior means only",
+    "policy_train_exploration": true,
+    "validation_test_exploration": false,
+    "validation_test_updates": false,
+    "team_size": 3,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2724,
+    "n_candidate_communities": 12,
+    "linucb_updates": 3207,
+    "linucb_total_update_weight": 1068.9999999999998,
+    "ucb_alpha": 0.5,
+    "ridge": 1.0,
+    "softmax_temperature": 1.0,
+    "simulated_estimand": true,
+    "warning": "Downstream policy metrics measure a simulated team-formation world; simulator fidelity must be reported alongside them."
+  },
+  "outer_split_protocol": {
+    "split": "intersection",
+    "split_type": "seeded_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

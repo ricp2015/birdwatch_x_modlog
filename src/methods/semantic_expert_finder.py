@@ -3,38 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
-from typing import Dict
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.methods.team_formation_v2.shared_features import (  # noqa: E402
-    DEFAULT_CAUSAL_FEATURES,
-    attach_causal_features,
-    load_causal_features,
-)
 from src.methods.sef import runtime  # noqa: E402
-from src.methods.sef.runtime import (  # noqa: E402
-    ALPHA,
-    BETA,
-    CACHE_DIR,
-    CAUSAL_METADATA_FEATURES,
-    K_NEIGHBORS,
-    MIN_USER_VOTES,
-    OUTPUT_DIR,
-    SPLITS_DIR,
-    TOP_T,
-    log,
-)
 from src.methods.sef.data import (  # noqa: E402
     _get_model,
     build_faiss_index,
     build_post_embeddings,
-    build_user_embeddings,
+    build_temporal_user_profiles,
+    collect_temporal_profile_requests,
     load_post_texts,
     load_user_documents,
     load_votes,
@@ -43,6 +25,22 @@ from src.methods.sef.experiments import (  # noqa: E402
     evaluate_splits,
     run_kfold,
     save_outputs,
+)
+from src.methods.sef.runtime import (  # noqa: E402
+    ALPHA,
+    BETA,
+    CACHE_DIR,
+    K_NEIGHBORS,
+    MIN_USER_VOTES,
+    OUTPUT_DIR,
+    SPLITS_DIR,
+    TOP_T,
+    log,
+)
+from src.methods.team_formation_v2.shared_features import (  # noqa: E402
+    DEFAULT_CAUSAL_FEATURES,
+    attach_causal_features,
+    load_causal_features,
 )
 
 # ENTRY POINT
@@ -71,31 +69,46 @@ def main() -> None:
     hyperparam_group.add_argument(
         "--reuse-hyperparams",
         action="store_true",
-        help="Skip grid search and reuse each mode/split's existing VAL-selected "
+        help="Skip grid search and reuse each split's existing VAL-selected "
         "K/alpha/beta from its metrics.json; --top-t remains diagnostic/fallback-only.",
     )
     parser.add_argument(
         "--random-seed",
         type=int,
         default=10,
-        help="Seed for deterministic, mode-shared TRAIN sampling.",
-    )
-    parser.add_argument(
-        "--causal-metadata-mode",
-        choices=["all", *CAUSAL_METADATA_FEATURES],
-        default="all",
-        help="Causal user-profile ablation; 'all' runs none/global/subreddit/full "
-        "and saves each mode in a separate output subdirectory.",
+        help="Seed for deterministic TRAIN sampling.",
     )
     parser.add_argument("--causal-metadata-weight", type=float, default=0.20)
     parser.add_argument("--causal-features", type=Path, default=DEFAULT_CAUSAL_FEATURES)
-    parser.add_argument("--input-csv", type=Path, default=None)
+    parser.add_argument(
+        "--input-csv",
+        "--input",
+        dest="input_csv",
+        type=Path,
+        default=None,
+        help="Base vote table (CSV, Parquet, JSON, or JSONL).",
+    )
+    parser.add_argument(
+        "--post-texts",
+        type=Path,
+        default=runtime.FETCH_DIR / "post_texts.parquet",
+    )
+    parser.add_argument(
+        "--user-documents",
+        type=Path,
+        default=runtime.FETCH_DIR / "user_documents.parquet",
+    )
+    parser.add_argument("--embedding-dir", type=Path, default=CACHE_DIR)
+    parser.add_argument(
+        "--embedding-model",
+        default=runtime.EMBEDDING_MODEL,
+        help="SentenceTransformers model id or local model directory.",
+    )
     parser.add_argument(
         "--votes-dir",
         type=Path,
         default=SPLITS_DIR,
-        help="Directory with the splits produced by prepare_data_step1 "
-        "(splits/, splits_full/, splits_intersection/, windowed_folds_*)",
+        help="Root containing the 13 canonical prepared splits, or one direct split.",
     )
     parser.add_argument(
         "--tasks",
@@ -119,7 +132,7 @@ def main() -> None:
     if args.reuse_hyperparams and "kfold" in tasks_to_run:
         parser.error("--reuse-hyperparams is supported for canonical splits, not legacy kfold")
 
-    embed_dir = CACHE_DIR
+    embed_dir = args.embedding_dir
 
     log.info(
         "Starting SEF: alpha=%.2f, beta=%.2f, gamma=%.2f, tasks=%s",
@@ -131,91 +144,65 @@ def main() -> None:
 
     runtime.causal_metadata_weight = args.causal_metadata_weight
     runtime.random_seed = args.random_seed
-    modes = (
-        list(CAUSAL_METADATA_FEATURES)
-        if args.causal_metadata_mode == "all"
-        else [args.causal_metadata_mode]
-    )
-    if any(mode != "none" for mode in modes):
-        runtime.causal_feature_table = load_causal_features(args.causal_features)
+    runtime.causal_feature_table = load_causal_features(args.causal_features)
 
     base_vote_df = load_votes(args.input_csv)
-    enriched_vote_df = (
-        attach_causal_features(base_vote_df, runtime.causal_feature_table)
-        if any(mode != "none" for mode in modes)
-        else base_vote_df
-    )
-    post_texts = load_post_texts()
-    user_docs = load_user_documents()
+    enriched_vote_df = attach_causal_features(base_vote_df, runtime.causal_feature_table)
+    post_texts = load_post_texts(args.post_texts)
+    user_docs = load_user_documents(args.user_documents)
+    profile_requests = collect_temporal_profile_requests(base_vote_df, args.votes_dir)
 
-    model = _get_model()
+    model = args.embedding_model or _get_model()
     post_emb, post_id_list = build_post_embeddings(post_texts, embed_dir, model)
-    user_emb, user_id_list = build_user_embeddings(user_docs, embed_dir, model)
+    user_profiles = build_temporal_user_profiles(user_docs, profile_requests, embed_dir, model)
     log.info(
         "User profiles: %d / %d (%.1f%%)",
-        len(user_id_list),
+        user_profiles.n_users_with_history,
         base_vote_df["username"].nunique(),
-        100 * len(user_id_list) / max(base_vote_df["username"].nunique(), 1),
+        100 * user_profiles.n_users_with_history / max(base_vote_df["username"].nunique(), 1),
     )
 
     faiss_index = build_faiss_index(post_emb, announce=True)
 
-    all_mode_summaries: Dict[str, Dict[str, Dict]] = {}
-    for mode in modes:
-        runtime.causal_metadata_mode = mode
-        mode_output_dir = (
-            args.output_dir / mode if args.causal_metadata_mode == "all" else args.output_dir
+    log.info("Using the full causal metadata profile; output: %s", args.output_dir)
+
+    if "kfold" in tasks_to_run:
+        fold_metrics, fold_item_scores, fold_weights = run_kfold(
+            vote_df=enriched_vote_df,
+            post_emb=post_emb,
+            post_id_list=post_id_list,
+            user_profiles=user_profiles,
+            faiss_index=faiss_index,
+            default_k=args.k_neighbors,
+            default_t=args.top_t,
+            default_alpha=args.alpha,
+            default_beta=args.beta,
+            min_coverage=args.min_user_votes,
+            do_grid_search=not args.no_grid_search,
         )
-        vote_df = base_vote_df if mode == "none" else enriched_vote_df
+        save_outputs(
+            fold_metrics,
+            fold_item_scores,
+            fold_weights,
+            args.output_dir / "kfold" / "expertise",
+        )
 
-        log.info("Causal metadata mode %s; output: %s", mode, mode_output_dir)
-
-        if "kfold" in tasks_to_run:
-            fold_metrics, fold_item_scores, fold_weights = run_kfold(
-                vote_df=vote_df,
-                post_emb=post_emb,
-                post_id_list=post_id_list,
-                user_emb=user_emb,
-                user_id_list=user_id_list,
-                faiss_index=faiss_index,
-                default_k=args.k_neighbors,
-                default_t=args.top_t,
-                default_alpha=args.alpha,
-                default_beta=args.beta,
-                min_coverage=args.min_user_votes,
-                do_grid_search=not args.no_grid_search,
-            )
-            save_outputs(
-                fold_metrics,
-                fold_item_scores,
-                fold_weights,
-                mode_output_dir / "kfold" / "expertise",
-            )
-
-        if "splits" in tasks_to_run:
-            all_mode_summaries[mode] = evaluate_splits(
-                votes_dir=args.votes_dir,
-                output_dir=mode_output_dir,
-                post_emb=post_emb,
-                post_id_list=post_id_list,
-                user_emb=user_emb,
-                user_id_list=user_id_list,
-                faiss_index=faiss_index,
-                default_k=args.k_neighbors,
-                default_t=args.top_t,
-                default_alpha=args.alpha,
-                default_beta=args.beta,
-                min_coverage=args.min_user_votes,
-                do_grid_search=not args.no_grid_search,
-                reuse_hyperparams=args.reuse_hyperparams,
-            )
-
-    if args.causal_metadata_mode == "all" and all_mode_summaries:
-        args.output_dir.mkdir(parents=True, exist_ok=True)
-        summary_path = args.output_dir / "all_metadata_modes_summary.json"
-        with open(summary_path, "w") as fh:
-            json.dump(all_mode_summaries, fh, indent=2)
-        log.info("Metadata-mode summary saved to %s", summary_path)
+    if "splits" in tasks_to_run:
+        evaluate_splits(
+            votes_dir=args.votes_dir,
+            output_dir=args.output_dir,
+            post_emb=post_emb,
+            post_id_list=post_id_list,
+            user_profiles=user_profiles,
+            faiss_index=faiss_index,
+            default_k=args.k_neighbors,
+            default_t=args.top_t,
+            default_alpha=args.alpha,
+            default_beta=args.beta,
+            min_coverage=args.min_user_votes,
+            do_grid_search=not args.no_grid_search,
+            reuse_hyperparams=args.reuse_hyperparams,
+        )
 
     log.info("Processing complete.")
 

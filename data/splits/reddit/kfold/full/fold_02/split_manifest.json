@@ -1,0 +1,55 @@
+{
+  "split_type": "stratified_item_kfold",
+  "split_unit": "item_id",
+  "seed": 10,
+  "n_source_votes": 189630,
+  "n_source_items": 73872,
+  "n_source_users": 14925,
+  "partitions": {
+    "train": {
+      "n_votes": 113491,
+      "n_items": 44324,
+      "n_users": 12889,
+      "item_fraction": 0.6000108295429933,
+      "vote_time_start": "2012-01-03T14:49:55+00:00",
+      "vote_time_end": "2022-05-13T00:14:28+00:00",
+      "users_seen_in_train_fraction": 1.0
+    },
+    "val": {
+      "n_votes": 37985,
+      "n_items": 14774,
+      "n_users": 8542,
+      "item_fraction": 0.19999458522850336,
+      "vote_time_start": "2014-02-04T22:33:38+00:00",
+      "vote_time_end": "2023-03-02T21:54:17+00:00",
+      "users_seen_in_train_fraction": 0.8632638726293608
+    },
+    "test": {
+      "n_votes": 38154,
+      "n_items": 14774,
+      "n_users": 8536,
+      "item_fraction": 0.19999458522850336,
+      "vote_time_start": "2012-08-19T18:06:58+00:00",
+      "vote_time_end": "2022-02-07T06:26:19+00:00",
+      "users_seen_in_train_fraction": 0.8653936269915652
+    }
+  },
+  "checks": {
+    "item_overlap": 0,
+    "all_source_items_preserved": true,
+    "all_source_votes_preserved": true,
+    "each_item_is_test_once": true,
+    "each_item_is_validation_once": true
+  },
+  "dataset": "full",
+  "source_split": "full",
+  "cv_protocol": "stratified_item",
+  "fold_index": 2,
+  "fold_name": "fold_02",
+  "n_folds": 5,
+  "n_population_votes": 189630,
+  "n_population_items": 73872,
+  "n_unused_future_votes": 0,
+  "n_unused_future_items": 0,
+  "validation_fold_index": 3
+}

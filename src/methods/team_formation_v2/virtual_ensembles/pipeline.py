@@ -152,7 +152,7 @@ def build_features(
     )
     rows = []
     members = []
-    for case_number, case in enumerate(ordered.itertuples(index=False), start=1):
+    for case in ordered.itertuples(index=False):
         pool = candidate_pools.get(str(case.community))
         if pool is None or pool.empty:
             continue
@@ -174,8 +174,6 @@ def build_features(
         )
         rows.append(row)
         members.append(membership)
-        if case_number % 250 == 0:
-            print(f"  {split_name}: built {case_number:,}/{len(ordered):,} cases")
     membership = pd.concat(members, ignore_index=True) if members else pd.DataFrame()
     return pd.DataFrame(rows), membership
 

@@ -1,0 +1,135 @@
+{
+  "meta_train": {
+    "macro_f1": 0.6130176023030165,
+    "f1_pos": 0.8185418359057677,
+    "f1_neg": 0.40749336870026526,
+    "n_items": 12864,
+    "roc_auc": 0.6610238050223638
+  },
+  "val": {
+    "macro_f1": 0.6457707012415167,
+    "f1_pos": 0.8178290993071593,
+    "f1_neg": 0.47371230317587404,
+    "n_items": 14572,
+    "roc_auc": 0.7224584291400814
+  },
+  "test": {
+    "macro_f1": 0.6329893584302146,
+    "f1_pos": 0.8113120501937627,
+    "f1_neg": 0.45466666666666666,
+    "n_items": 14588,
+    "roc_auc": 0.7217225188862331
+  },
+  "coverage": {
+    "meta_train": {
+      "eligible_items": 12864,
+      "total_items": 13297
+    },
+    "val": {
+      "eligible_items": 14572,
+      "total_items": 14775
+    },
+    "test": {
+      "eligible_items": 14588,
+      "total_items": 14774
+    }
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7501114295293818,
+      "accuracy": 0.8149055559946258,
+      "n_votes": 37959,
+      "post_embedding_coverage": 0.9996615905245347,
+      "roc_auc": 0.8444476917903334
+    },
+    "test": {
+      "macro_f1": 0.7563017173038773,
+      "accuracy": 0.8177196221669208,
+      "n_votes": 37371,
+      "post_embedding_coverage": 0.999932313523758,
+      "roc_auc": 0.8503317871200216
+    }
+  },
+  "ensemble": {
+    "teams": [
+      "high_tenure_low_activity",
+      "domain_expert_high_moderator_agreement"
+    ],
+    "team_definitions": {
+      "high_tenure_low_activity": "geometric conjunction of prefix-only tenure and inverse local activity",
+      "domain_expert_high_moderator_agreement": "geometric conjunction of case topic affinity and prefix-only local moderator agreement"
+    },
+    "teams_are_overlapping": true,
+    "team_size": 3,
+    "meta_learner": "standardized class-balanced logistic regression",
+    "regularization_c": 0.01,
+    "hyperparameter_search": {
+      "selected": {
+        "regularization_c": 0.01,
+        "inner_tune_auc": 0.6389897557743007
+      },
+      "candidates": [
+        {
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.6389897557743007
+        },
+        {
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.6389493676872984
+        },
+        {
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.6388574316471485
+        },
+        {
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.6388398947146343
+        },
+        {
+          "regularization_c": 1.0,
+          "inner_tune_auc": 0.6388266091596992
+        }
+      ],
+      "selection_metric": "ROC-AUC",
+      "inner_split": {
+        "protocol": "chronological_inner_holdout",
+        "fit_items": 9648,
+        "tune_items": 3216,
+        "tuning_fraction": 0.25,
+        "cut_timestamp": 1586537021.0
+      }
+    },
+    "verdict_features": "the two continuous sub-team consensuses only",
+    "n_model_features": 2,
+    "selection_uses_case_votes": false,
+    "case_affinity": "cosine similarity to prefix-only user content centroid"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 31026,
+    "simulator_votes": 72638,
+    "policy_items": 13297,
+    "policy_votes_ignored_except_case_labels": 41662,
+    "cut_timestamp": 1578421102.0,
+    "policy_suffix_use": "chronological inner C tuning, then full-suffix meta-learner refit",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_team_selection": false,
+    "votes_used_for_team_consensus": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 8112,
+    "n_candidate_communities": 141,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "full/fold_04",
+    "split_type": "stratified_item_kfold",
+    "cv_protocol": "stratified_item",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

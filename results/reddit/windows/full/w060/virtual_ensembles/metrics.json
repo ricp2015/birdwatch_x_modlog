@@ -1,0 +1,134 @@
+{
+  "meta_train": {
+    "macro_f1": 0.5454326923076923,
+    "f1_pos": 0.8729166666666667,
+    "f1_neg": 0.21794871794871795,
+    "n_items": 558,
+    "roc_auc": 0.661768149882904
+  },
+  "val": {
+    "macro_f1": 0.6428528228854818,
+    "f1_pos": 0.8949771689497716,
+    "f1_neg": 0.39072847682119205,
+    "n_items": 1027,
+    "roc_auc": 0.7557979513644538
+  },
+  "test": {
+    "macro_f1": 0.6057678282837122,
+    "f1_pos": 0.8885116015846066,
+    "f1_neg": 0.3230240549828179,
+    "n_items": 1029,
+    "roc_auc": 0.737089058435323
+  },
+  "coverage": {
+    "meta_train": {
+      "eligible_items": 558,
+      "total_items": 559
+    },
+    "val": {
+      "eligible_items": 1027,
+      "total_items": 1035
+    },
+    "test": {
+      "eligible_items": 1029,
+      "total_items": 1035
+    }
+  },
+  "simulator_fidelity_on_observed_votes": {
+    "val": {
+      "macro_f1": 0.7973379808050167,
+      "accuracy": 0.8869692281244628,
+      "n_votes": 11634,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8818191724331748
+    },
+    "test": {
+      "macro_f1": 0.7925318887227153,
+      "accuracy": 0.8891978429389956,
+      "n_votes": 11868,
+      "post_embedding_coverage": 1.0,
+      "roc_auc": 0.8844465853136373
+    }
+  },
+  "ensemble": {
+    "teams": [
+      "high_tenure_low_activity",
+      "domain_expert_high_moderator_agreement"
+    ],
+    "team_definitions": {
+      "high_tenure_low_activity": "geometric conjunction of prefix-only tenure and inverse local activity",
+      "domain_expert_high_moderator_agreement": "geometric conjunction of case topic affinity and prefix-only local moderator agreement"
+    },
+    "teams_are_overlapping": true,
+    "team_size": 3,
+    "meta_learner": "standardized class-balanced logistic regression",
+    "regularization_c": 0.3,
+    "hyperparameter_search": {
+      "selected": {
+        "regularization_c": 0.3,
+        "inner_tune_auc": 0.673355629877369
+      },
+      "candidates": [
+        {
+          "regularization_c": 0.01,
+          "inner_tune_auc": 0.664065403195838
+        },
+        {
+          "regularization_c": 0.03,
+          "inner_tune_auc": 0.6696395392047566
+        },
+        {
+          "regularization_c": 0.1,
+          "inner_tune_auc": 0.6726124117428466
+        },
+        {
+          "regularization_c": 0.3,
+          "inner_tune_auc": 0.673355629877369
+        },
+        {
+          "regularization_c": 1.0,
+          "inner_tune_auc": 0.6729840208101078
+        }
+      ],
+      "selection_metric": "ROC-AUC",
+      "inner_split": {
+        "protocol": "chronological_inner_holdout",
+        "fit_items": 418,
+        "tune_items": 140,
+        "tuning_fraction": 0.25,
+        "cut_timestamp": 1587778743.0
+      }
+    },
+    "verdict_features": "the two continuous sub-team consensuses only",
+    "n_model_features": 2,
+    "selection_uses_case_votes": false,
+    "case_affinity": "cosine similarity to prefix-only user content centroid"
+  },
+  "protocol": {
+    "protocol": "chronological_disjoint_prefix_suffix",
+    "simulator_fraction": 0.7,
+    "simulator_items": 1304,
+    "simulator_votes": 14714,
+    "policy_items": 559,
+    "policy_votes_ignored_except_case_labels": 6584,
+    "cut_timestamp": 1582973292.0,
+    "policy_suffix_use": "chronological inner C tuning, then full-suffix meta-learner refit",
+    "candidate_universe": "same prefix-only community pools as team_formation_v2.bandit",
+    "historical_case_voters_used_for_team_selection": false,
+    "votes_used_for_team_consensus": "selected users' frozen simulator outputs",
+    "validation_test_updates": false,
+    "max_candidates": 0,
+    "min_user_history": 2,
+    "n_candidate_profiles": 2118,
+    "n_candidate_communities": 13,
+    "simulated_estimand": true,
+    "warning": "Policy metrics describe a simulated team-formation world and must be reported with simulator fidelity and coverage."
+  },
+  "outer_split_protocol": {
+    "split": "windows/full/w060",
+    "split_type": "nested_training_windows",
+    "strict_temporal_order": false,
+    "prospective_interpretation": false,
+    "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
+  }
+}

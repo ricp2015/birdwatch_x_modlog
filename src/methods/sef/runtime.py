@@ -12,8 +12,6 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from src.data_preparation.interim_paths import AUXILIARY_DIR, DATASETS_DIR
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -21,9 +19,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # Paths
-STEP1_DIR = DATASETS_DIR
+STEP1_DIR = Path("data/interim/reddit/datasets")
 SPLITS_DIR = Path("data/splits/reddit")
-FETCH_DIR = AUXILIARY_DIR
+FETCH_DIR = Path("data/interim/reddit/auxiliary")
 OUTPUT_DIR = Path("results/reddit")
 CACHE_DIR = Path("cache/embeddings")
 ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")
@@ -88,48 +86,27 @@ log = logging.getLogger(__name__)
 
 post_ids_ordered: List[str] = []
 causal_feature_table: Optional[pd.DataFrame] = None
-causal_metadata_mode = "none"
 causal_metadata_weight = 0.20
 random_seed = 10
 
-CAUSAL_METADATA_FEATURES = {
-    "none": [],
-    "global": [
-        "prior_n_posts",
-        "prior_n_comments",
-        "prior_n_distinct_subreddits",
-        "prior_n_replies_made",
-        "tenure_days_at_vote",
-    ],
-    "subreddit": [
-        "prior_n_posts",
-        "prior_n_comments",
-        "prior_n_distinct_subreddits",
-        "prior_n_replies_made",
-        "tenure_days_at_vote",
-        "prior_n_posts_in_sub",
-        "prior_n_comments_in_sub",
-        "prior_n_months_active_in_sub",
-    ],
-    "full": [
-        "prior_n_posts",
-        "prior_n_comments",
-        "prior_n_distinct_subreddits",
-        "prior_n_replies_made",
-        "tenure_days_at_vote",
-        "prior_n_posts_in_sub",
-        "prior_n_comments_in_sub",
-        "prior_n_months_active_in_sub",
-        "prior_n_interaction_partners",
-        "prior_total_interactions",
-        "prior_n_interaction_partners_in_sub",
-        "prior_total_interactions_in_sub",
-    ],
-}
+CAUSAL_METADATA_FEATURES = [
+    "prior_n_posts",
+    "prior_n_comments",
+    "prior_n_distinct_subreddits",
+    "prior_n_replies_made",
+    "tenure_days_at_vote",
+    "prior_n_posts_in_sub",
+    "prior_n_comments_in_sub",
+    "prior_n_months_active_in_sub",
+    "prior_n_interaction_partners",
+    "prior_total_interactions",
+    "prior_n_interaction_partners_in_sub",
+    "prior_total_interactions_in_sub",
+]
 
 
 def _rng_for_split(split_label: str, purpose: str) -> np.random.Generator:
-    """Return a stable RNG shared by every metadata mode for one split."""
+    """Return a stable RNG for one split and sampling purpose."""
     payload = f"{random_seed}:{split_label}:{purpose}".encode("utf-8")
     derived_seed = int.from_bytes(hashlib.sha256(payload).digest()[:8], "little")
     return np.random.default_rng(derived_seed)
@@ -137,9 +114,7 @@ def _rng_for_split(split_label: str, purpose: str) -> np.random.Generator:
 
 def _causal_metadata_scores(votes: pd.DataFrame, item_ids: List[str]) -> Dict[tuple, float]:
     """Return bounded per-vote causal profile scores for semantic-weight fusion."""
-    columns = CAUSAL_METADATA_FEATURES[causal_metadata_mode]
-    if not columns:
-        return {}
+    columns = CAUSAL_METADATA_FEATURES
     subset = votes[votes["item_id"].isin(item_ids)][["item_id", "username", *columns]].copy()
     subset = subset.drop_duplicates(["item_id", "username"], keep="last")
     components = []

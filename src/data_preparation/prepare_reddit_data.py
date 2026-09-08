@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -10,11 +11,13 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import StratifiedKFold
 
-from src.data_preparation.interim_paths import AUXILIARY_DIR, DATASETS_DIR
+from src.utils.tabular import read_table
 
 INPUT_PATH = Path("data/processed/final_intersection_dataset.csv")
-OUTPUT_DIR = DATASETS_DIR
+OUTPUT_DIR = Path("data/interim/reddit/datasets")
+AUXILIARY_DIR = Path("data/interim/reddit/auxiliary")
 SPLITS_DIR = Path("data/splits/reddit")
 
 MIN_VOTES_PER_POST = 5
@@ -31,6 +34,8 @@ _SEF_MIN_USER_VOTES = 10
 _WINDOW_SIZES = [0.2, 0.4, 0.6, 0.8, 1.0]
 _WINDOW_TEST_FRAC = 0.20
 _WINDOW_VAL_FRAC = 0.20
+_K_FOLDS = 5
+_CHRONOLOGICAL_INITIAL_TRAIN_FRAC = 0.40
 _CORE_COLUMNS = ["username", "community", "item_id", "timestamp", "vote", "label"]
 
 logging.basicConfig(
@@ -41,10 +46,20 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load_dataset(path: Path = INPUT_PATH) -> pd.DataFrame:
-    """Load, validate, clean, and deterministically deduplicate the vote CSV."""
+    """Load, validate, clean, and deterministically deduplicate a vote table."""
     log.info("Loading dataset from %s", path)
-    df = pd.read_csv(path, low_memory=False)
+    df = read_table(path)
     missing = set(_CORE_COLUMNS) - set(df.columns)
     if missing:
         raise ValueError(f"Input dataset is missing columns: {sorted(missing)}")
@@ -54,12 +69,30 @@ def load_dataset(path: Path = INPUT_PATH) -> pd.DataFrame:
     df = df[df["vote"].isin([1, -1]) & df["label"].isin([1, -1])].copy()
     df["vote"] = df["vote"].astype("int8")
     df["label"] = df["label"].astype("int8")
-    numeric_timestamp = pd.to_numeric(df["timestamp"], errors="coerce")
-    df["timestamp"] = pd.to_datetime(numeric_timestamp, unit="s", utc=True, errors="coerce")
+    timestamp_values = df["timestamp"]
+    if pd.api.types.is_datetime64_any_dtype(timestamp_values.dtype):
+        parsed_timestamp = pd.to_datetime(timestamp_values, utc=True, errors="coerce")
+    else:
+        numeric_timestamp = pd.to_numeric(timestamp_values, errors="coerce")
+        parsed_timestamp = pd.to_datetime(numeric_timestamp, unit="s", utc=True, errors="coerce")
+        unresolved = parsed_timestamp.isna() & timestamp_values.notna()
+        if unresolved.any():
+            parsed_timestamp.loc[unresolved] = pd.to_datetime(
+                timestamp_values.loc[unresolved], utc=True, errors="coerce"
+            )
+    df["timestamp"] = parsed_timestamp
 
     before = len(df)
     df = df.dropna(subset=_CORE_COLUMNS)
     log.info("Dropped %d rows with invalid core values", before - len(df))
+    inconsistent_labels = df.groupby("item_id")["label"].nunique()
+    if (inconsistent_labels > 1).any():
+        raise ValueError(f"{int((inconsistent_labels > 1).sum())} item(s) have conflicting labels")
+    inconsistent_communities = df.groupby("item_id")["community"].nunique()
+    if (inconsistent_communities > 1).any():
+        raise ValueError(
+            f"{int((inconsistent_communities > 1).sum())} item(s) belong to multiple communities"
+        )
     before = len(df)
     df = df.drop_duplicates(subset=["username", "item_id"], keep="first")
     log.info("Dropped %d duplicate (username, item_id) pairs", before - len(df))
@@ -141,7 +174,7 @@ def identify_method_filters(
     }
 
     if external_scores_path is not None and external_scores_path.exists():
-        ext = pd.read_parquet(external_scores_path, columns=["item_id"])
+        ext = read_table(external_scores_path, columns=["item_id"])
         items_ext = items_bl & set(ext["item_id"].dropna().unique())
         missing_ext = len(items_bl) - len(items_ext)
     else:
@@ -186,7 +219,7 @@ def identify_method_filters(
     }
 
     if post_texts_path is not None and post_texts_path.exists():
-        post_texts = pd.read_parquet(post_texts_path, columns=["item_id", "text"])
+        post_texts = read_table(post_texts_path, columns=["item_id", "text"])
         items_sef = set(post_texts.loc[post_texts["text"].notna(), "item_id"].unique())
     else:
         items_sef = all_items
@@ -412,6 +445,309 @@ def _write_split(splits: dict[str, pd.DataFrame], manifest: dict, output_dir: Pa
     )
 
 
+def _item_table(votes: pd.DataFrame) -> pd.DataFrame:
+    """Return one deterministic row per item and reject inconsistent labels."""
+    label_counts = votes.groupby("item_id")["label"].nunique(dropna=False)
+    inconsistent = label_counts[label_counts != 1]
+    if not inconsistent.empty:
+        raise ValueError(f"{len(inconsistent):,} items have inconsistent labels")
+    return (
+        votes.groupby("item_id", as_index=False)
+        .agg(
+            label=("label", "first"),
+            item_first_time=("timestamp", "min"),
+            item_time=("timestamp", "max"),
+        )
+        .sort_values("item_id", kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def _fold_manifest(
+    population_votes: pd.DataFrame,
+    splits: dict[str, pd.DataFrame],
+    *,
+    dataset: str,
+    fold_index: int,
+    n_folds: int,
+    protocol: str,
+    seed: int | None,
+) -> dict[str, Any]:
+    """Build the common manifest fields for one materialized K-fold split."""
+    fold_source = pd.concat(splits.values(), ignore_index=True)
+    manifest = _split_manifest(fold_source, splits, f"{protocol}_kfold", seed=seed)
+    manifest.update(
+        {
+            "dataset": dataset,
+            "source_split": dataset,
+            "cv_protocol": protocol,
+            "fold_index": fold_index,
+            "fold_name": f"fold_{fold_index:02d}",
+            "n_folds": n_folds,
+            "n_population_votes": int(len(population_votes)),
+            "n_population_items": int(population_votes["item_id"].nunique()),
+            "n_unused_future_votes": int(len(population_votes) - len(fold_source)),
+            "n_unused_future_items": int(
+                population_votes["item_id"].nunique() - fold_source["item_id"].nunique()
+            ),
+        }
+    )
+    return manifest
+
+
+def build_stratified_kfold_splits(
+    votes: pd.DataFrame,
+    dataset: str,
+    n_folds: int = _K_FOLDS,
+    seed: int = SEED,
+    item_fold_assignment: dict[str, int] | None = None,
+) -> tuple[list[tuple[dict[str, pd.DataFrame], dict]], dict[str, int]]:
+    """Build item-level random folds with one rotating VAL and TEST block."""
+    if n_folds < 3:
+        raise ValueError("Random K-fold requires at least three folds for TRAIN/VAL/TEST")
+    items = _item_table(votes)
+    if item_fold_assignment is None:
+        minimum_class = int(items["label"].value_counts().min())
+        if minimum_class < n_folds:
+            raise ValueError(
+                f"The smallest label class has {minimum_class} items; cannot build {n_folds} "
+                "stratified folds"
+            )
+        assignment: dict[str, int] = {}
+        splitter = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        for fold_index, (_, test_indices) in enumerate(splitter.split(items, items["label"])):
+            assignment.update(
+                {str(item_id): fold_index for item_id in items.iloc[test_indices]["item_id"]}
+            )
+    else:
+        missing = set(items["item_id"].astype(str)).difference(item_fold_assignment)
+        if missing:
+            raise ValueError(f"Shared fold assignment is missing {len(missing):,} {dataset} items")
+        assignment = {
+            str(item_id): int(item_fold_assignment[str(item_id)]) for item_id in items["item_id"]
+        }
+
+    item_folds = items["item_id"].astype(str).map(assignment)
+    outputs: list[tuple[dict[str, pd.DataFrame], dict]] = []
+    for fold_index in range(n_folds):
+        test_ids = set(items.loc[item_folds == fold_index, "item_id"])
+        val_ids = set(items.loc[item_folds == (fold_index + 1) % n_folds, "item_id"])
+        train_ids = set(items["item_id"]) - test_ids - val_ids
+        splits = {
+            name: votes[votes["item_id"].isin(ids)]
+            .sort_values(["item_id", "timestamp", "username"], kind="stable")
+            .reset_index(drop=True)
+            for name, ids in (("train", train_ids), ("val", val_ids), ("test", test_ids))
+        }
+        _validate_partition(votes, splits)
+        manifest = _fold_manifest(
+            votes,
+            splits,
+            dataset=dataset,
+            fold_index=fold_index,
+            n_folds=n_folds,
+            protocol="stratified_item",
+            seed=seed,
+        )
+        manifest["validation_fold_index"] = (fold_index + 1) % n_folds
+        manifest["checks"]["each_item_is_test_once"] = True
+        manifest["checks"]["each_item_is_validation_once"] = True
+        outputs.append((splits, manifest))
+    return outputs, assignment
+
+
+def build_chronological_kfold_splits(
+    votes: pd.DataFrame,
+    dataset: str = "intersection_chronological",
+    n_folds: int = _K_FOLDS,
+    initial_train_fraction: float = _CHRONOLOGICAL_INITIAL_TRAIN_FRAC,
+) -> list[tuple[dict[str, pd.DataFrame], dict]]:
+    """Build expanding-window folds with adjacent chronological VAL and TEST blocks."""
+    if n_folds < 1:
+        raise ValueError("Chronological K-fold requires at least one fold")
+    if not 0.0 < initial_train_fraction < 1.0:
+        raise ValueError("initial_train_fraction must be in (0, 1)")
+
+    votes = votes.copy()
+    votes["timestamp"] = pd.to_datetime(votes["timestamp"], utc=True, errors="coerce")
+    if votes["timestamp"].isna().any():
+        raise ValueError("Chronological K-fold input contains invalid timestamps")
+    items = _item_table(votes).sort_values(["item_time", "item_id"], kind="stable")
+    items = items.reset_index(drop=True)
+    n_items = len(items)
+    if n_items < n_folds + 2:
+        raise ValueError(f"At least {n_folds + 2} items are required")
+
+    # The population consists of an initial TRAIN prefix followed by K+1
+    # approximately equal temporal blocks.  For fold i, block i is VAL and
+    # block i+1 is TEST; every later item remains genuinely unavailable.
+    remainder = n_items * (1.0 - initial_train_fraction)
+    targets = [
+        int(n_items * initial_train_fraction + remainder * step / (n_folds + 1))
+        for step in range(n_folds + 1)
+    ]
+    boundaries: list[int] = []
+    lower = 0
+    for target in targets:
+        boundary = _boundary_after_ties(items, target, lower=lower)
+        boundaries.append(boundary)
+        lower = boundary
+    boundaries.append(n_items)
+
+    outputs: list[tuple[dict[str, pd.DataFrame], dict]] = []
+    for fold_index in range(n_folds):
+        train_end, val_end, test_end = boundaries[fold_index : fold_index + 3]
+        ids = {
+            "train": set(items.iloc[:train_end]["item_id"]),
+            "val": set(items.iloc[train_end:val_end]["item_id"]),
+            "test": set(items.iloc[val_end:test_end]["item_id"]),
+        }
+        splits = {
+            name: votes[votes["item_id"].isin(partition_ids)]
+            .sort_values(["timestamp", "item_id", "username"], kind="stable")
+            .reset_index(drop=True)
+            for name, partition_ids in ids.items()
+        }
+        fold_source = votes[votes["item_id"].isin(set().union(*ids.values()))]
+        _validate_partition(fold_source, splits)
+        train_max = items[items["item_id"].isin(ids["train"])]["item_time"].max()
+        val_times = items[items["item_id"].isin(ids["val"])]["item_time"]
+        test_times = items[items["item_id"].isin(ids["test"])]["item_time"]
+        if not (train_max < val_times.min() and val_times.max() < test_times.min()):
+            raise AssertionError(f"Chronological fold {fold_index} is not strictly ordered")
+
+        manifest = _fold_manifest(
+            votes,
+            splits,
+            dataset=dataset,
+            fold_index=fold_index,
+            n_folds=n_folds,
+            protocol="expanding_window_chronological",
+            seed=None,
+        )
+        manifest.update(
+            {
+                "item_time_definition": "maximum vote timestamp per item (case completion)",
+                "tie_policy": "equal boundary timestamps stay in the earlier partition",
+                "initial_train_fraction_target": initial_train_fraction,
+                "future_data_policy": "items after TEST are excluded from the fold",
+                "checks": {
+                    **manifest["checks"],
+                    "strict_temporal_order": True,
+                },
+            }
+        )
+        outputs.append((splits, manifest))
+    return outputs
+
+
+def write_kfold_splits(
+    full_votes: pd.DataFrame,
+    intersection_votes: pd.DataFrame,
+    output_root: Path,
+    n_folds: int = _K_FOLDS,
+    seed: int = SEED,
+    chronological_initial_train_fraction: float = _CHRONOLOGICAL_INITIAL_TRAIN_FRAC,
+) -> dict[str, Any]:
+    """Materialize the three K-fold collections under one compact root."""
+    output_root.mkdir(parents=True, exist_ok=True)
+    random_full, shared_assignment = build_stratified_kfold_splits(
+        full_votes, "full", n_folds=n_folds, seed=seed
+    )
+    random_intersection, _ = build_stratified_kfold_splits(
+        intersection_votes,
+        "intersection",
+        n_folds=n_folds,
+        seed=seed,
+        item_fold_assignment=shared_assignment,
+    )
+    chronological = build_chronological_kfold_splits(
+        intersection_votes,
+        n_folds=n_folds,
+        initial_train_fraction=chronological_initial_train_fraction,
+    )
+    collections = {
+        "full": ("stratified_item", random_full),
+        "intersection": ("stratified_item", random_intersection),
+        "intersection_chronological": ("expanding_window_chronological", chronological),
+    }
+    populations = {
+        "full": full_votes,
+        "intersection": intersection_votes,
+        "intersection_chronological": intersection_votes,
+    }
+    root_manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "split_type": "kfold_root",
+        "n_folds": n_folds,
+        "seed": seed,
+        "datasets": [],
+    }
+    for dataset, (protocol, folds) in collections.items():
+        dataset_root = output_root / dataset
+        test_sets = [set(splits["test"]["item_id"]) for splits, _ in folds]
+        test_items = set().union(*test_sets)
+        test_overlap = sum(
+            len(test_sets[left] & test_sets[right])
+            for left in range(len(test_sets))
+            for right in range(left + 1, len(test_sets))
+        )
+        dataset_manifest = {
+            "schema_version": 1,
+            "split_type": "kfold_collection",
+            "dataset": dataset,
+            "protocol": protocol,
+            "n_folds": n_folds,
+            "seed": seed if protocol == "stratified_item" else None,
+            "n_population_votes": len(populations[dataset]),
+            "n_population_items": int(populations[dataset]["item_id"].nunique()),
+            "n_unique_test_items": len(test_items),
+            "test_population_fraction": float(
+                len(test_items) / max(populations[dataset]["item_id"].nunique(), 1)
+            ),
+            "test_items_exhaust_population": len(test_items)
+            == populations[dataset]["item_id"].nunique(),
+            "checks": {
+                "test_item_overlap_across_folds": test_overlap,
+                "test_coverage_matches_protocol": (
+                    len(test_items) == populations[dataset]["item_id"].nunique()
+                    if protocol == "stratified_item"
+                    else 0 < len(test_items) < populations[dataset]["item_id"].nunique()
+                ),
+            },
+            "folds": [],
+        }
+        if dataset == "intersection":
+            dataset_manifest["shared_item_fold_assignment"] = "full"
+        if dataset == "intersection_chronological":
+            dataset_manifest["initial_train_fraction_target"] = (
+                chronological_initial_train_fraction
+            )
+        for fold_index, (splits, manifest) in enumerate(folds):
+            folder = f"fold_{fold_index:02d}"
+            _write_split(splits, manifest, dataset_root / folder)
+            dataset_manifest["folds"].append(
+                {
+                    "fold": fold_index,
+                    "folder": folder,
+                    "n_train_items": manifest["partitions"]["train"]["n_items"],
+                    "n_val_items": manifest["partitions"]["val"]["n_items"],
+                    "n_test_items": manifest["partitions"]["test"]["n_items"],
+                }
+            )
+        dataset_root.mkdir(parents=True, exist_ok=True)
+        (dataset_root / "manifest.json").write_text(
+            json.dumps(dataset_manifest, indent=2), encoding="utf-8"
+        )
+        root_manifest["datasets"].append(
+            {"dataset": dataset, "folder": dataset, "protocol": protocol}
+        )
+    (output_root / "manifest.json").write_text(
+        json.dumps(root_manifest, indent=2), encoding="utf-8"
+    )
+    return root_manifest
+
+
 def build_windowed_splits(
     df: pd.DataFrame,
     output_dir: Path,
@@ -525,6 +861,9 @@ def prepare_dataset(
     splits_dir: Path = SPLITS_DIR,
     external_scores_path: Optional[Path] = None,
     post_texts_path: Optional[Path] = None,
+    n_folds: int = _K_FOLDS,
+    chronological_initial_train_fraction: float = _CHRONOLOGICAL_INITIAL_TRAIN_FRAC,
+    seed: int = SEED,
 ) -> dict[str, Any]:
     """Run the complete offline Reddit preparation pipeline."""
     if external_scores_path is None:
@@ -545,16 +884,18 @@ def prepare_dataset(
     intersection = build_intersection_dataset(density_filtered, filter_report)
     save_filter_report(filter_report, density_filtered, intersection, output_dir)
 
-    full_splits, full_manifest = build_seeded_item_split(cleaned)
+    full_splits, full_manifest = build_seeded_item_split(cleaned, seed=seed)
     full_manifest["population"] = "cleaned_pre_density"
     _write_split(full_splits, full_manifest, splits_dir / "full")
 
-    intersection_splits, intersection_manifest = build_seeded_item_split(intersection)
+    intersection_splits, intersection_manifest = build_seeded_item_split(intersection, seed=seed)
     intersection_manifest["population"] = "all_method_intersection"
     _write_split(intersection_splits, intersection_manifest, splits_dir / "intersection")
 
-    full_windows = build_windowed_splits(density_filtered, splits_dir, tag="full")
-    intersection_windows = build_windowed_splits(intersection, splits_dir, tag="intersection")
+    full_windows = build_windowed_splits(density_filtered, splits_dir, tag="full", seed=seed)
+    intersection_windows = build_windowed_splits(
+        intersection, splits_dir, tag="intersection", seed=seed
+    )
     chronological_splits, chronological_manifest = build_chronological_split(intersection)
     chronological_manifest["population"] = "all_method_intersection"
     _write_split(
@@ -562,19 +903,31 @@ def prepare_dataset(
         chronological_manifest,
         splits_dir / "intersection_chronological",
     )
+    kfold_manifest = write_kfold_splits(
+        cleaned,
+        intersection,
+        splits_dir / "kfold",
+        n_folds=n_folds,
+        seed=seed,
+        chronological_initial_train_fraction=chronological_initial_train_fraction,
+    )
 
     pipeline_manifest = {
         "pipeline": "prepare_reddit_data",
         "network_access": False,
+        "seed": seed,
         "input": str(input_path),
+        "input_sha256": _sha256_file(input_path),
         "optional_inputs": {
             "moderated_posts_scores": {
                 "path": str(external_scores_path),
                 "available": external_scores_path.exists(),
+                "sha256": _sha256_file(external_scores_path),
             },
             "post_texts": {
                 "path": str(post_texts_path),
                 "available": post_texts_path.exists(),
+                "sha256": _sha256_file(post_texts_path),
             },
         },
         "populations": {
@@ -585,6 +938,7 @@ def prepare_dataset(
         "outputs": {
             "filtered_votes": str(output_dir / "filtered_votes.parquet"),
             "splits_root": str(splits_dir),
+            "kfold_root": str(splits_dir / "kfold"),
         },
     }
     (output_dir / "prepare_reddit_data.manifest.json").write_text(
@@ -605,6 +959,7 @@ def prepare_dataset(
             "full": full_windows,
             "intersection": intersection_windows,
         },
+        "kfold_manifest": kfold_manifest,
     }
 
 
@@ -615,6 +970,13 @@ def main() -> None:
     parser.add_argument("--splits-dir", type=Path, default=SPLITS_DIR)
     parser.add_argument("--external-scores", type=Path, default=None)
     parser.add_argument("--post-texts", type=Path, default=None)
+    parser.add_argument("--n-folds", type=int, default=_K_FOLDS)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--chronological-initial-train-fraction",
+        type=float,
+        default=_CHRONOLOGICAL_INITIAL_TRAIN_FRAC,
+    )
     args = parser.parse_args()
     prepare_dataset(
         input_path=args.input,
@@ -622,6 +984,9 @@ def main() -> None:
         splits_dir=args.splits_dir,
         external_scores_path=args.external_scores,
         post_texts_path=args.post_texts,
+        n_folds=args.n_folds,
+        seed=args.seed,
+        chronological_initial_train_fraction=args.chronological_initial_train_fraction,
     )
 
 

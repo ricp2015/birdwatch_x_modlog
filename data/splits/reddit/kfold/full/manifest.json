@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "split_type": "kfold_collection",
+  "dataset": "full",
+  "protocol": "stratified_item",
+  "n_folds": 5,
+  "seed": 10,
+  "n_population_votes": 189630,
+  "n_population_items": 73872,
+  "n_unique_test_items": 73872,
+  "test_population_fraction": 1.0,
+  "test_items_exhaust_population": true,
+  "checks": {
+    "test_item_overlap_across_folds": 0,
+    "test_coverage_matches_protocol": true
+  },
+  "folds": [
+    {
+      "fold": 0,
+      "folder": "fold_00",
+      "n_train_items": 44322,
+      "n_val_items": 14775,
+      "n_test_items": 14775
+    },
+    {
+      "fold": 1,
+      "folder": "fold_01",
+      "n_train_items": 44323,
+      "n_val_items": 14774,
+      "n_test_items": 14775
+    },
+    {
+      "fold": 2,
+      "folder": "fold_02",
+      "n_train_items": 44324,
+      "n_val_items": 14774,
+      "n_test_items": 14774
+    },
+    {
+      "fold": 3,
+      "folder": "fold_03",
+      "n_train_items": 44324,
+      "n_val_items": 14774,
+      "n_test_items": 14774
+    },
+    {
+      "fold": 4,
+      "folder": "fold_04",
+      "n_train_items": 44323,
+      "n_val_items": 14775,
+      "n_test_items": 14774
+    }
+  ]
+}

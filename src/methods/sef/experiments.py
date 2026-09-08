@@ -10,21 +10,12 @@ import faiss
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
-
 from src.methods.team_formation_v2.shared_features import attach_causal_features
-from src.utils.splits import discover_splits
+from src.utils.splits import discover_splits, split_dataset
 
 from . import runtime
-from .runtime import (
-    CAL_SAMPLE,
-    LAMBDA_SMOOTH,
-    N_FOLDS,
-    SCALAR_METRICS,
-    VAL_GRID_SAMPLE,
-    _rng_for_split,
-    log,
-)
-from .data import _load_split_votes
+from .data import TemporalUserProfiles, _load_split_votes
+from .evaluation import evaluate_fold, grid_search_hyperparams, predict_fold
 from .features import (
     build_reference_heldout_train_features,
     compute_expert_weights,
@@ -42,7 +33,15 @@ from .modeling import (
     predict_meta_model,
     train_meta_model,
 )
-from .evaluation import evaluate_fold, grid_search_hyperparams, predict_fold
+from .runtime import (
+    CAL_SAMPLE,
+    LAMBDA_SMOOTH,
+    N_FOLDS,
+    SCALAR_METRICS,
+    VAL_GRID_SAMPLE,
+    _rng_for_split,
+    log,
+)
 
 # 12. SINGLE-SPLIT EVALUATION  (core logic, reused by K-fold and multi-split)
 
@@ -54,8 +53,7 @@ def run_single_split(
     vote_df: pd.DataFrame,
     post_emb: np.ndarray,
     post_id2idx: Dict[str, int],
-    user_emb: np.ndarray,
-    user_id2idx: Dict[str, int],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     default_k: int,
     default_t: int,
@@ -65,10 +63,11 @@ def run_single_split(
     do_grid_search: bool = True,
     split_label: str = "",
     fixed_hyperparams: Optional[Tuple[int, int, float, float]] = None,
+    dataset: str | None = None,
 ) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame]:
     """Run the single split workflow."""
     train_vote_df = vote_df[vote_df["item_id"].isin(train_ids)]
-    use_net_vote_fallback = split_label in {"full", "splits_full"}
+    use_net_vote_fallback = dataset == "full" or split_label in {"full", "splits_full"}
     prec_df = precompute_vote_precision(train_vote_df, LAMBDA_SMOOTH, min_coverage)
     base_rates = compute_subreddit_base_rates(train_vote_df)
     log.info(
@@ -115,8 +114,7 @@ def run_single_split(
             grid_precision,
             post_emb,
             post_id2idx,
-            user_emb,
-            user_id2idx,
+            user_profiles,
             faiss_index,
             LAMBDA_SMOOTH,
             use_net_vote_fallback=use_net_vote_fallback,
@@ -136,8 +134,7 @@ def run_single_split(
         prec_df,
         post_emb,
         post_id2idx,
-        user_emb,
-        user_id2idx,
+        user_profiles,
         faiss_index,
         k,
         alpha,
@@ -163,8 +160,7 @@ def run_single_split(
         vote_df,
         post_emb,
         post_id2idx,
-        user_emb,
-        user_id2idx,
+        user_profiles,
         faiss_index,
         k,
         alpha,
@@ -199,8 +195,7 @@ def run_single_split(
         cal_precision,
         post_emb,
         post_id2idx,
-        user_emb,
-        user_id2idx,
+        user_profiles,
         faiss_index,
         k,
         alpha,
@@ -275,6 +270,14 @@ def run_single_split(
         return None, decisions, weights_df
 
     metrics = evaluate_fold(decisions)
+    temporal_covered = weights_df["has_user_embedding"].astype(bool)
+    temporal_latest = weights_df.loc[temporal_covered, "semantic_profile_latest_document_utc"]
+    temporal_cutoff = weights_df.loc[temporal_covered, "semantic_profile_cutoff_utc"]
+    if not (temporal_latest < temporal_cutoff).all():
+        raise AssertionError("SEF temporal-profile audit detected future user documents")
+    closest_margin = (
+        float((temporal_cutoff - temporal_latest).min()) if temporal_covered.any() else None
+    )
     val_metrics = None
     if val_ids:
         val_decisions = predict_fold(
@@ -331,13 +334,20 @@ def run_single_split(
             "expert_weight_grid_optimizes_final_meta_model": False,
             "fallback_definition": "no_history_local_evidence_or_user_embedding",
             "used_net_vote_fallback": use_net_vote_fallback,
-            "causal_metadata_mode": runtime.causal_metadata_mode,
-            "causal_metadata_weight": (
-                runtime.causal_metadata_weight if runtime.causal_metadata_mode != "none" else 0.0
+            "causal_metadata_profile": "full",
+            "causal_metadata_weight": runtime.causal_metadata_weight,
+            "semantic_user_profiles_are_static": False,
+            "semantic_profile_regime": "causal_as_of_case_time",
+            "semantic_profile_timestamp_rule": ("document.created_utc < max_case_vote_timestamp"),
+            "semantic_profile_cache_key": user_profiles.cache_key,
+            "temporal_profile_vote_coverage": (
+                float(temporal_covered.mean()) if len(temporal_covered) else 0.0
             ),
-            "semantic_user_profiles_are_static": True,
-            "semantic_profile_regime": "static_transductive_non_chronological",
-            "chronological_evaluation_supported": False,
+            "n_votes_with_temporal_profile": int(temporal_covered.sum()),
+            "minimum_profile_cutoff_margin_seconds": closest_margin,
+            "temporal_profile_audit_passed": True,
+            "temporal_profile_is_causal": True,
+            "prospective_interpretation": "chronological" in split_label.lower(),
         }
     )
 
@@ -364,8 +374,7 @@ def run_kfold(
     vote_df: pd.DataFrame,
     post_emb: np.ndarray,
     post_id_list: List[str],
-    user_emb: np.ndarray,
-    user_id_list: List[str],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     default_k: int,
     default_t: int,
@@ -379,7 +388,6 @@ def run_kfold(
     post_ids_ordered = post_id_list
 
     post_id2idx = {pid: i for i, pid in enumerate(post_id_list)}
-    user_id2idx = {uid: i for i, uid in enumerate(user_id_list)}
 
     labeled_items = (
         vote_df.drop_duplicates("item_id")[["item_id", "label"]]
@@ -406,8 +414,7 @@ def run_kfold(
             vote_df,
             post_emb,
             post_id2idx,
-            user_emb,
-            user_id2idx,
+            user_profiles,
             faiss_index,
             default_k,
             default_t,
@@ -416,6 +423,7 @@ def run_kfold(
             min_coverage,
             do_grid_search,
             split_label=f"fold{fold_idx}",
+            dataset=None,
         )
         if metrics is None:
             continue
@@ -438,7 +446,7 @@ def _load_reusable_hyperparams(
     output_dir: Path,
     split_name: str,
 ) -> Tuple[int, int, float, float]:
-    """Load the previously VAL-selected expert parameters for one mode/split."""
+    """Load the previously VAL-selected expert parameters for one split."""
     metrics_path = output_dir / split_name / "expertise" / "metrics.json"
     if not metrics_path.exists():
         raise FileNotFoundError(
@@ -463,8 +471,7 @@ def evaluate_splits(
     output_dir: Path,
     post_emb: np.ndarray,
     post_id_list: List[str],
-    user_emb: np.ndarray,
-    user_id_list: List[str],
+    user_profiles: TemporalUserProfiles,
     faiss_index: faiss.Index,
     default_k: int,
     default_t: int,
@@ -478,7 +485,6 @@ def evaluate_splits(
     global post_ids_ordered
     post_ids_ordered = post_id_list
     post_id2idx = {pid: i for i, pid in enumerate(post_id_list)}
-    user_id2idx = {uid: i for i, uid in enumerate(user_id_list)}
 
     splits = discover_splits(votes_dir)
     if not splits:
@@ -489,29 +495,8 @@ def evaluate_splits(
         return {}
 
     summary: Dict[str, Dict] = {}
-    excluded_splits: Dict[str, str] = {}
-
     for split_name, split_path in splits.items():
-        if "chronological" in split_name.lower():
-            reason = "Static full-history SEF profiles do not support chronological evaluation."
-            excluded_splits[split_name] = reason
-            log.warning("[%s] Skipped: %s", split_name, reason)
-            exclusion_dir = output_dir / split_name / "expertise"
-            exclusion_dir.mkdir(parents=True, exist_ok=True)
-            with open(exclusion_dir / "metrics.json", "w") as fh:
-                json.dump(
-                    {
-                        "status": "excluded",
-                        "split": split_name,
-                        "reason": reason,
-                        "semantic_user_profiles_are_static": True,
-                        "semantic_profile_regime": "static_transductive_non_chronological",
-                        "chronological_evaluation_supported": False,
-                    },
-                    fh,
-                    indent=2,
-                )
-            continue
+        chronological = "chronological" in split_name.lower()
 
         train_votes = _load_split_votes(split_path / "train_votes.parquet")
         val_votes = _load_split_votes(split_path / "val_votes.parquet")
@@ -519,10 +504,9 @@ def evaluate_splits(
 
         # Use only votes assigned to this split.
         split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
-        if runtime.causal_metadata_mode != "none":
-            if runtime.causal_feature_table is None:
-                raise RuntimeError("Causal metadata mode enabled without a loaded feature table")
-            split_vote_df = attach_causal_features(split_vote_df, runtime.causal_feature_table)
+        if runtime.causal_feature_table is None:
+            raise RuntimeError("SEF requires the full causal metadata feature table")
+        split_vote_df = attach_causal_features(split_vote_df, runtime.causal_feature_table)
 
         train_ids = set(train_votes["item_id"].unique())
         val_ids = set(val_votes["item_id"].unique())
@@ -543,8 +527,7 @@ def evaluate_splits(
             split_vote_df,
             post_emb,
             post_id2idx,
-            user_emb,
-            user_id2idx,
+            user_profiles,
             faiss_index,
             default_k,
             default_t,
@@ -554,14 +537,17 @@ def evaluate_splits(
             do_grid_search,
             split_label=split_name,
             fixed_hyperparams=fixed_hyperparams,
+            dataset=split_dataset(split_path, split_name),
         )
         if metrics is None:
             continue
-        metrics["causal_metadata_mode"] = runtime.causal_metadata_mode
-        metrics["causal_metadata_weight"] = (
-            runtime.causal_metadata_weight if runtime.causal_metadata_mode != "none" else 0.0
-        )
-        metrics["semantic_user_profiles_are_static"] = True
+        metrics["causal_metadata_profile"] = "full"
+        metrics["causal_metadata_weight"] = runtime.causal_metadata_weight
+        metrics["semantic_user_profiles_are_static"] = False
+        metrics["semantic_profile_regime"] = "causal_as_of_case_time"
+        metrics["chronological_split"] = chronological
+        metrics["temporal_profile_is_causal"] = True
+        metrics["prospective_interpretation"] = chronological
 
         split_out_dir = output_dir / split_name / "expertise"
         split_out_dir.mkdir(parents=True, exist_ok=True)
@@ -571,16 +557,22 @@ def evaluate_splits(
             json.dump(metrics, fh, indent=2)
         summary[split_name] = metrics
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = output_dir / "all_splits_summary.json"
+    summaries_dir = output_dir / "summaries"
+    summaries_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summaries_dir / "sef.json"
     with open(summary_path, "w") as fh:
         json.dump(summary, fh, indent=2)
-    with open(output_dir / "evaluation_scope.json", "w") as fh:
+    with open(summaries_dir / "sef_scope.json", "w") as fh:
         json.dump(
             {
-                "semantic_profile_regime": "static_transductive_non_chronological",
-                "chronological_evaluation_supported": False,
-                "excluded_splits": excluded_splits,
+                "semantic_profile_regime": "causal_as_of_case_time",
+                "semantic_profile_timestamp_rule": (
+                    "document.created_utc < max_case_vote_timestamp"
+                ),
+                "semantic_profile_cache_key": user_profiles.cache_key,
+                "chronological_evaluation_supported": True,
+                "chronological_evaluation_is_prospective": True,
+                "excluded_splits": {},
             },
             fh,
             indent=2,

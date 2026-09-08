@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from sklearn.model_selection import KFold
-import torch
 from tqdm import tqdm
 from transformers import BertTokenizer
 
@@ -20,11 +19,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.methods.team_formation_v2.shared_features import (  # noqa: E402
-    DEFAULT_CAUSAL_FEATURES,
-    attach_causal_features,
-    load_causal_features,
-)
 from src.methods.nvse.normvio import (  # noqa: E402
     BERT_TYPE,
     CATEGORIES,
@@ -35,8 +29,12 @@ from src.methods.nvse.normvio import (  # noqa: E402
     resolve_bert_source,
     score_violations,
 )
-from src.data_preparation.interim_paths import USER_DOCUMENTS  # noqa: E402
-from src.utils.splits import discover_splits  # noqa: E402
+from src.methods.team_formation_v2.shared_features import (  # noqa: E402
+    DEFAULT_CAUSAL_FEATURES,
+    attach_causal_features,
+    load_causal_features,
+)
+from src.utils.splits import discover_splits, split_dataset  # noqa: E402
 
 THRESHOLD_GRID = np.linspace(-1.5, 1.5, 300)
 MIN_VOTES_SKILL = 5
@@ -440,7 +438,7 @@ def evaluate_splits(
         threshold = _calibrate(item_scores_val, item_scores_val["item_id"].values)
 
         # Full splits use net vote for uncovered test items.
-        is_full_split = split_name in {"full", "splits_full"}
+        is_full_split = split_dataset(split_path, split_name) == "full"
         if is_full_split:
             n_before = len(item_scores_test)
             item_scores_test = _add_net_vote_fallback(item_scores_test, test_votes)
@@ -478,8 +476,8 @@ def evaluate_splits(
             json.dump(metrics, fh, indent=2)
         summary[split_name] = metrics
 
-    summary_path = out_dir / "all_splits_summary.json"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / "summaries" / "nvse.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"NVSE summary: {summary_path} | splits={len(summary)}")
@@ -497,13 +495,35 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--votes_dir", default="data/splits/reddit")
-    p.add_argument("--docs", default=str(USER_DOCUMENTS))
+    p.add_argument(
+        "--docs",
+        default="data/interim/reddit/auxiliary/user_documents.parquet",
+    )
+    p.add_argument(
+        "--post_texts",
+        default="data/interim/reddit/auxiliary/post_texts.parquet",
+        help="Canonical item_id/title/selftext table used for post scoring.",
+    )
     p.add_argument(
         "--models",
         default="external/normvio/normvio_redditmodels",
         help="Dir with one sub-folder per category (finetuned_model.pt)",
     )
-    p.add_argument("--out_dir", default="results/reddit/kfold/normvio-skill-extraction")
+    p.add_argument(
+        "--bert_model",
+        default=BERT_TYPE,
+        help="Hugging Face model id or local BERT snapshot directory.",
+    )
+    p.add_argument(
+        "--out_dir",
+        default="cache/nvse/work",
+        help="Working directory for optional legacy skill/K-fold tasks",
+    )
+    p.add_argument(
+        "--results_dir",
+        default="results/reddit",
+        help="Root for canonical per-split outputs (independent of out_dir work artifacts)",
+    )
     p.add_argument(
         "--violation_scores",
         default=str(DEFAULT_VIOLATION_SCORES),
@@ -576,13 +596,18 @@ def main():
     # Intermediate artifacts
     viol_scores_path = Path(args.violation_scores)
     user_skill_path = out_dir / "user_skill.parquet"
-    per_split_dir = Path("results/reddit")
+    per_split_dir = Path(args.results_dir)
 
     if "score" in tasks_to_run:
         if viol_scores_path.exists() and not args.force_rescore:
             print(f"Violation scores reused: {viol_scores_path}")
         else:
-            bert_source = resolve_bert_source(BERT_TYPE)
+            configured_bert = Path(args.bert_model)
+            bert_source = (
+                configured_bert
+                if configured_bert.exists()
+                else resolve_bert_source(args.bert_model)
+            )
             print(f"BERT tokenizer source: {bert_source}")
             tokenizer = BertTokenizer.from_pretrained(str(bert_source))
             score_violations(
@@ -594,6 +619,8 @@ def main():
                 device,
                 args.batch_size,
                 max_posts=args.max_posts,
+                post_texts_path=Path(args.post_texts),
+                model_source=bert_source,
             )
 
     downstream_tasks = {"skill", "kfold", "splits"}.intersection(tasks_to_run)
@@ -627,5 +654,7 @@ def main():
             Path(args.causal_features),
             args.alpha,
         )
+
+
 if __name__ == "__main__":
     main()
