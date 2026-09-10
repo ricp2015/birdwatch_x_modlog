@@ -90,7 +90,6 @@ class ReproductionConfig:
     continue_on_error: bool
     device: str
     seed: int
-    bootstrap_iterations: int
     reuse_sef_hyperparameters: bool
     skip_existing_team_methods: bool
     graph_sections: tuple[str, ...]
@@ -186,7 +185,6 @@ def load_reproduction_config(
             "continue_on_error",
             "device",
             "seed",
-            "bootstrap_iterations",
             "reuse_sef_hyperparameters",
             "skip_existing_team_methods",
             "graph_sections",
@@ -291,7 +289,6 @@ def load_reproduction_config(
         continue_on_error=_boolean(run, "continue_on_error", False),
         device=device,
         seed=_integer(run, "seed", 10),
-        bootstrap_iterations=_integer(run, "bootstrap_iterations", 10_000),
         reuse_sef_hyperparameters=_boolean(run, "reuse_sef_hyperparameters", False),
         skip_existing_team_methods=_boolean(run, "skip_existing_team_methods", False),
         graph_sections=tuple(sections),
@@ -622,8 +619,6 @@ def validate_reproduction_config(
         if not scoring_root.is_dir():
             errors.append(f"Community Notes source tree is missing: {scoring_root}")
 
-    if config.bootstrap_iterations < 1:
-        errors.append("run.bootstrap_iterations must be >= 1")
     if config.seed != 10:
         errors.append(
             "run.seed must be 10: several scientific runners intentionally fix their "

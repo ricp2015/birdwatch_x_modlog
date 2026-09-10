@@ -305,10 +305,6 @@
         "E:\\birdwatch_x_modlog\\data\\splits\\reddit",
         "--output-dir",
         "E:\\birdwatch_x_modlog\\results\\report",
-        "--bootstrap-iterations",
-        "10000",
-        "--seed",
-        "10",
         "--section",
         "all"
       ],

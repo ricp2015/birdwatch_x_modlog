@@ -3,7 +3,7 @@
     <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
 </a>
 
-Run from the repository root with Python 3.11:
+Run from the repository root with Python:
 
 ```powershell
 python -m venv .venv

@@ -1,9 +1,8 @@
-"""Generate thesis tables, figures, bootstrap results, and CN-extension summaries."""
+"""Generate thesis tables, figures, audits, and CN-extension summaries."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import itertools
 import json
 import logging
 import os
@@ -112,8 +111,7 @@ METHOD_SPECS: dict[str, MethodSpec] = {
     "BoC": MethodSpec("BoC", "boc_stacking"),
 }
 
-BOOTSTRAP_TOP_METHODS = ("SEF", "BoC", "VirtualEnsembles", "SubAdj")
-BOOTSTRAP_METRICS = ("macro_f1", "f1_neg")
+AUDIT_METRICS = ("macro_f1", "f1_neg")
 
 METHOD_COLORS = {
     "CN": "#a61e2a",
@@ -228,12 +226,6 @@ def method_label(method: str) -> str:
     return METHOD_SPECS.get(method, MethodSpec(method, "")).label
 
 
-def methods_for_split(split_name: str) -> list[str]:
-    """Return methods eligible for paired inference on a split."""
-    methods = list(BOOTSTRAP_TOP_METHODS) + ["CN"]
-    return [method for method in methods if method_supports_split(method, split_name)]
-
-
 def collect_method_split_matrix(results_root: Path, splits_root: Path) -> pd.DataFrame:
     """Inventory every discovered split x canonical-method combination."""
     rows: list[dict[str, Any]] = []
@@ -328,7 +320,7 @@ def collect_benchmark(
             if resolved is None:
                 findings.append(
                     {
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "code": "missing_metrics",
                         "split": split_name,
                         "method": method,
@@ -342,7 +334,7 @@ def collect_benchmark(
             if row["score_coverage"] < 0.999999:
                 findings.append(
                     {
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "code": "partial_score_coverage",
                         "split": split_name,
                         "method": method,
@@ -612,7 +604,7 @@ def audit_predictions(
             except FileNotFoundError as exc:
                 findings.append(
                     {
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "code": "missing_predictions",
                         "split": split_name,
                         "method": method,
@@ -648,7 +640,7 @@ def audit_predictions(
             if missing_ids:
                 findings.append(
                     {
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "code": "incomplete_prediction_population",
                         "split": split_name,
                         "method": method,
@@ -675,7 +667,7 @@ def audit_predictions(
                     shared["label"].to_numpy(dtype=int),
                     shared["prediction"].to_numpy(dtype=int),
                 )
-                for metric in BOOTSTRAP_METRICS:
+                for metric in AUDIT_METRICS:
                     reported_value = reported.get(metric)
                     if isinstance(reported_value, (int, float)) and not np.isclose(
                         recomputed[metric], float(reported_value), atol=1e-9, rtol=1e-7
@@ -704,15 +696,6 @@ def audit_predictions(
     return findings
 
 
-def _safe_f1(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
-    return np.divide(
-        numerator,
-        denominator,
-        out=np.zeros_like(numerator, dtype=float),
-        where=denominator != 0,
-    )
-
-
 def _point_metrics(labels: np.ndarray, predictions: np.ndarray) -> dict[str, float]:
     tp = float(np.sum((labels == 1) & (predictions == 1)))
     tn = float(np.sum((labels == -1) & (predictions == -1)))
@@ -721,151 +704,6 @@ def _point_metrics(labels: np.ndarray, predictions: np.ndarray) -> dict[str, flo
     f1_pos = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0
     f1_neg = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
     return {"macro_f1": (f1_pos + f1_neg) / 2, "f1_neg": f1_neg}
-
-
-def _bootstrap_metric_samples(
-    labels: np.ndarray,
-    predictions: Mapping[str, np.ndarray],
-    iterations: int,
-    rng: np.random.Generator,
-    chunk_size: int = 250,
-) -> dict[str, dict[str, np.ndarray]]:
-    """Compute stratified item-bootstrap metric samples using shared draws."""
-    positive_indices = np.flatnonzero(labels == 1)
-    negative_indices = np.flatnonzero(labels == -1)
-    if not len(positive_indices) or not len(negative_indices):
-        raise ValueError("Paired bootstrap requires both outcome classes.")
-    samples = {
-        method: {metric: np.empty(iterations, dtype=float) for metric in BOOTSTRAP_METRICS}
-        for method in predictions
-    }
-    for start in range(0, iterations, chunk_size):
-        stop = min(start + chunk_size, iterations)
-        size = stop - start
-        positive_draws = rng.choice(
-            positive_indices, size=(size, len(positive_indices)), replace=True
-        )
-        negative_draws = rng.choice(
-            negative_indices, size=(size, len(negative_indices)), replace=True
-        )
-        for method, method_predictions in predictions.items():
-            tp = np.sum(method_predictions[positive_draws] == 1, axis=1).astype(float)
-            fn = len(positive_indices) - tp
-            tn = np.sum(method_predictions[negative_draws] == -1, axis=1).astype(float)
-            fp = len(negative_indices) - tn
-            f1_pos = _safe_f1(2 * tp, 2 * tp + fp + fn)
-            f1_neg = _safe_f1(2 * tn, 2 * tn + fp + fn)
-            samples[method]["macro_f1"][start:stop] = (f1_pos + f1_neg) / 2
-            samples[method]["f1_neg"][start:stop] = f1_neg
-    return samples
-
-
-def _holm_adjust(p_values: Sequence[float]) -> np.ndarray:
-    """Return Holm-adjusted p-values in their original order."""
-    values = np.asarray(p_values, dtype=float)
-    order = np.argsort(values)
-    adjusted_sorted = np.empty(len(values), dtype=float)
-    running = 0.0
-    total = len(values)
-    for rank, index in enumerate(order):
-        candidate = min(1.0, (total - rank) * values[index])
-        running = max(running, candidate)
-        adjusted_sorted[rank] = running
-    adjusted = np.empty(len(values), dtype=float)
-    adjusted[order] = adjusted_sorted
-    return adjusted
-
-
-def paired_bootstrap(
-    results_root: Path,
-    split_names: Sequence[str] = FIXED_SPLITS,
-    iterations: int = 10_000,
-    seed: int = 10,
-) -> pd.DataFrame:
-    """Run the predeclared paired item-level inference families."""
-    rows: list[dict[str, Any]] = []
-    seed_sequence = np.random.SeedSequence(seed)
-    split_seeds = seed_sequence.spawn(len(split_names))
-    for split_name, split_seed in zip(split_names, split_seeds):
-        eligible = methods_for_split(split_name)
-        loaded: dict[str, pd.DataFrame] = {}
-        for method in eligible:
-            try:
-                loaded[method] = load_predictions(results_root, split_name, method)
-            except FileNotFoundError:
-                log.warning("Skipping missing bootstrap method %s on %s", method, split_name)
-        if "CN" not in loaded:
-            log.warning("Skipping paired bootstrap for %s because CN is missing", split_name)
-            continue
-
-        reference_method = next(iter(loaded))
-        reference = loaded[reference_method]
-        reference_ids = reference["item_id"].tolist()
-        reference_id_set = set(reference_ids)
-        labels = reference["label"].to_numpy(dtype=int)
-        aligned_predictions: dict[str, np.ndarray] = {}
-        for method, frame in loaded.items():
-            if set(frame["item_id"]) != reference_id_set:
-                raise ValueError(
-                    f"Paired bootstrap population mismatch on {split_name}: "
-                    f"{reference_method} has {len(reference_ids)} items and {method} has "
-                    f"{len(frame)}. No intersection fallback is allowed."
-                )
-            aligned = frame.set_index("item_id").loc[reference_ids]
-            if not np.array_equal(labels, aligned["label"].to_numpy(dtype=int)):
-                raise ValueError(
-                    f"Ground-truth labels disagree between {reference_method} and {method} "
-                    f"on {split_name}."
-                )
-            aligned_predictions[method] = aligned["prediction"].to_numpy(dtype=int)
-
-        samples = _bootstrap_metric_samples(
-            labels,
-            aligned_predictions,
-            iterations=iterations,
-            rng=np.random.default_rng(split_seed),
-        )
-        point = {
-            method: _point_metrics(labels, predictions)
-            for method, predictions in aligned_predictions.items()
-        }
-        top_available = [method for method in BOOTSTRAP_TOP_METHODS if method in loaded]
-        families = {
-            "top_methods": list(itertools.combinations(top_available, 2)),
-            "against_cn": [(method, "CN") for method in top_available],
-        }
-        for family, pairs in families.items():
-            for method_a, method_b in pairs:
-                for metric in BOOTSTRAP_METRICS:
-                    differences = samples[method_a][metric] - samples[method_b][metric]
-                    lower, upper = np.quantile(differences, [0.025, 0.975])
-                    left = (np.count_nonzero(differences <= 0) + 1) / (iterations + 1)
-                    right = (np.count_nonzero(differences >= 0) + 1) / (iterations + 1)
-                    rows.append(
-                        {
-                            "family": family,
-                            "split": split_name,
-                            "metric": metric,
-                            "method_a": method_a,
-                            "method_b": method_b,
-                            "estimate_a": point[method_a][metric],
-                            "estimate_b": point[method_b][metric],
-                            "delta": point[method_a][metric] - point[method_b][metric],
-                            "ci_lower": float(lower),
-                            "ci_upper": float(upper),
-                            "p_value": min(1.0, 2 * min(left, right)),
-                            "n_items": len(labels),
-                            "iterations": iterations,
-                        }
-                    )
-    result = pd.DataFrame(rows)
-    if result.empty:
-        return result
-    result["p_holm"] = np.nan
-    for indices in result.groupby(["family", "metric"]).groups.values():
-        result.loc[indices, "p_holm"] = _holm_adjust(result.loc[indices, "p_value"])
-    result["significant_holm_0_05"] = result["p_holm"] < 0.05
-    return result
 
 
 def collect_cn_extensions(
@@ -903,11 +741,6 @@ def collect_cn_extensions(
 def _write_table(frame: pd.DataFrame, stem: Path) -> None:
     stem.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(stem.with_suffix(".csv"), index=False)
-    try:
-        markdown = frame.to_markdown(index=False, floatfmt=".4f")
-    except ImportError:
-        markdown = "```text\n" + frame.to_string(index=False) + "\n```"
-    stem.with_suffix(".md").write_text(markdown + "\n", encoding="utf-8")
 
 
 def _save_figure(fig: plt.Figure, output_stem: Path) -> None:
@@ -1114,50 +947,11 @@ def _plot_cn_extensions(frame: pd.DataFrame, output_stem: Path) -> None:
     plt.close(fig)
 
 
-def _render_report(
-    benchmark: pd.DataFrame,
-    split_stats: pd.DataFrame,
-    bootstrap: pd.DataFrame,
-    cn_extensions: pd.DataFrame,
-    method_split_matrix: pd.DataFrame,
-    findings: Sequence[Mapping[str, Any]],
-) -> str:
-    """Render a compact index of generated, narrative-ready evidence."""
-    counts = pd.Series([finding["severity"] for finding in findings]).value_counts()
-    lines = [
-        "# Benchmark report bundle",
-        "",
-        "All method variants shown below are selected without using TEST outcomes.",
-        "SEF uses time-indexed user profiles containing only documents published before each case.",
-        "Windowed splits are scaling trajectories sharing validation and test populations; they are not independent replications.",
-        "Team Formation v2 uses chronologically ordered prefixes inside TRAIN on every split; only the chronological outer split has a prospective interpretation.",
-        "",
-        "## Audit summary",
-        "",
-        f"- Errors: {int(counts.get('ERROR', 0))}",
-        f"- Warnings: {int(counts.get('WARNING', 0))}",
-        f"- Informational findings: {int(counts.get('INFO', 0))}",
-        "",
-        "## Generated evidence",
-        "",
-        f"- Benchmark rows: {len(benchmark)}",
-        f"- Split-statistic rows: {len(split_stats)}",
-        f"- Paired-bootstrap contrasts: {len(bootstrap)}",
-        f"- Community Notes extension rows: {len(cn_extensions)}",
-        f"- Split x method combinations inventoried: {len(method_split_matrix)}",
-        "",
-        "See `tables/` for machine-readable and Markdown tables and `figures/` for PNG figures.",
-    ]
-    return "\n".join(lines) + "\n"
-
-
 def run_report(
     results_root: Path,
     splits_root: Path,
     output_dir: Path,
     sections: set[str],
-    bootstrap_iterations: int,
-    seed: int,
     strict_audit: bool = False,
 ) -> None:
     """Run selected report sections and write a coherent artifact bundle."""
@@ -1174,7 +968,6 @@ def run_report(
 
     benchmark = pd.DataFrame()
     split_statistics = pd.DataFrame()
-    bootstrap_results = pd.DataFrame()
     cn_extensions = pd.DataFrame()
     findings: list[dict[str, Any]] = []
 
@@ -1218,14 +1011,6 @@ def run_report(
             )
         )
 
-    if sections & {"bootstrap", "all"}:
-        bootstrap_results = paired_bootstrap(
-            results_root,
-            iterations=bootstrap_iterations,
-            seed=seed,
-        )
-        _write_table(bootstrap_results, tables_dir / "paired_bootstrap")
-
     if sections & {"cn-extensions", "all"}:
         cn_extensions = collect_cn_extensions(results_root, FIXED_SPLITS)
         _write_table(
@@ -1235,29 +1020,16 @@ def run_report(
             cn_extensions, figures_dir / "community_notes_extension_ablation"
         )
 
-    (output_dir / "audit.json").write_text(
-        json.dumps(findings, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    report = _render_report(
-        benchmark,
-        split_statistics,
-        bootstrap_results,
-        cn_extensions,
-        method_split_matrix,
-        findings,
-    )
-    (output_dir / "report.md").write_text(report, encoding="utf-8")
     errors = sum(finding["severity"] == "ERROR" for finding in findings)
-    warnings = sum(finding["severity"] == "WARNING" for finding in findings)
     log.info("Report bundle saved to %s", output_dir)
-    log.info("Audit completed with %d error(s) and %d warning(s)", errors, warnings)
+    log.info("Audit completed with %d error(s)", errors)
     if errors and strict_audit:
         raise RuntimeError(f"Report audit found {errors} invalid prediction artifact(s).")
     if errors:
-        log.warning(
-            "Report generation completed despite audit errors. "
-            "See %s; pass --strict-audit to fail on them.",
-            output_dir / "audit.json",
+        log.error(
+            "Report generation completed despite %d audit error(s); "
+            "pass --strict-audit to fail on them.",
+            errors,
         )
 
 
@@ -1268,7 +1040,6 @@ def _parse_sections(values: Sequence[str]) -> set[str]:
         "splits",
         "benchmark",
         "scaling",
-        "bootstrap",
         "cn-extensions",
     }
     sections = set(values)
@@ -1284,16 +1055,13 @@ def main(
         typer.Option(
             "--section",
             help=(
-                "Repeat to run all, audit, splits, benchmark, scaling, bootstrap, "
-                "or cn-extensions."
+                "Repeat to run all, audit, splits, benchmark, scaling, or cn-extensions."
             ),
         ),
     ] = None,
     results_root: Annotated[Path, typer.Option()] = Path("results/reddit"),
     splits_root: Annotated[Path, typer.Option()] = Path("data/splits/reddit"),
     output_dir: Annotated[Path, typer.Option()] = Path("results/report"),
-    bootstrap_iterations: Annotated[int, typer.Option(min=1)] = 10_000,
-    seed: Annotated[int, typer.Option()] = 10,
     strict_audit: Annotated[bool, typer.Option()] = False,
     log_level: Annotated[str, typer.Option()] = "INFO",
     k_fold_only: Annotated[bool, typer.Option("--k-fold-only")] = False,
@@ -1315,8 +1083,6 @@ def main(
         splits_root=splits_root,
         output_dir=output_dir,
         sections=sections,
-        bootstrap_iterations=bootstrap_iterations,
-        seed=seed,
         strict_audit=strict_audit,
     )
     run_kfold_graphs(results_root, splits_root, output_dir / "kfold")

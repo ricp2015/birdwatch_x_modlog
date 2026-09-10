@@ -72,10 +72,6 @@
         "data\\splits\\reddit",
         "--output-dir",
         "results\\report",
-        "--bootstrap-iterations",
-        "10000",
-        "--seed",
-        "10",
         "--section",
         "all"
       ],

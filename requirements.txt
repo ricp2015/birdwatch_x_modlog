@@ -1,4 +1,3 @@
-# Direct dependencies used by the frozen analytical environment
 python-dotenv==1.2.2
 typer==0.27.2
 ruff==0.15.14

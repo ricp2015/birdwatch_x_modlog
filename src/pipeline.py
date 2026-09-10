@@ -316,7 +316,6 @@ def _direct_config(
         continue_on_error=False,
         device=device,
         seed=10,
-        bootstrap_iterations=10_000,
         reuse_sef_hyperparameters=False,
         skip_existing_team_methods=False,
         graph_sections=("all",),
@@ -535,10 +534,6 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
             config.splits,
             "--output-dir",
             config.report,
-            "--bootstrap-iterations",
-            config.bootstrap_iterations,
-            "--seed",
-            config.seed,
         ]
         for section in config.graph_sections:
             graph_args.extend(("--section", section))
@@ -1162,8 +1157,6 @@ def run_graphs(
     results_root: Annotated[Path, typer.Option()] = DEFAULT_RESULTS,
     splits_root: Annotated[Path, typer.Option()] = DEFAULT_SPLITS,
     output_dir: Annotated[Path, typer.Option()] = DEFAULT_REPORT,
-    bootstrap_iterations: Annotated[int, typer.Option(min=1)] = 10_000,
-    seed: Annotated[int, typer.Option()] = 10,
     strict_audit: Annotated[bool, typer.Option()] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     manifest: Annotated[Path, typer.Option()] = Path(
@@ -1178,10 +1171,6 @@ def run_graphs(
         splits_root,
         "--output-dir",
         output_dir,
-        "--bootstrap-iterations",
-        bootstrap_iterations,
-        "--seed",
-        seed,
     ]
     for value in section or ["all"]:
         arguments.extend(("--section", value))

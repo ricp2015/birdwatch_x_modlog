@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "category": "methods",
-  "generated_at_utc": "2026-09-07T18:09:05.942657+00:00",
+  "generated_at_utc": "2026-09-10T15:37:04.643700+00:00",
   "project_root": "E:\\birdwatch_x_modlog",
   "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
   "platform": "Windows-10-10.0.26200-SP0",
   "git": {
-    "commit": "0e019fb136fb1fc85f064dc90eefaafa655f83f4",
+    "commit": "a5081c708f213b2b3cca34d3369ccef99fc02aee",
     "dirty": true
   },
-  "source_tree_sha256": "7e15fa053e89de71b0c1ad4a65048df0d0349ff6611de2c3ca98cebd57342214",
+  "source_tree_sha256": "97ab24c30b314b7453f00de2188faf32c30b47e6ea9c2a8b30cc3739f615eb80",
   "input_fingerprints": {
-    "requirements.txt": "49c49b48b590a2ceb3bd22c3fc7d7ee40d177df745e906719ce61b1a33b262f8",
-    "pyproject.toml": "98390d490d57a3f0476ad917c4d511aa81edd6793fb07096ec9815deb31625d6",
+    "requirements.txt": "f10c20b7e7e02b748f58562b31459ff3a8ed7d3bf7ef1345d7071c6bb2121673",
+    "pyproject.toml": "accbd5cafe4b9332b8c736cfea303f766ee5ba268fc7fb78c6374d8bed3f01cb",
     "data/splits/reddit/full/split_manifest.json": "db8e4cdbaa95d34a671a6968a2d7a148dd3cb7b0170240ace64a6422f7563856",
     "data/splits/reddit/intersection/split_manifest.json": "e859977c4ef794da184f35044716d237fc96b5cf351b164dae9579342d8fc7ed",
     "data/splits/reddit/intersection_chronological/split_manifest.json": "55926ca14457b9d2f74db3c6b15f9be165cb4de097872f7d39349f1a1f99b141",
@@ -124,25 +124,37 @@
   },
   "steps": [
     {
-      "name": "baselines",
+      "name": "sef",
       "command": [
-        "C:\\Users\\Riccardo Pitzanti\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+        "E:\\birdwatch_x_modlog\\.venv\\Scripts\\python.exe",
         "-B",
         "-m",
-        "src.methods.baselines",
+        "src.methods.semantic_expert_finder",
         "--votes-dir",
-        "data\\splits\\reddit",
+        "E:\\birdwatch_x_modlog\\data\\splits\\reddit",
         "--output-dir",
-        "results\\reddit",
-        "--external-scores",
-        "data\\interim\\reddit\\auxiliary\\moderated_posts_scores.parquet"
+        "E:\\birdwatch_x_modlog\\results\\reddit",
+        "--causal-features",
+        "data\\interim\\reddit\\features\\causal_user_vote_features.parquet",
+        "--input-csv",
+        "data\\processed\\final_intersection_dataset.csv",
+        "--post-texts",
+        "data\\interim\\reddit\\auxiliary\\post_texts.parquet",
+        "--user-documents",
+        "data\\interim\\reddit\\auxiliary\\user_documents.parquet",
+        "--embedding-dir",
+        "cache\\embeddings",
+        "--embedding-model",
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "--tasks",
+        "splits"
       ],
-      "dry_run": true,
-      "started_at_utc": "2026-09-07T18:09:05.942657+00:00",
-      "ended_at_utc": "2026-09-07T18:09:05.942657+00:00",
-      "duration_seconds": 0.0,
-      "return_code": null,
-      "status": "dry-run"
+      "dry_run": false,
+      "started_at_utc": "2026-09-10T11:33:34.698782+00:00",
+      "ended_at_utc": "2026-09-10T15:37:04.643044+00:00",
+      "duration_seconds": 14609.944262,
+      "return_code": 0,
+      "status": "ok"
     }
   ]
 }

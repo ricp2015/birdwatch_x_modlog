@@ -1,0 +1,8 @@
+{
+  "semantic_profile_regime": "causal_as_of_case_time",
+  "semantic_profile_timestamp_rule": "document.created_utc < max_case_vote_timestamp",
+  "semantic_profile_cache_key": "90581792339bf7c33d99",
+  "chronological_evaluation_supported": true,
+  "chronological_evaluation_is_prospective": true,
+  "excluded_splits": {}
+}
