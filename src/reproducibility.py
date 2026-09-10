@@ -84,6 +84,8 @@ class ReproductionConfig:
     prepare_dataset: bool
     prepare_user_features: bool
     prepare_nvse_scores: bool
+    download_user_documents: bool
+    n_user_documents: int
     graphs: bool
     kfold: bool
     force: bool
@@ -179,6 +181,8 @@ def load_reproduction_config(
             "prepare_dataset",
             "prepare_user_features",
             "prepare_nvse_scores",
+            "download_user_documents",
+            "n_user_documents",
             "graphs",
             "kfold",
             "force",
@@ -238,6 +242,9 @@ def load_reproduction_config(
     device = run.get("device", "")
     if not isinstance(device, str):
         raise ValueError("run.device must be a string")
+    n_user_documents = _integer(run, "n_user_documents", 150)
+    if n_user_documents < 2:
+        raise ValueError("run.n_user_documents must be at least 2")
 
     return ReproductionConfig(
         source=source,
@@ -283,6 +290,8 @@ def load_reproduction_config(
         prepare_dataset=_boolean(run, "prepare_dataset", True),
         prepare_user_features=_boolean(run, "prepare_user_features", True),
         prepare_nvse_scores=_boolean(run, "prepare_nvse_scores", True),
+        download_user_documents=_boolean(run, "download_user_documents", False),
+        n_user_documents=n_user_documents,
         graphs=_boolean(run, "graphs", True),
         kfold=_boolean(run, "kfold", False),
         force=_boolean(run, "force", False),
@@ -531,12 +540,31 @@ def validate_reproduction_config(
         _validate_table(config.post_texts, required, "inputs.post_texts", errors)
 
     if "sef" in config.methods:
-        _validate_table(
-            config.user_documents,
-            {"username", "created_utc", "text"},
-            "inputs.user_documents",
-            errors,
+        user_documents_path = (
+            config.user_documents
+            if config.user_documents is not None
+            else config.interim / "auxiliary" / "user_documents.parquet"
         )
+        user_documents_ready = user_documents_path.is_file()
+        can_build_user_documents = (
+            config.user_contributions is not None
+            and config.user_contributions.is_dir()
+            and next(config.user_contributions.glob("*.jsonl"), None) is not None
+        )
+        if user_documents_ready:
+            _validate_table(
+                user_documents_path,
+                {"username", "created_utc", "text"},
+                "inputs.user_documents",
+                errors,
+            )
+        elif can_build_user_documents:
+            _validate_contribution_jsonl(config.user_contributions, errors)
+        elif not can_build_user_documents and not config.download_user_documents:
+            errors.append(
+                "inputs.user_documents is missing and cannot be built: provide "
+                "inputs.user_contributions or enable run.download_user_documents"
+            )
         if not _model_is_local_or_cached(config.embedding_model, project_root):
             warnings.append(
                 f"Embedding model will require network download: {config.embedding_model}"

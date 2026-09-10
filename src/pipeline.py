@@ -238,6 +238,8 @@ def _direct_config(
     user_contributions: Path | None,
     user_metadata: Path | None,
     external_scores: Path | None,
+    download_user_documents: bool,
+    n_user_documents: int,
     kfold: bool,
     force: bool,
     graphs: bool,
@@ -310,6 +312,8 @@ def _direct_config(
         prepare_dataset=True,
         prepare_user_features=True,
         prepare_nvse_scores=True,
+        download_user_documents=download_user_documents,
+        n_user_documents=n_user_documents,
         graphs=graphs,
         kfold=kfold,
         force=force,
@@ -379,6 +383,54 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
         if config.post_texts is not None:
             command.extend(("--post-texts", str(config.post_texts)))
         commands.append(("prepare-dataset", command))
+
+    needs_user_documents = "sef" in config.methods
+    user_documents = _optional_path(
+        config.user_documents, config.interim / "auxiliary" / "user_documents.parquet"
+    )
+    user_documents_scheduled = needs_user_documents and not user_documents.is_file()
+    if (
+        user_documents_scheduled
+        and config.user_contributions is not None
+        and config.user_contributions.is_dir()
+    ):
+        commands.append(
+            (
+                "prepare-user-documents-local",
+                _python_module(
+                    "src.data_preparation.build_user_documents",
+                    "--input-dir",
+                    config.user_contributions,
+                    "--users-from",
+                    config.votes,
+                    "--output",
+                    user_documents,
+                    "--n-user-docs",
+                    config.n_user_documents,
+                ),
+            )
+        )
+
+    if needs_user_documents and config.download_user_documents:
+        commands.append(
+            (
+                "download-missing-user-documents",
+                _python_module(
+                    "src.data_preparation.fetch_reddit_auxiliary_data",
+                    "--section",
+                    "user-documents",
+                    "--input-csv",
+                    config.votes,
+                    "--output-dir",
+                    user_documents.parent,
+                    "--user-documents-output",
+                    user_documents,
+                    "--n-user-docs",
+                    config.n_user_documents,
+                    "--missing-user-documents-only",
+                ),
+            )
+        )
 
     causal_needed = bool({"nvse", "sef", "team-formation"} & set(config.methods))
     if (
@@ -465,7 +517,7 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
 
     post_texts = _optional_path(config.post_texts, config.interim / "missing_post_texts")
     user_documents = _optional_path(
-        config.user_documents, config.interim / "missing_user_documents"
+        config.user_documents, config.interim / "auxiliary" / "user_documents.parquet"
     )
     external_scores = _optional_path(
         config.external_scores, config.interim / "missing_external_scores"
@@ -590,6 +642,21 @@ def reproduce(
         Path | None,
         typer.Option(help="Local per-item Reddit/Arctic Shift score table."),
     ] = None,
+    download_user_documents: Annotated[
+        bool,
+        typer.Option(
+            "--download-user-documents",
+            help="Top up missing local user documents from Arctic Shift.",
+        ),
+    ] = False,
+    n_user_documents: Annotated[
+        int,
+        typer.Option(
+            "--n-user-documents",
+            min=2,
+            help="Maximum local documents per user for semantic embeddings.",
+        ),
+    ] = 150,
     kfold: Annotated[
         bool,
         typer.Option("--k-fold", help="Also run the prepared five-fold evaluation."),
@@ -630,6 +697,8 @@ def reproduce(
             user_contributions=user_contributions,
             user_metadata=user_metadata,
             external_scores=external_scores,
+            download_user_documents=download_user_documents,
+            n_user_documents=n_user_documents,
             kfold=kfold,
             force=force,
             graphs=graphs,
@@ -690,7 +759,9 @@ def reproduce(
 def prepare_auxiliary(
     section: Annotated[
         str,
-        typer.Option(help="post-texts, user-documents, reddit-scores, or all."),
+        typer.Option(
+            help="post-texts, user-documents, reddit-scores, moderated-items, or all."
+        ),
     ] = "all",
     input_csv: Annotated[
         Path,
@@ -710,7 +781,7 @@ def prepare_auxiliary(
     ] = False,
 ) -> None:
     """Acquire optional Arctic Shift inputs once (network access required)."""
-    allowed = {"post-texts", "user-documents", "reddit-scores", "all"}
+    allowed = {"post-texts", "user-documents", "reddit-scores", "moderated-items", "all"}
     if section not in allowed:
         raise typer.BadParameter(f"section must be one of {sorted(allowed)}")
     command = _python_module(
@@ -728,6 +799,85 @@ def prepare_auxiliary(
         [("auxiliary", command)],
         category="prepare",
         manifest_path=Path("data/interim/reddit/prepare_auxiliary_run.json"),
+        splits_root=DEFAULT_SPLITS,
+        dry_run=dry_run,
+    )
+
+
+@prepare_app.command("user-documents")
+def prepare_user_documents(
+    input_dir: Annotated[
+        Path,
+        typer.Option(help="Directory containing one contribution JSONL per user."),
+    ] = Path("data/raw/user_contributions/user_contributions"),
+    users_from: Annotated[
+        Path,
+        typer.Option(help="Votes table selecting users and the relevant time window."),
+    ] = DEFAULT_INPUT,
+    output: Annotated[
+        Path,
+        typer.Option(help="Destination user_documents.parquet."),
+    ] = DEFAULT_USER_DOCUMENTS,
+    n_user_docs: Annotated[
+        int,
+        typer.Option(min=2, help="Maximum documents per user, split between posts/comments."),
+    ] = 150,
+    download: Annotated[
+        bool,
+        typer.Option(
+            "--download",
+            help="Top up users below the local document limit with Arctic Shift.",
+        ),
+    ] = False,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Build user documents locally; optionally top up gaps from Arctic Shift."""
+    commands: list[tuple[str, list[str]]] = []
+    target = output if output.is_absolute() else PROJECT_ROOT / output
+    if force or not target.is_file():
+        command = _python_module(
+            "src.data_preparation.build_user_documents",
+            "--input-dir",
+            input_dir,
+            "--users-from",
+            users_from,
+            "--output",
+            output,
+            "--n-user-docs",
+            n_user_docs,
+        )
+        if force:
+            command.append("--force")
+        commands.append(("user-documents-local", command))
+    else:
+        typer.echo(f"Already prepared: {_relative(target)}")
+    if download:
+        commands.append(
+            (
+                "user-documents-arctic-shift-top-up",
+                _python_module(
+                    "src.data_preparation.fetch_reddit_auxiliary_data",
+                    "--section",
+                    "user-documents",
+                    "--input-csv",
+                    users_from,
+                    "--output-dir",
+                    output.parent,
+                    "--user-documents-output",
+                    output,
+                    "--n-user-docs",
+                    n_user_docs,
+                    "--missing-user-documents-only",
+                ),
+            )
+        )
+    if not commands:
+        return
+    _execute(
+        commands,
+        category="prepare",
+        manifest_path=output.parent / "prepare_user_documents_run.json",
         splits_root=DEFAULT_SPLITS,
         dry_run=dry_run,
     )

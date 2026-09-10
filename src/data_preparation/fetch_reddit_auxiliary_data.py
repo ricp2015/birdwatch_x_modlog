@@ -193,7 +193,19 @@ def _merge_checkpoint(
         existing = pd.read_parquet(path)
         new = pd.concat([existing, new], ignore_index=True) if not new.empty else existing
     if not new.empty:
-        new = new.drop_duplicates(subset=deduplicate_on, keep="last")
+        # Preserve rows from minimal compatible tables when optional identity
+        # columns are absent; only rows with a complete key can be deduplicated.
+        for column in deduplicate_on:
+            if column not in new:
+                new[column] = pd.NA
+        complete_key = new[deduplicate_on].notna().all(axis=1)
+        new = pd.concat(
+            [
+                new.loc[~complete_key],
+                new.loc[complete_key].drop_duplicates(subset=deduplicate_on, keep="last"),
+            ],
+            ignore_index=True,
+        )
         _atomic_parquet(new, path)
     return new
 
@@ -296,7 +308,11 @@ def _collect_user_documents(
                 {
                     "username": username,
                     "source": "post",
-                    "thing_id": item.get("name") or item.get("id"),
+                    "thing_id": (
+                        _strip_prefix(item.get("name") or item.get("id"))
+                        if item.get("name") or item.get("id")
+                        else None
+                    ),
                     "subreddit": item.get("subreddit"),
                     "created_utc": item.get("created_utc"),
                     "text": text,
@@ -310,7 +326,11 @@ def _collect_user_documents(
                 {
                     "username": username,
                     "source": "comment",
-                    "thing_id": item.get("name") or item.get("id"),
+                    "thing_id": (
+                        _strip_prefix(item.get("name") or item.get("id"))
+                        if item.get("name") or item.get("id")
+                        else None
+                    ),
                     "subreddit": item.get("subreddit"),
                     "created_utc": item.get("created_utc"),
                     "text": text,
@@ -331,21 +351,37 @@ def fetch_user_documents(
     client: ArcticShiftClient,
     input_csv: Path,
     output_dir: Path,
+    documents_path: Optional[Path] = None,
     n_user_docs: int = N_USER_DOCS,
     after: Optional[str] = None,
     before: Optional[str] = None,
     checkpoint_users: int = 500,
+    missing_only: bool = False,
 ) -> dict:
-    """Fetch canonical root-level user documents and per-user coverage summaries."""
-    documents_path = output_dir / "user_documents.parquet"
-    summary_path = output_dir / "user_history_summary.parquet"
+    """Fetch user documents, optionally topping up a locally built table."""
+    documents_path = documents_path or output_dir / "user_documents.parquet"
+    summary_path = documents_path.with_name("user_history_summary.parquet")
     usernames = _load_ids(input_csv, "username")
-    done = (
-        set(pd.read_parquet(summary_path, columns=["username"])["username"].dropna())
-        if summary_path.exists()
-        else set()
-    )
-    todo = [username for username in usernames if username not in done]
+    if missing_only:
+        if documents_path.exists():
+            existing = pd.read_parquet(
+                documents_path, columns=["username", "created_utc", "text"]
+            ).dropna(subset=["username", "created_utc", "text"])
+            counts = existing["username"].astype(str).str.casefold().value_counts()
+            todo = [
+                username
+                for username in usernames
+                if counts.get(username.casefold(), 0) < n_user_docs
+            ]
+        else:
+            todo = usernames
+    else:
+        done = (
+            set(pd.read_parquet(summary_path, columns=["username"])["username"].dropna())
+            if summary_path.exists()
+            else set()
+        )
+        todo = [username for username in usernames if username not in done]
     if after is None and before is None:
         after, before = _infer_time_window(input_csv)
     n_posts = n_user_docs // 2
@@ -359,11 +395,15 @@ def fetch_user_documents(
         document_rows.extend(documents)
         summary_rows.append(summary)
         if (user_index + 1) % checkpoint_users == 0:
-            _merge_checkpoint(documents_path, document_rows, ["username", "thing_id"])
+            _merge_checkpoint(
+                documents_path, document_rows, ["username", "source", "thing_id"]
+            )
             _merge_checkpoint(summary_path, summary_rows, ["username"])
             document_rows.clear()
             summary_rows.clear()
-    documents = _merge_checkpoint(documents_path, document_rows, ["username", "thing_id"])
+    documents = _merge_checkpoint(
+        documents_path, document_rows, ["username", "source", "thing_id"]
+    )
     summaries = _merge_checkpoint(summary_path, summary_rows, ["username"])
     return {
         "section": "user-documents",
@@ -371,6 +411,8 @@ def fetch_user_documents(
         "n_requested_users": len(usernames),
         "n_users": len(summaries),
         "n_documents": len(documents),
+        "missing_only": missing_only,
+        "n_users_requested_from_arctic_shift": len(todo),
         "after": after,
         "before": before,
     }
@@ -481,22 +523,39 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--section",
-        choices=["post-texts", "user-documents", "reddit-scores", "all"],
+        choices=[
+            "post-texts",
+            "user-documents",
+            "reddit-scores",
+            "moderated-items",
+            "all",
+        ],
         default="all",
     )
     parser.add_argument("--input-csv", type=Path, default=INPUT_CSV)
     parser.add_argument("--votes", type=Path, default=FILTERED_VOTES)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument(
+        "--user-documents-output",
+        type=Path,
+        default=None,
+        help="Optional user-document target path instead of <output-dir>/user_documents.parquet.",
+    )
     parser.add_argument("--n-user-docs", type=int, default=N_USER_DOCS)
     parser.add_argument("--after", default=None)
     parser.add_argument("--before", default=None)
     parser.add_argument("--base-url", default=ARCTIC_SHIFT_BASE)
     parser.add_argument("--request-sleep", type=float, default=API_SLEEP_SEC)
+    parser.add_argument(
+        "--missing-user-documents-only",
+        action="store_true",
+        help="For user-documents, fetch only users with fewer than --n-user-docs locally.",
+    )
     args = parser.parse_args()
 
     client = ArcticShiftClient(base_url=args.base_url, sleep_seconds=args.request_sleep)
     reports = []
-    if args.section in {"post-texts", "all"}:
+    if args.section in {"post-texts", "moderated-items", "all"}:
         reports.append(fetch_post_texts(client, args.input_csv, args.output_dir))
     if args.section in {"user-documents", "all"}:
         reports.append(
@@ -504,12 +563,14 @@ def main() -> None:
                 client,
                 args.input_csv,
                 args.output_dir,
+                documents_path=args.user_documents_output,
                 n_user_docs=args.n_user_docs,
                 after=args.after,
                 before=args.before,
+                missing_only=args.missing_user_documents_only,
             )
         )
-    if args.section in {"reddit-scores", "all"}:
+    if args.section in {"reddit-scores", "moderated-items", "all"}:
         reports.append(fetch_reddit_scores(client, args.votes, args.output_dir))
     _write_manifest(args.output_dir, args.section, reports, client)
     for report in reports:

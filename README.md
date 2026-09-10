@@ -27,7 +27,10 @@ typer src.pipeline run reproduce --dataset reddit --input data/processed/final_i
 For another dataset, choose a unique name and pass its CSV from any location:
 
 ```powershell
-typer src.pipeline run reproduce --dataset my_dataset --input D:\datasets\votes.csv
+typer src.pipeline run reproduce `
+  --dataset my_dataset `
+  --input D:\datasets\votes.csv `
+  --user-contributions D:\datasets\user_contributions
 ```
 
 ## Needed resources
@@ -43,8 +46,10 @@ row is one vote and requires `username`, `community`, `item_id`, Unix-seconds
 
 ### User contributions
 
-These are required only when causal features must be built for NVSE, SEF, or
-Team Formation. Download the JSONL archive
+These are required when causal features must be built for NVSE, SEF, or Team
+Formation. They are also the default source for SEF's semantic user histories:
+the pipeline converts them locally to `user_documents.parquet`, without making
+Arctic Shift requests. Download the JSONL archive
 [here](https://drive.google.com/file/d/1RNWxXLgP8cpWInrWxeoUFdHQ0D3GKgzR/view?usp=drive_link)
 and extract it to:
 
@@ -64,6 +69,19 @@ is optional:
 {"name":"t1_def456","subreddit":"example","created_utc":1700000100,"body":"Reply","parent_id":"t1_xyz789","score":2}
 ```
 
+The conversion selects up to 150 documents per user, split between recent posts
+and comments in the vote-table time window. Change the cap with
+`--n-user-documents N` in `reproduce`, or `--n-user-docs N` below:
+
+```powershell
+typer src.pipeline run prepare user-documents `
+  --input-dir D:\datasets\user_contributions `
+  --users-from D:\datasets\votes.csv `
+  --output data/interim/my_dataset/auxiliary/user_documents.parquet
+```
+
+## Optional resources
+
 ### User account metadata
 
 This resource is not fetched by the Arctic Shift helper. It is optional: without
@@ -77,32 +95,44 @@ data/processed/user_metadata.csv             # current Reddit dataset
 data/processed/<dataset>/user_metadata.csv   # another dataset
 ```
 
-### Arctic Shift tables
+### Arctic Shift user-history top-up
 
-Fetch post texts, historical user documents, and Reddit item scores once:
+To fill users below the configured cap from Arctic Shift, add `--download`:
+
+```powershell
+typer src.pipeline run prepare user-documents `
+  --input-dir D:\datasets\user_contributions `
+  --users-from D:\datasets\votes.csv `
+  --output data/interim/my_dataset/auxiliary/user_documents.parquet `
+  --download
+```
+
+In `reproduce`, use `--download-user-documents`. Without these flags, user
+histories stay fully local.
+
+### Moderated-item texts and scores
+
+One command downloads both optional moderated-item tables:
 
 ```powershell
 typer src.pipeline run prepare auxiliary `
-  --section all `
+  --section moderated-items `
   --input-csv D:\datasets\votes.csv `
   --votes D:\datasets\votes.csv `
   --output-dir data/interim/my_dataset/auxiliary
 ```
 
-These tables serve a different purpose from the contribution JSONLs. Arctic
-Shift supplies the text consumed by SEF and NormVio, plus post-level Reddit
-scores for BL4/BL5.
+It creates:
 
-The output directory contains:
+- `post_texts.parquet`: moderated-post text for SEF and NormVio; pass an existing
+  table with `--post-texts`.
+- `moderated_posts_scores.parquet`: moderated-post Reddit scores for BL4/BL5;
+  pass an existing table with `--external-scores`.
 
-- `post_texts.parquet`: `item_id`, `text`, and also `title`, `selftext` when
-  generating NVSE scores. Pass an existing file with `--post-texts`.
-- `user_documents.parquet`: `username`, Unix-seconds `created_utc`, `text`.
-  Pass an existing file with `--user-documents`.
-- `moderated_posts_scores.parquet`: `item_id`, numeric `score`, used by
-  baselines BL4/BL5. Pass an existing file with `--external-scores`.
+JSONL scores (see "User Contributions", above) describe users' historical contributions, so they cannot replace
+the BL4/BL5 table. BL1-BL3 do not require external scores.
 
-### Models
+## Models
 
 To generate NVSE scores, download the nine NormVio checkpoints
 [here](https://drive.google.com/file/d/1khNw_M4HcJOQe2gftfXMybraYChVt3T7/view?ts=6a05d126)
@@ -130,7 +160,9 @@ Hugging Face automatically downloads NormVio's
 | `--method NAME`, `-m NAME` | Select a method; repeat for several. Omit to run all. Choices: `baselines`, `community-notes`, `var`, `nvse`, `sef`, `ma-qsmf`, `team-formation`. |
 | `--post-texts PATH` | Local post-text table. |
 | `--user-documents PATH` | Local historical user-document table. |
-| `--user-contributions DIR` | Local directory of per-user JSONL files. |
+| `--user-contributions DIR` | Local directory of per-user JSONL files; also used to derive `user_documents.parquet`. |
+| `--download-user-documents` | Top up users below the configured document cap through Arctic Shift. Default: disabled. |
+| `--n-user-documents N` | Maximum documents per user for semantic embeddings. Default: 150. |
 | `--user-metadata PATH` | Local account-metadata table. |
 | `--external-scores PATH` | Local per-item score table. |
 | `--k-fold` | Also run five-fold evaluation and summaries. |
@@ -144,8 +176,20 @@ Hugging Face automatically downloads NormVio's
 
 | Option | Meaning |
 |---|---|
-| `--section NAME` | Fetch `post-texts`, `user-documents`, `reddit-scores`, or `all`. |
+| `--section NAME` | Fetch `post-texts`, `user-documents`, `reddit-scores`, `moderated-items` (texts + scores), or `all`. |
 | `--input-csv PATH` | Table providing `item_id`, `username`, and `timestamp`. |
 | `--votes PATH` | Table providing `item_id`, `community`, and `label` for Reddit scores. |
 | `--output-dir DIR` | Destination for fetched Parquet files and the acquisition manifest. |
 | `--dry-run` | Print the acquisition command without executing it. |
+
+### `prepare user-documents`
+
+| Option | Meaning |
+|---|---|
+| `--input-dir DIR` | Directory containing one contribution JSONL per user. |
+| `--users-from PATH` | Votes table selecting usernames and the relevant timestamp window. |
+| `--output PATH` | Destination `user_documents.parquet`. |
+| `--n-user-docs N` | Maximum documents per user, split between posts and comments. Default: 150. |
+| `--download` | Top up users below the local limit through Arctic Shift. Default: disabled. |
+| `--force` | Replace an existing locally generated Parquet. |
+| `--dry-run` | Print the preparation commands without executing them. |
