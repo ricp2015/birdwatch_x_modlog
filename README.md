@@ -3,11 +3,20 @@
     <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
 </a>
 
-Run from the repository root with Python:
+Run from the repository root with Python. On Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
+```
+
+On Linux or macOS:
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m pip install -e . --no-deps
 ```
@@ -24,13 +33,31 @@ K-fold evaluation is not enabled by default. To run it as well:
 typer src.pipeline run reproduce --dataset reddit --input data/processed/final_intersection_dataset.csv --k-fold
 ```
 
+Every method is enabled by default. Use the method's name once with
+`--exclude-method` (`-x`) to opt out. For example, this keeps Team Formation
+enabled but skips Bandit:
+
+```sh
+typer src.pipeline run reproduce --dataset reddit --input data/processed/final_intersection_dataset.csv --exclude-method bandit
+```
+
+Repeat the option to omit more methods, for example `-x bandit -x sef`. The same
+option is available on `run methods`. In an advanced JSON config, use the
+optional field:
+
+```json
+{
+  "run": {
+    "methods": ["all"],
+    "exclude_methods": ["bandit", "sef"]
+  }
+}
+```
+
 For another dataset, choose a unique name and pass its CSV from any location:
 
-```powershell
-typer src.pipeline run reproduce `
-  --dataset my_dataset `
-  --input D:\datasets\votes.csv `
-  --user-contributions D:\datasets\user_contributions
+```sh
+typer src.pipeline run reproduce --dataset my_dataset --input path/to/votes.csv --user-contributions path/to/user_contributions
 ```
 
 ## Needed resources
@@ -41,8 +68,9 @@ across all resources.
 ### Votes
 
 This is the only input required by every method. Supply it with `--input`. Each
-row is one vote and requires `username`, `community`, `item_id`, Unix-seconds
-`timestamp`, `vote` in `{-1,+1}`, and an item-constant `label` in `{-1,+1}` for the mod. decision.
+row is one vote and requires string `username`, `community`, and `item_id`,
+`float64` Unix-seconds `timestamp`, `vote` in `{-1,+1}`, and an item-constant
+`label` in `{-1,+1}` for the mod. decision.
 
 ### User contributions
 
@@ -59,10 +87,11 @@ data/raw/<dataset>/user_contributions/            # another dataset
 ```
 
 Alternatively, leave it elsewhere and pass `--user-contributions DIR`. The
-directory must contain one `<username>.jsonl` per user. Each line is a JSON
-object with `subreddit`, numeric `created_utc`, and `id` or canonical `name`. A
-post has `title`; a comment has `body` and canonical `parent_id`. Numeric `score`
-is optional:
+directory must contain one `<username>.jsonl` per user. Each line is a Reddit
+JSON object with `subreddit`, numeric `created_utc`, and `id` or canonical
+`name`. These source fields are normalized to a string `item_id` and `float64`
+Unix-seconds `timestamp` in generated datasets. A post has `title`; a comment
+has `body` and canonical `parent_id`. Numeric `score` is optional:
 
 ```json
 {"id":"abc123","subreddit":"example","created_utc":1700000000,"title":"Post title","score":4}
@@ -73,11 +102,8 @@ The conversion selects up to 150 documents per user, split between recent posts
 and comments in the vote-table time window. Change the cap with
 `--n-user-documents N` in `reproduce`, or `--n-user-docs N` below:
 
-```powershell
-typer src.pipeline run prepare user-documents `
-  --input-dir D:\datasets\user_contributions `
-  --users-from D:\datasets\votes.csv `
-  --output data/interim/my_dataset/auxiliary/user_documents.parquet
+```sh
+typer src.pipeline run prepare user-documents --input-dir path/to/user_contributions --users-from path/to/votes.csv --output data/interim/my_dataset/auxiliary/user_documents.parquet
 ```
 
 ## Optional resources
@@ -99,12 +125,8 @@ data/processed/<dataset>/user_metadata.csv   # another dataset
 
 To fill users below the configured cap from Arctic Shift, add `--download`:
 
-```powershell
-typer src.pipeline run prepare user-documents `
-  --input-dir D:\datasets\user_contributions `
-  --users-from D:\datasets\votes.csv `
-  --output data/interim/my_dataset/auxiliary/user_documents.parquet `
-  --download
+```sh
+typer src.pipeline run prepare user-documents --input-dir path/to/user_contributions --users-from path/to/votes.csv --output data/interim/my_dataset/auxiliary/user_documents.parquet --download
 ```
 
 In `reproduce`, use `--download-user-documents`. Without these flags, user
@@ -114,12 +136,8 @@ histories stay fully local.
 
 One command downloads both optional moderated-item tables:
 
-```powershell
-typer src.pipeline run prepare auxiliary `
-  --section moderated-items `
-  --input-csv D:\datasets\votes.csv `
-  --votes D:\datasets\votes.csv `
-  --output-dir data/interim/my_dataset/auxiliary
+```sh
+typer src.pipeline run prepare auxiliary --section moderated-items --input-csv path/to/votes.csv --votes path/to/votes.csv --output-dir data/interim/my_dataset/auxiliary
 ```
 
 It creates:
@@ -158,6 +176,7 @@ Hugging Face automatically downloads NormVio's
 | `--input PATH` | Required votes table; mutually exclusive with `--config`. |
 | `--dataset NAME` | Namespace separating splits, caches, results, and reports. Default: `reddit`. |
 | `--method NAME`, `-m NAME` | Select a method; repeat for several. Omit to run all. Choices: `baselines`, `community-notes`, `var`, `nvse`, `sef`, `ma-qsmf`, `team-formation`. |
+| `--exclude-method NAME`, `-x NAME` | Opt out by method name, for example `bandit` or `sef`; repeat for several. |
 | `--post-texts PATH` | Local post-text table. |
 | `--user-documents PATH` | Local historical user-document table. |
 | `--user-contributions DIR` | Local directory of per-user JSONL files; also used to derive `user_documents.parquet`. |

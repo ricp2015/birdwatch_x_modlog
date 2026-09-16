@@ -247,7 +247,7 @@ def collect_method_split_matrix(results_root: Path, splits_root: Path) -> pd.Dat
                         if supported
                         else "not_applicable"
                     ),
-                    "result_dir": str(directory) if directory is not None else None,
+                    "result_dir": directory.as_posix() if directory is not None else None,
                 }
             )
     return pd.DataFrame(rows)

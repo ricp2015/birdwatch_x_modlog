@@ -12,8 +12,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.methods.team_formation_v2.shared_features import load_split_manifest  # noqa: E402
-from src.utils.splits import discover_splits  # noqa: E402
+from src.methods.team_formation_v2.shared_features import load_split_manifest
+from src.utils.splits import discover_splits
 
 CHRONOLOGICAL_SPLIT = "intersection_chronological"
 DEFAULT_VOTES_DIR = "data/splits/reddit"
@@ -138,18 +138,18 @@ def build_command(
 ) -> list[str]:
     """Build one module command with the shared counterfactual protocol inputs."""
     command = [
-        sys.executable,
+        Path(sys.executable).as_posix(),
         "-B",
         "-m",
         METHODS[method],
         "--votes-dir",
-        str(split_path),
+        split_path.as_posix(),
         "--out-dir",
-        str(out_dir),
+        out_dir.as_posix(),
         "--causal-features",
-        causal_features,
+        Path(causal_features).as_posix(),
         "--embedding-dir",
-        embedding_dir,
+        Path(embedding_dir).as_posix(),
     ]
     if method in PANEL_METHODS:
         command.extend(("--team-size", str(DEFAULT_TEAM_SIZE)))
@@ -171,6 +171,13 @@ def main() -> None:
         help="Active methods to run.",
     )
     parser.add_argument(
+        "--exclude-method",
+        action="append",
+        choices=tuple(METHODS),
+        default=[],
+        help="Method to omit. Repeat to omit more than one.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the split-by-method execution matrix without starting subprocesses.",
@@ -182,6 +189,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    excluded = set(args.exclude_method)
+    selected_methods = [method for method in args.methods if method not in excluded]
+    if not selected_methods:
+        parser.error("method selection is empty after applying --exclude-method")
+
     splits = resolve_splits(Path(args.votes_dir))
     out_root = Path(args.out_root)
     print(f"Prepared splits: {len(splits)}")
@@ -190,7 +202,7 @@ def main() -> None:
     summary_path = out_root / "summaries" / summary_filename
     summary: dict[str, str] = {}
     for split_name, split_path in splits.items():
-        for method in args.methods:
+        for method in selected_methods:
             out_dir = out_root.joinpath(*split_name.split("/"), method)
             run_name = f"{split_name}/{method}"
             command = build_command(

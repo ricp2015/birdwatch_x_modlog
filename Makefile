@@ -2,8 +2,6 @@
 # GLOBALS                                                                       #
 #################################################################################
 
-PROJECT_NAME = birdwatch_x_modlog
-PYTHON_VERSION = 3.11
 PYTHON_INTERPRETER = python
 
 #################################################################################
@@ -59,8 +57,8 @@ graphs-kfold:
 ## Delete all compiled Python files
 .PHONY: clean
 clean:
-	find . -type f -name "*.py[co]" -delete
-	find . -type d -name "__pycache__" -delete
+	$(PYTHON_INTERPRETER) -c "from pathlib import Path; [path.unlink() for path in Path('.').rglob('*.py[co]')]"
+	$(PYTHON_INTERPRETER) -c "from pathlib import Path; import shutil; [shutil.rmtree(path) for path in Path('.').rglob('__pycache__')]"
 
 
 ## Lint using ruff (use `make format` to do formatting)
@@ -82,8 +80,7 @@ format:
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
-	@bash -c "if [ ! -z `which virtualenvwrapper.sh` ]; then source `which virtualenvwrapper.sh`; mkvirtualenv $(PROJECT_NAME) --python=$(PYTHON_INTERPRETER); else mkvirtualenv.bat $(PROJECT_NAME) --python=$(PYTHON_INTERPRETER); fi"
-	@echo ">>> New virtualenv created. Activate with:\nworkon $(PROJECT_NAME)"
+	$(PYTHON_INTERPRETER) -m venv .venv
 	
 
 

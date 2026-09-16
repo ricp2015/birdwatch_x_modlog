@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
-from src.utils.tabular import read_table
+from src.utils.tabular import read_table, unix_seconds
 
 INPUT_PATH = Path("data/processed/final_intersection_dataset.csv")
 OUTPUT_DIR = Path("data/interim/reddit/datasets")
@@ -69,18 +69,10 @@ def load_dataset(path: Path = INPUT_PATH) -> pd.DataFrame:
     df = df[df["vote"].isin([1, -1]) & df["label"].isin([1, -1])].copy()
     df["vote"] = df["vote"].astype("int8")
     df["label"] = df["label"].astype("int8")
-    timestamp_values = df["timestamp"]
-    if pd.api.types.is_datetime64_any_dtype(timestamp_values.dtype):
-        parsed_timestamp = pd.to_datetime(timestamp_values, utc=True, errors="coerce")
-    else:
-        numeric_timestamp = pd.to_numeric(timestamp_values, errors="coerce")
-        parsed_timestamp = pd.to_datetime(numeric_timestamp, unit="s", utc=True, errors="coerce")
-        unresolved = parsed_timestamp.isna() & timestamp_values.notna()
-        if unresolved.any():
-            parsed_timestamp.loc[unresolved] = pd.to_datetime(
-                timestamp_values.loc[unresolved], utc=True, errors="coerce"
-            )
-    df["timestamp"] = parsed_timestamp
+    df["timestamp"] = unix_seconds(df["timestamp"]).astype("float64")
+    df[["username", "community", "item_id"]] = df[
+        ["username", "community", "item_id"]
+    ].astype("string")
 
     before = len(df)
     df = df.dropna(subset=_CORE_COLUMNS)
@@ -333,7 +325,7 @@ def build_chronological_split(
     """Split items by their final vote timestamp while keeping boundary ties intact."""
     _validate_ratios(train_ratio, val_ratio, test_ratio)
     votes = votes.copy()
-    votes["timestamp"] = pd.to_datetime(votes["timestamp"], utc=True, errors="coerce")
+    votes["timestamp"] = unix_seconds(votes["timestamp"])
     if votes["timestamp"].isna().any():
         raise ValueError(f"Input contains {votes['timestamp'].isna().sum():,} invalid timestamps")
 
@@ -426,8 +418,12 @@ def _split_manifest(
             "item_fraction": float(
                 frame["item_id"].nunique() / max(source["item_id"].nunique(), 1)
             ),
-            "vote_time_start": frame["timestamp"].min().isoformat(),
-            "vote_time_end": frame["timestamp"].max().isoformat(),
+            "vote_time_start": pd.to_datetime(
+                frame["timestamp"].min(), unit="s", utc=True
+            ).isoformat(),
+            "vote_time_end": pd.to_datetime(
+                frame["timestamp"].max(), unit="s", utc=True
+            ).isoformat(),
             "users_seen_in_train_fraction": (
                 1.0 if name == "train" else float(len(users & train_users) / max(len(users), 1))
             ),
@@ -569,7 +565,7 @@ def build_chronological_kfold_splits(
         raise ValueError("initial_train_fraction must be in (0, 1)")
 
     votes = votes.copy()
-    votes["timestamp"] = pd.to_datetime(votes["timestamp"], utc=True, errors="coerce")
+    votes["timestamp"] = unix_seconds(votes["timestamp"])
     if votes["timestamp"].isna().any():
         raise ValueError("Chronological K-fold input contains invalid timestamps")
     items = _item_table(votes).sort_values(["item_time", "item_id"], kind="stable")
@@ -916,16 +912,16 @@ def prepare_dataset(
         "pipeline": "prepare_reddit_data",
         "network_access": False,
         "seed": seed,
-        "input": str(input_path),
+        "input": input_path.as_posix(),
         "input_sha256": _sha256_file(input_path),
         "optional_inputs": {
             "moderated_posts_scores": {
-                "path": str(external_scores_path),
+                "path": external_scores_path.as_posix(),
                 "available": external_scores_path.exists(),
                 "sha256": _sha256_file(external_scores_path),
             },
             "post_texts": {
-                "path": str(post_texts_path),
+                "path": post_texts_path.as_posix(),
                 "available": post_texts_path.exists(),
                 "sha256": _sha256_file(post_texts_path),
             },
@@ -936,9 +932,9 @@ def prepare_dataset(
             "intersection": len(intersection),
         },
         "outputs": {
-            "filtered_votes": str(output_dir / "filtered_votes.parquet"),
-            "splits_root": str(splits_dir),
-            "kfold_root": str(splits_dir / "kfold"),
+            "filtered_votes": (output_dir / "filtered_votes.parquet").as_posix(),
+            "splits_root": splits_dir.as_posix(),
+            "kfold_root": (splits_dir / "kfold").as_posix(),
         },
     }
     (output_dir / "prepare_reddit_data.manifest.json").write_text(

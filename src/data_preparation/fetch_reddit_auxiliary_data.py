@@ -13,9 +13,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import requests
-
-from src.utils.tabular import read_table
 from tqdm import tqdm
+
+from src.utils.tabular import read_table, unix_seconds
 
 INPUT_CSV = Path("data/processed/final_intersection_dataset.csv")
 OUTPUT_DIR = Path("data/interim/reddit/auxiliary")
@@ -145,6 +145,11 @@ def _safe_text(value: Any) -> Optional[str]:
     return None if text.casefold() in {"", "[removed]", "[deleted]"} else text
 
 
+def _numeric(value: Any) -> float:
+    numeric = pd.to_numeric(value, errors="coerce")
+    return float(numeric) if pd.notna(numeric) else np.nan
+
+
 def _combine_post_text(item: Dict) -> Optional[str]:
     title = _safe_text(item.get("title"))
     body = _safe_text(item.get("selftext"))
@@ -188,9 +193,9 @@ def _merge_checkpoint(
     deduplicate_on: List[str],
 ) -> pd.DataFrame:
     """Merge buffered rows with an existing checkpoint idempotently."""
-    new = pd.DataFrame(rows)
+    new = _normalize_auxiliary_columns(pd.DataFrame(rows))
     if path.exists():
-        existing = pd.read_parquet(path)
+        existing = _normalize_auxiliary_columns(pd.read_parquet(path))
         new = pd.concat([existing, new], ignore_index=True) if not new.empty else existing
     if not new.empty:
         # Preserve rows from minimal compatible tables when optional identity
@@ -210,16 +215,35 @@ def _merge_checkpoint(
     return new
 
 
+def _normalize_auxiliary_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize legacy checkpoint column names before resuming a fetch."""
+    frame = frame.copy()
+    for legacy, canonical in (("thing_id", "item_id"), ("created_utc", "timestamp")):
+        if legacy not in frame:
+            continue
+        if canonical in frame:
+            frame[canonical] = frame[canonical].combine_first(frame[legacy])
+            frame = frame.drop(columns=legacy)
+        else:
+            frame = frame.rename(columns={legacy: canonical})
+    if {"source", "item_id"}.issubset(frame.columns):
+        identifiers = frame["item_id"].astype("string")
+        bare = identifiers.notna() & ~identifiers.str.startswith(("t1_", "t3_"), na=False)
+        prefixes = frame["source"].map({"comment": "t1_", "post": "t3_"}).fillna("")
+        frame.loc[bare, "item_id"] = prefixes[bare] + identifiers[bare]
+    return frame
+
+
 def _post_text_row(item: Dict, fallback_id: Optional[str] = None) -> Dict:
     return {
         "item_id": _canonical_post_id(item, fallback_id),
         "subreddit": item.get("subreddit"),
         "author": item.get("author"),
-        "created_utc": item.get("created_utc"),
+        "timestamp": _numeric(item.get("created_utc")),
         "title": _safe_text(item.get("title")),
         "selftext": _safe_text(item.get("selftext")),
         "text": _combine_post_text(item),
-        "score": item.get("score", np.nan),
+        "score": _numeric(item.get("score")),
         "url": item.get("url"),
         "is_self": item.get("is_self"),
     }
@@ -256,7 +280,7 @@ def fetch_post_texts(
     frame = _merge_checkpoint(output_path, rows, ["item_id"])
     return {
         "section": "post-texts",
-        "output": str(output_path),
+        "output": output_path.as_posix(),
         "n_requested": len(all_ids),
         "n_rows": len(frame),
         "n_with_text": int(frame["text"].notna().sum()) if not frame.empty else 0,
@@ -265,7 +289,7 @@ def fetch_post_texts(
 
 def _infer_time_window(input_csv: Path) -> Tuple[Optional[str], Optional[str]]:
     timestamps = read_table(input_csv, columns=["timestamp"])["timestamp"]
-    numeric = pd.to_numeric(timestamps, errors="coerce")
+    numeric = unix_seconds(timestamps)
     parsed = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce").dropna()
     if parsed.empty:
         return None, None
@@ -308,15 +332,11 @@ def _collect_user_documents(
                 {
                     "username": username,
                     "source": "post",
-                    "thing_id": (
-                        _strip_prefix(item.get("name") or item.get("id"))
-                        if item.get("name") or item.get("id")
-                        else None
-                    ),
+                    "item_id": _canonical_post_id(item),
                     "subreddit": item.get("subreddit"),
-                    "created_utc": item.get("created_utc"),
+                    "timestamp": _numeric(item.get("created_utc")),
                     "text": text,
-                    "score": item.get("score", np.nan),
+                    "score": _numeric(item.get("score")),
                 }
             )
     for item in comments:
@@ -326,15 +346,17 @@ def _collect_user_documents(
                 {
                     "username": username,
                     "source": "comment",
-                    "thing_id": (
-                        _strip_prefix(item.get("name") or item.get("id"))
-                        if item.get("name") or item.get("id")
+                    "item_id": (
+                        item.get("name")
+                        if str(item.get("name", "")).startswith("t1_")
+                        else f"t1_{_strip_prefix(item['id'])}"
+                        if item.get("id")
                         else None
                     ),
                     "subreddit": item.get("subreddit"),
-                    "created_utc": item.get("created_utc"),
+                    "timestamp": _numeric(item.get("created_utc")),
                     "text": text,
-                    "score": item.get("score", np.nan),
+                    "score": _numeric(item.get("score")),
                 }
             )
     return documents, {
@@ -364,9 +386,8 @@ def fetch_user_documents(
     usernames = _load_ids(input_csv, "username")
     if missing_only:
         if documents_path.exists():
-            existing = pd.read_parquet(
-                documents_path, columns=["username", "created_utc", "text"]
-            ).dropna(subset=["username", "created_utc", "text"])
+            existing = _normalize_auxiliary_columns(pd.read_parquet(documents_path))
+            existing = existing.dropna(subset=["username", "timestamp", "text"])
             counts = existing["username"].astype(str).str.casefold().value_counts()
             todo = [
                 username
@@ -396,18 +417,18 @@ def fetch_user_documents(
         summary_rows.append(summary)
         if (user_index + 1) % checkpoint_users == 0:
             _merge_checkpoint(
-                documents_path, document_rows, ["username", "source", "thing_id"]
+                documents_path, document_rows, ["username", "source", "item_id"]
             )
             _merge_checkpoint(summary_path, summary_rows, ["username"])
             document_rows.clear()
             summary_rows.clear()
     documents = _merge_checkpoint(
-        documents_path, document_rows, ["username", "source", "thing_id"]
+        documents_path, document_rows, ["username", "source", "item_id"]
     )
     summaries = _merge_checkpoint(summary_path, summary_rows, ["username"])
     return {
         "section": "user-documents",
-        "outputs": [str(documents_path), str(summary_path)],
+        "outputs": [documents_path.as_posix(), summary_path.as_posix()],
         "n_requested_users": len(usernames),
         "n_users": len(summaries),
         "n_documents": len(documents),
@@ -419,11 +440,6 @@ def fetch_user_documents(
 
 
 def _score_row(item: Dict, fallback_id: Optional[str] = None) -> Dict:
-    created_utc = item.get("created_utc")
-    try:
-        created_dt = pd.to_datetime(float(created_utc), unit="s", utc=True)
-    except (TypeError, ValueError, OverflowError):
-        created_dt = pd.NaT
     title = _safe_text(item.get("title"))
     body = _safe_text(item.get("selftext"))
     return {
@@ -435,11 +451,10 @@ def _score_row(item: Dict, fallback_id: Optional[str] = None) -> Dict:
         "full_text": f"{title}\n\n{body}" if title and body else title or body,
         "url": item.get("url"),
         "domain": item.get("domain"),
-        "score": item.get("score", np.nan),
-        "upvote_ratio": item.get("upvote_ratio", np.nan),
-        "num_comments": item.get("num_comments", np.nan),
-        "created_utc": created_utc,
-        "created_dt": created_dt,
+        "score": _numeric(item.get("score")),
+        "upvote_ratio": _numeric(item.get("upvote_ratio")),
+        "num_comments": _numeric(item.get("num_comments")),
+        "timestamp": _numeric(item.get("created_utc")),
         "removed_by_category": item.get("removed_by_category"),
         "removal_reason": item.get("removal_reason"),
         "banned_by": item.get("banned_by"),
@@ -490,7 +505,7 @@ def fetch_reddit_scores(
         result = pd.read_parquet(output_path) if output_path.exists() else pd.DataFrame()
     return {
         "section": "reddit-scores",
-        "output": str(output_path),
+        "output": output_path.as_posix(),
         "n_requested": len(moderated),
         "n_rows": len(result),
         "n_with_score": int(result["score"].notna().sum()) if not result.empty else 0,

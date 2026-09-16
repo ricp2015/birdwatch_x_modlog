@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import re
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from src.utils.splits import discover_splits
-from src.utils.tabular import read_table, table_columns
+from src.utils.tabular import read_table, table_columns, unix_seconds
 
 VOTE_COLUMNS = {"username", "community", "item_id", "timestamp", "vote", "label"}
 CAUSAL_COLUMNS = {
@@ -95,6 +96,7 @@ class ReproductionConfig:
     reuse_sef_hyperparameters: bool
     skip_existing_team_methods: bool
     graph_sections: tuple[str, ...]
+    excluded_methods: tuple[str, ...] = ()
 
 
 def _check_keys(payload: dict[str, Any], allowed: set[str], section: str) -> None:
@@ -133,10 +135,62 @@ def _integer(payload: dict[str, Any], key: str, default: int) -> int:
     return value
 
 
+def resolve_method_selection(
+    requested: Sequence[str],
+    excluded: Sequence[str] = (),
+    *,
+    valid_methods: Sequence[str],
+    nested_methods: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve flat method names while retaining canonical family order."""
+    nested_methods = nested_methods or {}
+    if not requested:
+        raise ValueError("at least one method must be selected")
+    unknown_requested = sorted(set(requested).difference({"all", *valid_methods}))
+    if unknown_requested:
+        raise ValueError(f"unknown method(s): {unknown_requested}")
+    if "all" in requested and list(requested) != ["all"]:
+        raise ValueError("'all' cannot be combined with individual methods")
+
+    nested_names = [name for names in nested_methods.values() for name in names]
+    if len(nested_names) != len(set(nested_names)):
+        raise ValueError("nested method names must be globally unique")
+    valid_exclusions = {*valid_methods, *nested_names}
+    unknown_exclusions = sorted(set(excluded).difference(valid_exclusions))
+    if unknown_exclusions:
+        raise ValueError(f"unknown excluded method(s): {unknown_exclusions}")
+    normalized_exclusions = tuple(dict.fromkeys(excluded))
+
+    requested_set = set(valid_methods) if list(requested) == ["all"] else set(requested)
+    selected = tuple(
+        family
+        for family in valid_methods
+        if family in requested_set
+        and family not in normalized_exclusions
+        and not (
+            nested_methods.get(family)
+            and all(name in normalized_exclusions for name in nested_methods[family])
+        )
+    )
+    if not selected:
+        raise ValueError("method selection is empty after applying exclusions")
+    return selected, normalized_exclusions
+
+
+def nested_exclusions(
+    family: str,
+    excluded: Sequence[str],
+    nested_methods: Mapping[str, Sequence[str]],
+) -> tuple[str, ...]:
+    """Return flat child names excluded from one method family."""
+    return tuple(name for name in nested_methods.get(family, ()) if name in excluded)
+
+
 def load_reproduction_config(
     config_path: Path,
     project_root: Path,
     valid_methods: Iterable[str],
+    nested_methods: Mapping[str, Sequence[str]] | None = None,
 ) -> ReproductionConfig:
     """Load a strict versioned JSON configuration and resolve its paths."""
     source = config_path if config_path.is_absolute() else project_root / config_path
@@ -178,6 +232,7 @@ def load_reproduction_config(
         run,
         {
             "methods",
+            "exclude_methods",
             "prepare_dataset",
             "prepare_user_features",
             "prepare_nvse_scores",
@@ -211,17 +266,17 @@ def load_reproduction_config(
         or not all(isinstance(value, str) for value in raw_methods)
     ):
         raise ValueError("run.methods must be a non-empty JSON array of strings")
-    valid = set(valid_methods)
-    if raw_methods == ["all"]:
-        methods = tuple(valid_methods)
-    else:
-        unknown = set(raw_methods) - valid
-        if unknown:
-            raise ValueError(f"Unknown run.methods value(s): {sorted(unknown)}")
-        if "all" in raw_methods:
-            raise ValueError("'all' cannot be combined with individual methods")
-        requested = set(raw_methods)
-        methods = tuple(method for method in valid_methods if method in requested)
+    raw_excluded_methods = run.get("exclude_methods", [])
+    if not isinstance(raw_excluded_methods, list) or not all(
+        isinstance(value, str) for value in raw_excluded_methods
+    ):
+        raise ValueError("run.exclude_methods must be a JSON array of strings")
+    methods, excluded_methods = resolve_method_selection(
+        raw_methods,
+        raw_excluded_methods,
+        valid_methods=tuple(valid_methods),
+        nested_methods=nested_methods or {},
+    )
 
     causal = _path(project_root, inputs.get("causal_features"), field="inputs.causal_features")
     nvse = _path(project_root, inputs.get("nvse_scores"), field="inputs.nvse_scores")
@@ -287,6 +342,7 @@ def load_reproduction_config(
         causal_features_are_precomputed=causal is not None,
         nvse_scores_are_precomputed=nvse is not None,
         methods=methods,
+        excluded_methods=excluded_methods,
         prepare_dataset=_boolean(run, "prepare_dataset", True),
         prepare_user_features=_boolean(run, "prepare_user_features", True),
         prepare_nvse_scores=_boolean(run, "prepare_nvse_scores", True),
@@ -309,6 +365,7 @@ def _validate_table(
     required: set[str],
     label: str,
     errors: list[str],
+    aliases: dict[str, set[str]] | None = None,
 ) -> None:
     if path is None or not path.is_file():
         errors.append(f"{label}: missing file ({path})")
@@ -318,7 +375,12 @@ def _validate_table(
     except Exception as exc:
         errors.append(f"{label}: cannot read {path}: {exc}")
         return
-    missing = required - columns
+    aliases = aliases or {}
+    missing = {
+        column
+        for column in required
+        if column not in columns and not (aliases.get(column, set()) & columns)
+    }
     if missing:
         errors.append(f"{label}: {path} is missing {sorted(missing)}")
 
@@ -340,7 +402,7 @@ def _validate_vote_sample(path: Path, errors: list[str]) -> None:
         numeric = np.asarray(pd.to_numeric(values, errors="coerce"), dtype=float)
         if np.isnan(numeric).any() or not set(np.unique(numeric)).issubset({-1.0, 1.0}):
             errors.append(f"inputs.votes.{column} must contain only -1 or +1")
-    timestamps = pd.to_numeric(sample["timestamp"], errors="coerce")
+    timestamps = unix_seconds(sample["timestamp"])
     if timestamps.isna().any():
         errors.append("inputs.votes.timestamp must be numeric Unix seconds")
 
@@ -554,9 +616,10 @@ def validate_reproduction_config(
         if user_documents_ready:
             _validate_table(
                 user_documents_path,
-                {"username", "created_utc", "text"},
+                {"username", "timestamp", "text"},
                 "inputs.user_documents",
                 errors,
+                aliases={"timestamp": {"created_utc"}},
             )
         elif can_build_user_documents:
             _validate_contribution_jsonl(config.user_contributions, errors)

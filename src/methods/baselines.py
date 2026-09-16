@@ -35,6 +35,13 @@ MIN_SUB_VAL_ITEMS = 10
 N_FOLDS = 5
 REDDIT_SCORES_PATH = Path("data/interim/reddit/auxiliary/moderated_posts_scores.parquet")
 
+
+def _timestamp_date(value):
+    if isinstance(value, pd.Timestamp):
+        return value.date()
+    return pd.to_datetime(value, unit="s", utc=True).date()
+
+
 # Calibration sample size when validation is empty.
 MIN_CAL_FALLBACK_ITEMS = 50
 
@@ -107,8 +114,12 @@ def make_chrono_folds(all_votes: pd.DataFrame, n_folds: int = N_FOLDS) -> List[p
             k,
             len(fold_items),
             len(fold_votes),
-            fold_votes["timestamp"].min().date() if "timestamp" in fold_votes.columns else "?",
-            fold_votes["timestamp"].max().date() if "timestamp" in fold_votes.columns else "?",
+            _timestamp_date(fold_votes["timestamp"].min())
+            if "timestamp" in fold_votes.columns
+            else "?",
+            _timestamp_date(fold_votes["timestamp"].max())
+            if "timestamp" in fold_votes.columns
+            else "?",
         )
     return folds
 

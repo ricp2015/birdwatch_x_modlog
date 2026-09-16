@@ -88,18 +88,18 @@ def _command(
     embedding_dir: str,
 ) -> list[str]:
     return [
-        sys.executable,
+        Path(sys.executable).as_posix(),
         "-B",
         "-m",
         PANEL_METHODS[method],
         "--votes-dir",
-        str(votes_dir),
+        votes_dir.as_posix(),
         "--out-dir",
-        str(out_dir),
+        out_dir.as_posix(),
         "--causal-features",
-        causal_features,
+        Path(causal_features).as_posix(),
         "--embedding-dir",
-        embedding_dir,
+        Path(embedding_dir).as_posix(),
         "--team-size",
         str(k),
     ]
@@ -123,7 +123,7 @@ def _row(
         "k": k,
         "k_applicable": isinstance(k, int),
         "source": source,
-        "metrics_path": str(metrics_path),
+        "metrics_path": metrics_path.as_posix(),
     }
     for split in ("val", "test"):
         for metric in METRIC_NAMES:
@@ -242,7 +242,7 @@ def summarize(
                         "method": method,
                         "k": k,
                         "status": "not_executed",
-                        "metrics_path": str(metrics_path),
+                        "metrics_path": metrics_path.as_posix(),
                     }
                 )
 

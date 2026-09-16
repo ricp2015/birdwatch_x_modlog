@@ -117,8 +117,8 @@ def compute_subreddit_base_rates(train_votes: pd.DataFrame) -> Dict[str, Dict[st
 
     # parse date if available for temporal variance
     date_col = (
-        "created_utc"
-        if "created_utc" in posts.columns
+        "timestamp"
+        if "timestamp" in posts.columns
         else ("date" if "date" in posts.columns else None)
     )
 

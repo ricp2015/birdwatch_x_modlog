@@ -11,6 +11,30 @@ import pandas as pd
 SUPPORTED_SUFFIXES = {".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson"}
 
 
+def unix_seconds(values: pd.Series) -> pd.Series:
+    """Normalize numeric, datetime, or datetime-string values to Unix seconds."""
+    if pd.api.types.is_datetime64_any_dtype(values.dtype):
+        parsed = pd.to_datetime(values, utc=True, errors="coerce")
+        return parsed.map(
+            lambda value: value.timestamp() if pd.notna(value) else float("nan")
+        ).astype("float64")
+    numeric = pd.to_numeric(values, errors="coerce").astype("float64")
+    absolute = numeric.abs()
+    nanoseconds = absolute >= 100_000_000_000_000_000
+    microseconds = (absolute >= 100_000_000_000_000) & ~nanoseconds
+    milliseconds = (absolute >= 100_000_000_000) & ~(nanoseconds | microseconds)
+    numeric.loc[nanoseconds] /= 1_000_000_000.0
+    numeric.loc[microseconds] /= 1_000_000.0
+    numeric.loc[milliseconds] /= 1_000.0
+    unresolved = numeric.isna() & values.notna()
+    if unresolved.any():
+        parsed = pd.to_datetime(values.loc[unresolved], utc=True, errors="coerce")
+        numeric.loc[unresolved] = parsed.map(
+            lambda value: value.timestamp() if pd.notna(value) else float("nan")
+        )
+    return numeric
+
+
 def read_table(
     path: Path,
     *,

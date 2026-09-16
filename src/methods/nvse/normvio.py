@@ -346,10 +346,18 @@ def score_violations(
             "--section post-texts`"
         )
         docs = pd.read_parquet(docs_path)
-        docs = docs[docs["source"] == "post"].drop_duplicates("thing_id")
-        items["thing_id"] = items["item_id"].str.replace("t3_", "", regex=False)
-        posts = items.merge(docs[["thing_id", "title", "text"]], on="thing_id", how="left")
-        n_missing = posts["title"].isna().sum()
+        if "item_id" not in docs and "thing_id" in docs:
+            docs = docs.rename(columns={"thing_id": "item_id"})
+        required = {"source", "item_id", "text"}
+        missing = required - set(docs.columns)
+        if missing:
+            raise ValueError(f"{docs_path} is missing fallback columns: {sorted(missing)}")
+        docs = docs[docs["source"] == "post"].copy()
+        bare = ~docs["item_id"].astype(str).str.startswith("t3_")
+        docs.loc[bare, "item_id"] = "t3_" + docs.loc[bare, "item_id"].astype(str)
+        docs = docs.drop_duplicates("item_id")
+        posts = items.merge(docs[["item_id", "text"]], on="item_id", how="left")
+        n_missing = posts["text"].isna().sum()
         source = docs_path
 
     print(f"Post texts: {len(posts):,} | missing={n_missing:,} | source={source}")

@@ -338,7 +338,7 @@ def run_single_split(
             "causal_metadata_weight": runtime.causal_metadata_weight,
             "semantic_user_profiles_are_static": False,
             "semantic_profile_regime": "causal_as_of_case_time",
-            "semantic_profile_timestamp_rule": ("document.created_utc < max_case_vote_timestamp"),
+            "semantic_profile_timestamp_rule": ("document.timestamp < max_case_vote_timestamp"),
             "semantic_profile_cache_key": user_profiles.cache_key,
             "temporal_profile_vote_coverage": (
                 float(temporal_covered.mean()) if len(temporal_covered) else 0.0
@@ -567,7 +567,7 @@ def evaluate_splits(
             {
                 "semantic_profile_regime": "causal_as_of_case_time",
                 "semantic_profile_timestamp_rule": (
-                    "document.created_utc < max_case_vote_timestamp"
+                    "document.timestamp < max_case_vote_timestamp"
                 ),
                 "semantic_profile_cache_key": user_profiles.cache_key,
                 "chronological_evaluation_supported": True,

@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from src.utils.tabular import read_table
+from src.utils.tabular import read_table, unix_seconds
 
 DEFAULT_INPUT_DIR = Path("data/raw/user_contributions/user_contributions")
 DEFAULT_USERS_FROM = Path("data/processed/final_intersection_dataset.csv")
@@ -30,9 +30,9 @@ SCHEMA = pa.schema(
     [
         ("username", pa.string()),
         ("source", pa.string()),
-        ("thing_id", pa.string()),
+        ("item_id", pa.string()),
         ("subreddit", pa.string()),
-        ("created_utc", pa.int64()),
+        ("timestamp", pa.float64()),
         ("text", pa.string()),
         ("score", pa.float64()),
     ]
@@ -66,16 +66,6 @@ def _safe_text(value: Any) -> str | None:
 
 def _as_document(record: dict[str, Any], username: str) -> dict[str, Any] | None:
     name = record.get("name")
-    identifier = (
-        name
-        if isinstance(name, str) and name.startswith(("t1_", "t3_"))
-        else record.get("id")
-    )
-    if identifier is None:
-        return None
-    identifier = str(identifier)
-    thing_id = identifier[3:] if identifier.startswith(("t1_", "t3_")) else identifier
-
     if (isinstance(name, str) and name.startswith("t1_")) or "body" in record:
         source = "comment"
         text = _safe_text(record.get("body"))
@@ -88,6 +78,16 @@ def _as_document(record: dict[str, Any], username: str) -> dict[str, Any] | None
         return None
     if text is None:
         return None
+
+    identifier = name if isinstance(name, str) and name.startswith(("t1_", "t3_")) else record.get("id")
+    if identifier is None:
+        return None
+    identifier = str(identifier)
+    item_id = (
+        identifier
+        if identifier.startswith(("t1_", "t3_"))
+        else f"t{1 if source == 'comment' else 3}_{identifier}"
+    )
 
     try:
         timestamp_value = float(record.get("created_utc"))
@@ -107,9 +107,9 @@ def _as_document(record: dict[str, Any], username: str) -> dict[str, Any] | None
     return {
         "username": username,
         "source": source,
-        "thing_id": thing_id,
+        "item_id": item_id,
         "subreddit": str(subreddit) if subreddit is not None else None,
-        "created_utc": int(timestamp_value),
+        "timestamp": timestamp_value,
         "text": text,
         "score": score,
     }
@@ -137,7 +137,7 @@ def _users_and_window(
     users = {username.casefold(): username for username in usernames}
     if "timestamp" not in frame:
         return users, None, None
-    valid = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+    valid = unix_seconds(frame["timestamp"]).dropna()
     if valid.empty:
         return users, None, None
     after = datetime.fromtimestamp(float(valid.min()), tz=UTC).date().isoformat()
@@ -172,13 +172,13 @@ def _select_documents(
             if document is None:
                 counts["invalid"] += 1
                 continue
-            timestamp = document["created_utc"]
+            timestamp = document["timestamp"]
             if after_timestamp is not None and timestamp < after_timestamp:
                 continue
             if before_timestamp is not None and timestamp >= before_timestamp:
                 continue
             source = document["source"]
-            key = (source, document["thing_id"])
+            key = (source, document["item_id"])
             if key in seen:
                 continue
             seen.add(key)
@@ -192,7 +192,7 @@ def _select_documents(
                 heapq.heapreplace(heap, entry)
 
     selected = [entry[2] for heap in heaps.values() for entry in heap]
-    selected.sort(key=lambda row: (row["created_utc"], row["source"], row["thing_id"]))
+    selected.sort(key=lambda row: (row["timestamp"], row["source"], row["item_id"]))
     return selected, counts
 
 
@@ -293,10 +293,10 @@ def build_user_documents(
 
     report = {
         "pipeline": "build_user_documents",
-        "source": str(input_dir),
-        "output": str(output),
-        "summary": str(summary_path),
-        "users_from": str(users_from) if users_from is not None else None,
+        "source": input_dir.as_posix(),
+        "output": output.as_posix(),
+        "summary": summary_path.as_posix(),
+        "users_from": users_from.as_posix() if users_from is not None else None,
         "n_jsonl_files": len(selected_files),
         "n_requested_users": len(users) if users is not None else None,
         "n_users_without_jsonl": len(missing_users),

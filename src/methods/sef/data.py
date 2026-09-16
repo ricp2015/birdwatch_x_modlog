@@ -14,7 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.utils.splits import discover_splits
-from src.utils.tabular import read_table
+from src.utils.tabular import read_table, unix_seconds
 
 from .runtime import (
     BATCH_SIZE,
@@ -40,6 +40,8 @@ def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
             df = df[df["vote"].isin([1, -1]) & df["label"].isin([1, -1])].copy()
             df["vote"] = df["vote"].astype(int)
             df["label"] = df["label"].astype(int)
+            if "timestamp" in df:
+                df["timestamp"] = unix_seconds(df["timestamp"])
             df = df.dropna(subset=["item_id", "username", "vote", "label"])
             df = df.drop_duplicates(subset=["username", "item_id"])
             log.info(
@@ -65,6 +67,8 @@ def load_votes(input_csv: Optional[Path] = None) -> pd.DataFrame:
     df = df.dropna(subset=["item_id", "username", "vote", "label"])
     df["vote"] = df["vote"].astype(int)
     df["label"] = df["label"].astype(int)
+    if "timestamp" in df:
+        df["timestamp"] = unix_seconds(df["timestamp"])
     log.info(
         "Votes: %d rows, %d posts, %d users",
         len(df),
@@ -80,6 +84,8 @@ def _load_split_votes(path: Path) -> pd.DataFrame:
     df = df.dropna(subset=["item_id", "username", "vote", "label"])
     df["vote"] = df["vote"].astype(int)
     df["label"] = df["label"].astype(int)
+    if "timestamp" in df:
+        df["timestamp"] = unix_seconds(df["timestamp"])
     return df
 
 
@@ -89,6 +95,10 @@ def load_post_texts(path: Path | None = None) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Post texts not found at {path}.")
     df = read_table(path)
+    if "timestamp" not in df and "created_utc" in df:
+        df = df.rename(columns={"created_utc": "timestamp"})
+    if "item_id" not in df and "thing_id" in df:
+        df = df.rename(columns={"thing_id": "item_id"})
     missing = {"item_id", "text"} - set(df.columns)
     if missing:
         raise ValueError(f"{path} is missing SEF post-text columns: {sorted(missing)}")
@@ -103,21 +113,25 @@ def load_user_documents(path: Path | None = None) -> pd.DataFrame:
     path = path or FETCH_DIR / "user_documents.parquet"
     if not path.exists():
         log.warning("User documents not found; Signal C will use the neutral value 0.5.")
-        return pd.DataFrame(columns=["username", "created_utc", "text"])
+        return pd.DataFrame(columns=["username", "timestamp", "text"])
     df = read_table(path)
+    if "timestamp" not in df and "created_utc" in df:
+        df = df.rename(columns={"created_utc": "timestamp"})
+    if "item_id" not in df and "thing_id" in df:
+        df = df.rename(columns={"thing_id": "item_id"})
     missing = {"username", "text"} - set(df.columns)
     if missing:
         raise ValueError(f"{path} is missing SEF user-document columns: {sorted(missing)}")
     df = df[df["text"].notna()].copy()
-    if "created_utc" not in df:
+    if "timestamp" not in df:
         raise ValueError(
-            f"{path} has no created_utc column; causal SEF user profiles require timestamps"
+            f"{path} has no timestamp column; causal SEF user profiles require timestamps"
         )
-    df["created_utc"] = pd.to_numeric(df["created_utc"], errors="coerce")
-    missing_time = int(df["created_utc"].isna().sum())
+    df["timestamp"] = unix_seconds(df["timestamp"])
+    missing_time = int(df["timestamp"].isna().sum())
     if missing_time:
-        log.warning("Dropping %d user documents without a valid created_utc", missing_time)
-        df = df[df["created_utc"].notna()].copy()
+        log.warning("Dropping %d user documents without a valid timestamp", missing_time)
+        df = df[df["timestamp"].notna()].copy()
     log.info("User documents: %d documents, %d users", len(df), df["username"].nunique())
     return df
 
@@ -357,7 +371,7 @@ def _temporal_document_fingerprint(
     model_name: str,
     chunk_size: int,
 ) -> str:
-    document_columns = ["username", "created_utc", "text"]
+    document_columns = ["username", "timestamp", "text"]
     document_hash = pd.util.hash_pandas_object(documents[document_columns], index=False).to_numpy()
     digest = hashlib.sha256()
     digest.update(b"temporal-sef-documents-v1")
@@ -386,20 +400,7 @@ def _profile_queries(votes: pd.DataFrame) -> pd.DataFrame:
     if "item_id" in votes:
         source_columns.insert(1, "item_id")
     work = votes[source_columns].copy()
-    timestamp_values = work["timestamp"]
-    if pd.api.types.is_datetime64_any_dtype(timestamp_values.dtype):
-        parsed = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
-        numeric = parsed.map(lambda value: value.timestamp() if pd.notna(value) else np.nan)
-    else:
-        numeric = pd.to_numeric(timestamp_values, errors="coerce")
-        finite = numeric.dropna().abs()
-        if not finite.empty and float(finite.median()) > 100_000_000_000:
-            # Pandas may expose datetime64 values as integer nanoseconds.
-            numeric = numeric / 1_000_000_000.0
-        if numeric.isna().any():
-            parsed = pd.to_datetime(timestamp_values, utc=True, errors="coerce")
-            numeric = parsed.map(lambda value: value.timestamp() if pd.notna(value) else np.nan)
-    work["timestamp"] = numeric
+    work["timestamp"] = unix_seconds(work["timestamp"])
     if work["timestamp"].isna().any():
         raise ValueError("Temporal profile requests contain invalid case timestamps")
     # Match the canonical chronological protocol: an item's case time is its
@@ -472,18 +473,23 @@ def build_temporal_user_profiles(
     chunk_size: int = 1000,
 ) -> TemporalUserProfiles:
     """Build exact pre-case profiles only for user/cutoff pairs used by SEF."""
-    required = {"username", "created_utc", "text"}
+    user_docs = user_docs.copy()
+    if "timestamp" not in user_docs and "created_utc" in user_docs:
+        user_docs = user_docs.rename(columns={"created_utc": "timestamp"})
+    if "item_id" not in user_docs and "thing_id" in user_docs:
+        user_docs = user_docs.rename(columns={"thing_id": "item_id"})
+    required = {"username", "timestamp", "text"}
     missing = required - set(user_docs.columns)
     if missing:
         raise ValueError(f"Temporal user documents are missing columns: {sorted(missing)}")
 
     documents = user_docs.dropna(subset=list(required)).copy()
-    documents["created_utc"] = pd.to_numeric(documents["created_utc"], errors="coerce")
-    documents = documents.dropna(subset=["created_utc"])
-    dedupe = ["username", "thing_id"] if "thing_id" in documents else ["username", "text"]
+    documents["timestamp"] = unix_seconds(documents["timestamp"])
+    documents = documents.dropna(subset=["timestamp"])
+    dedupe = ["username", "item_id"] if "item_id" in documents else ["username", "text"]
     documents = (
         documents.drop_duplicates(dedupe)
-        .sort_values(["username", "created_utc"], kind="stable")
+        .sort_values(["username", "timestamp"], kind="stable")
         .reset_index(drop=True)
     )
     queries = _profile_queries(profile_requests)
@@ -587,7 +593,7 @@ def build_temporal_user_profiles(
             chunk_dir, document_start, document_end, chunk_size
         )
         cumulative = np.cumsum(vectors, axis=0)
-        document_times = documents.iloc[document_start:document_end]["created_utc"].to_numpy(
+        document_times = documents.iloc[document_start:document_end]["timestamp"].to_numpy(
             dtype=np.float64
         )
         user_cutoffs = cutoffs[query_start:query_end]
@@ -617,7 +623,7 @@ def build_temporal_user_profiles(
                 "n_profile_queries": len(queries),
                 "n_users": len(user_offsets),
                 "n_profiles_with_history": int((counts > 0).sum()),
-                "timestamp_rule": "document.created_utc < max_case_vote_timestamp",
+                "timestamp_rule": "document.timestamp < max_case_vote_timestamp",
             },
             indent=2,
         ),

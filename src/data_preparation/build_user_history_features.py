@@ -21,7 +21,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.utils.tabular import read_table
+from src.utils.tabular import read_table, unix_seconds
 
 try:
     from tqdm import tqdm
@@ -107,10 +107,10 @@ REPLY_SCHEMA = pa.schema(
     [
         ("from_user", pa.string()),
         ("to_user", pa.string()),
-        ("thing_id", pa.string()),
+        ("item_id", pa.string()),
         ("parent_id", pa.string()),
         ("subreddit", pa.string()),
-        ("created_utc", pa.float64()),
+        ("timestamp", pa.float64()),
     ]
 )
 
@@ -168,7 +168,7 @@ def peek_schema(input_dir: Path, n_files: int = 2, n_lines: int = 3) -> None:
 def validate_author_index(output_db: Path, input_dir: Optional[Path] = None) -> dict:
     """Validate SQLite integrity, table schema, content, and completion checkpoint."""
     report = {
-        "path": str(output_db),
+        "path": output_db.as_posix(),
         "exists": output_db.is_file(),
         "size_bytes": output_db.stat().st_size if output_db.is_file() else 0,
         "integrity": None,
@@ -356,12 +356,12 @@ def load_and_sort_user_contributions(path: Path) -> List[dict]:
                     "type": contribution_type,
                     "fullname": fullname,
                     "subreddit": record.get(FIELD_SUBREDDIT) or "__unknown__",
-                    "created_utc": timestamp,
+                    "timestamp": timestamp,
                     "score": score,
                     "parent_id": record.get(FIELD_PARENT),
                 }
             )
-    rows.sort(key=lambda row: row["created_utc"])
+    rows.sort(key=lambda row: row["timestamp"])
     return rows
 
 
@@ -459,7 +459,7 @@ def process_one_user(
             )
 
     for contribution in contributions:
-        month = year_month(contribution["created_utc"])
+        month = year_month(contribution["timestamp"])
         if current_month is None:
             current_month = month
         elif month != current_month:
@@ -491,10 +491,10 @@ def process_one_user(
                     {
                         "from_user": username,
                         "to_user": other_user,
-                        "thing_id": contribution["fullname"],
+                        "item_id": contribution["fullname"],
                         "parent_id": parent_id,
                         "subreddit": subreddit,
-                        "created_utc": contribution["created_utc"],
+                        "timestamp": contribution["timestamp"],
                     }
                 )
     flush_month(current_month)
@@ -611,8 +611,8 @@ def build_snapshots(
     report = {
         "stage": "snapshots",
         "action": "rebuilt" if rebuild else ("reused" if not todo else "resumed_or_built"),
-        "input_dir": str(input_dir),
-        "author_index": str(author_index_path),
+        "input_dir": input_dir.as_posix(),
+        "author_index": author_index_path.as_posix(),
         "n_input_users": len(all_files),
         "n_completed_users": len(completed),
         "outputs": _snapshot_output_report(feature_root),
@@ -627,7 +627,7 @@ def audit_timestamp_semantics(
     override: str = "auto",
 ) -> dict:
     """Classify the vote timestamp field and persist the evidence."""
-    timestamp = pd.to_numeric(votes["timestamp"], errors="coerce")
+    timestamp = unix_seconds(votes["timestamp"])
     per_item_counts = (
         votes.assign(_timestamp=timestamp).groupby("item_id")["_timestamp"].nunique(dropna=True)
     )
@@ -638,19 +638,27 @@ def audit_timestamp_semantics(
         "n_rows_compared_to_post_creation": 0,
     }
     if post_texts_path.exists():
-        posts = read_table(post_texts_path, columns=["item_id", "created_utc"])
+        posts = read_table(post_texts_path)
+        if "timestamp" not in posts and "created_utc" in posts:
+            posts = posts.rename(columns={"created_utc": "timestamp"})
+        missing = {"item_id", "timestamp"} - set(posts.columns)
+        if missing:
+            raise ValueError(
+                f"{post_texts_path} is missing timestamp-audit columns: {sorted(missing)}"
+            )
+        posts = posts[["item_id", "timestamp"]]
         posts = posts.drop_duplicates("item_id", keep="last").copy()
         left = votes[["item_id"]].copy()
         left["item_id"] = left["item_id"].astype(str)
         left["_timestamp"] = timestamp
         posts["item_id"] = posts["item_id"].astype(str)
-        posts["created_utc"] = pd.to_numeric(posts["created_utc"], errors="coerce")
+        posts["timestamp"] = unix_seconds(posts["timestamp"])
         compared = left.merge(posts, on="item_id", how="inner", validate="many_to_one")
-        compared = compared.dropna(subset=["_timestamp", "created_utc"])
+        compared = compared.dropna(subset=["_timestamp", "timestamp"])
         report["n_rows_compared_to_post_creation"] = int(len(compared))
         if len(compared):
             report["post_creation_match_rate"] = float(
-                ((compared["_timestamp"] - compared["created_utc"]).abs() <= 1.0).mean()
+                ((compared["_timestamp"] - compared["timestamp"]).abs() <= 1.0).mean()
             )
     if override != "auto":
         semantics = override
@@ -670,7 +678,20 @@ def audit_timestamp_semantics(
 def _read_parquet_parts(path: Path, columns: Optional[list[str]] = None) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(path)
-    return pd.read_parquet(path, columns=columns)
+    if columns is None:
+        return pd.read_parquet(path)
+    schema_path = next(path.glob("*.parquet"), None) if path.is_dir() else path
+    if schema_path is None:
+        raise ValueError(f"No Parquet parts found under {path}")
+    available = set(pq.ParquetFile(schema_path).schema_arrow.names)
+    aliases = {"timestamp": "created_utc", "item_id": "thing_id"}
+    projected = [
+        column if column in available else aliases.get(column, column) for column in columns
+    ]
+    frame = pd.read_parquet(path, columns=projected)
+    return frame.rename(
+        columns={alias: canonical for canonical, alias in aliases.items() if alias in frame}
+    )
 
 
 def _user_key(values: pd.Series) -> pd.Series:
@@ -706,8 +727,8 @@ def _asof_join(
     feature_columns = list(feature_columns)
     left = left.copy()
     right = right.copy()
-    left["timestamp"] = pd.to_numeric(left["timestamp"], errors="coerce").astype("float64")
-    right[right_time] = pd.to_numeric(right[right_time], errors="coerce").astype("float64")
+    left["timestamp"] = unix_seconds(left["timestamp"])
+    right[right_time] = unix_seconds(right[right_time])
     for column in by:
         left[column] = left[column].astype(object)
         right[column] = right[column].astype(object)
@@ -731,14 +752,14 @@ def _build_interaction_events(
     by_subreddit: bool = False,
 ) -> pd.DataFrame:
     """Create cumulative undirected interaction states from reply events."""
-    edges = reply_graph.dropna(subset=["from_user", "to_user", "created_utc"]).copy()
-    edges["created_utc"] = pd.to_numeric(edges["created_utc"], errors="coerce")
-    edges = edges.dropna(subset=["created_utc"])
-    base_columns = ["from_user", "to_user", "created_utc"]
+    edges = reply_graph.dropna(subset=["from_user", "to_user", "timestamp"]).copy()
+    edges["timestamp"] = unix_seconds(edges["timestamp"])
+    edges = edges.dropna(subset=["timestamp"])
+    base_columns = ["from_user", "to_user", "timestamp"]
     if by_subreddit:
         base_columns.append("subreddit")
     outgoing = edges[base_columns].rename(columns={"from_user": "_user_key", "to_user": "partner"})
-    incoming_columns = ["to_user", "from_user", "created_utc"]
+    incoming_columns = ["to_user", "from_user", "timestamp"]
     if by_subreddit:
         incoming_columns.append("subreddit")
     incoming = edges[incoming_columns].rename(
@@ -751,7 +772,7 @@ def _build_interaction_events(
         events["_subreddit_key"] = _subreddit_key(events["subreddit"])
     events = events[events["_user_key"] != events["partner"]]
     group_columns = ["_user_key", "_subreddit_key"] if by_subreddit else ["_user_key"]
-    events = events.sort_values(group_columns + ["created_utc"])
+    events = events.sort_values(group_columns + ["timestamp"])
 
     rows: list[dict] = []
     group_key = group_columns if by_subreddit else "_user_key"
@@ -763,7 +784,7 @@ def _build_interaction_events(
             username, subreddit = key, None
         partners: set[str] = set()
         total = 0
-        for timestamp, at_time in group.groupby("created_utc", sort=True):
+        for timestamp, at_time in group.groupby("timestamp", sort=True):
             total += len(at_time)
             partners.update(at_time["partner"].dropna().tolist())
             row = {
@@ -804,7 +825,7 @@ def build_features(
             votes, post_texts_path, override=timestamp_semantics
         )
         work = votes[["username", "item_id", "timestamp", "community"]].copy()
-        work["timestamp"] = pd.to_numeric(work["timestamp"], errors="coerce")
+        work["timestamp"] = unix_seconds(work["timestamp"])
         if work["timestamp"].isna().any():
             raise ValueError(
                 f"Votes contain {work['timestamp'].isna().sum():,} invalid timestamps"
@@ -873,7 +894,7 @@ def build_features(
         progress.set_postfix_str("reply graph")
         reply_graph = _read_parquet_parts(
             feature_root / "reply_graph",
-            columns=["from_user", "to_user", "subreddit", "created_utc"],
+            columns=["from_user", "to_user", "subreddit", "timestamp"],
         )
         interaction_events = _build_interaction_events(reply_graph)
         if interaction_events.empty:
@@ -910,8 +931,8 @@ def build_features(
         if metadata_path.exists():
             metadata = read_table(metadata_path)
             metadata["_user_key"] = _user_key(metadata["username"])
-            metadata["account_created_utc"] = pd.to_numeric(
-                metadata["account_created_utc"], errors="coerce"
+            metadata["account_created_utc"] = unix_seconds(
+                metadata["account_created_utc"]
             )
             metadata = metadata.drop_duplicates("_user_key", keep="last")
             work = work.merge(
@@ -1033,11 +1054,11 @@ def join_features(
     )
     manifest = {
         "stage": "join",
-        "votes": str(votes_path),
-        "feature_root": str(feature_root),
-        "metadata": str(metadata_path),
-        "post_texts": str(post_texts_path),
-        "output": str(output_path),
+        "votes": votes_path.as_posix(),
+        "feature_root": feature_root.as_posix(),
+        "metadata": metadata_path.as_posix(),
+        "post_texts": post_texts_path.as_posix(),
+        "output": output_path.as_posix(),
         "output_size_bytes": output_path.stat().st_size,
         "qa": qa,
     }

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
+import shlex
 import subprocess
 import sys
 from typing import Annotated, Sequence
@@ -16,6 +19,8 @@ import typer
 from src.reproducibility import (
     ReproductionConfig,
     load_reproduction_config,
+    nested_exclusions,
+    resolve_method_selection,
     validate_reproduction_config,
 )
 from src.utils.splits import discover_splits
@@ -46,6 +51,14 @@ METHOD_MODULES = {
     "ma-qsmf": "src.methods.ma_qsmf",
     "team-formation": "src.methods.team_formation_v2.run_all",
 }
+TEAM_FORMATION_METHODS = (
+    "bandit",
+    "graph_propagation",
+    "virtual_ensembles",
+    "boc_stacking",
+    "role_nsga2",
+)
+NESTED_METHODS = {"team-formation": TEAM_FORMATION_METHODS}
 
 app = typer.Typer(
     add_completion=False,
@@ -67,7 +80,10 @@ app.add_typer(run_app, name="run")
 
 
 def _python_module(module: str, *arguments: object) -> list[str]:
-    return [sys.executable, "-B", "-m", module, *(str(value) for value in arguments)]
+    serialized = [
+        value.as_posix() if isinstance(value, Path) else str(value) for value in arguments
+    ]
+    return [Path(sys.executable).as_posix(), "-B", "-m", module, *serialized]
 
 
 def _sha256(path: Path) -> str | None:
@@ -84,7 +100,7 @@ def _relative(path: Path) -> str:
     try:
         return path.resolve().relative_to(PROJECT_ROOT).as_posix()
     except ValueError:
-        return str(path.resolve())
+        return path.resolve().as_posix()
 
 
 def _git_state() -> dict[str, object]:
@@ -134,7 +150,7 @@ def _source_tree_sha256() -> str:
 
 
 def _display_command(command: Sequence[str]) -> str:
-    return subprocess.list2cmdline(list(command))
+    return subprocess.list2cmdline(list(command)) if os.name == "nt" else shlex.join(command)
 
 
 def _write_run_manifest(
@@ -150,7 +166,7 @@ def _write_run_manifest(
         "schema_version": 1,
         "category": category,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "project_root": str(PROJECT_ROOT),
+        "project_root": PROJECT_ROOT.as_posix(),
         "python": sys.version,
         "platform": platform.platform(),
         "git": _git_state(),
@@ -223,7 +239,7 @@ def _scoped_root(root: Path, scope: str) -> Path:
 
 def _load_config(path: Path) -> ReproductionConfig:
     try:
-        return load_reproduction_config(path, PROJECT_ROOT, METHOD_MODULES)
+        return load_reproduction_config(path, PROJECT_ROOT, METHOD_MODULES, NESTED_METHODS)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise typer.BadParameter(str(exc), param_hint="--config") from exc
 
@@ -244,6 +260,7 @@ def _direct_config(
     force: bool,
     graphs: bool,
     device: str,
+    excluded_methods: Sequence[str] = (),
 ) -> ReproductionConfig:
     """Build the conventional layout used by the simple ``--input`` interface."""
     if not dataset or any(
@@ -254,18 +271,15 @@ def _direct_config(
             "dataset must contain only letters, digits, '.', '_' or '-'",
             param_hint="--dataset",
         )
-    unknown = sorted(set(methods).difference({"all", *METHOD_MODULES}))
-    if unknown:
-        raise typer.BadParameter(f"unknown method(s): {unknown}", param_hint="--method")
-    if "all" in methods and len(methods) > 1:
-        raise typer.BadParameter(
-            "'all' cannot be combined with other methods", param_hint="--method"
+    try:
+        selected, normalized_exclusions = resolve_method_selection(
+            methods,
+            excluded_methods,
+            valid_methods=tuple(METHOD_MODULES),
+            nested_methods=NESTED_METHODS,
         )
-    selected = (
-        tuple(METHOD_MODULES)
-        if list(methods) == ["all"]
-        else tuple(name for name in METHOD_MODULES if name in set(methods))
-    )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--exclude-method") from exc
     interim = PROJECT_ROOT / "data" / "interim" / dataset
     processed = PROJECT_ROOT / "data" / "processed" / dataset
     cache = PROJECT_ROOT / "cache" / dataset
@@ -309,6 +323,7 @@ def _direct_config(
         causal_features_are_precomputed=False,
         nvse_scores_are_precomputed=False,
         methods=selected,
+        excluded_methods=normalized_exclusions,
         prepare_dataset=True,
         prepare_user_features=True,
         prepare_nvse_scores=True,
@@ -337,6 +352,7 @@ def _preflight(config: ReproductionConfig) -> None:
     typer.echo(
         f"Preflight OK: dataset={config.dataset} | methods={','.join(config.methods)} | "
         f"splits={_relative(config.splits)}"
+        + (f" | excluded={','.join(config.excluded_methods)}" if config.excluded_methods else "")
     )
 
 
@@ -379,9 +395,9 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
             config.seed,
         )
         if config.external_scores is not None:
-            command.extend(("--external-scores", str(config.external_scores)))
+            command.extend(("--external-scores", config.external_scores.as_posix()))
         if config.post_texts is not None:
-            command.extend(("--post-texts", str(config.post_texts)))
+            command.extend(("--post-texts", config.post_texts.as_posix()))
         commands.append(("prepare-dataset", command))
 
     needs_user_documents = "sef" in config.methods
@@ -539,6 +555,7 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
             config.embedding_model,
             config.reuse_sef_hyperparameters,
             config.skip_existing_team_methods,
+            config.excluded_methods,
         )
     )
 
@@ -560,6 +577,7 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
                 config.embedding_model,
                 config.reuse_sef_hyperparameters,
                 config.skip_existing_team_methods,
+                config.excluded_methods,
             )
         )
         commands.append(
@@ -620,6 +638,14 @@ def reproduce(
             "--method",
             "-m",
             help="Method family to run. Repeat for multiple methods; omitted means all.",
+        ),
+    ] = None,
+    exclude_method: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude-method",
+            "-x",
+            help="Method name to omit, such as bandit or sef; repeat for several.",
         ),
     ] = None,
     post_texts: Annotated[
@@ -687,11 +713,27 @@ def reproduce(
         raise typer.BadParameter("use either --input or --config, not both")
     if config_path is not None:
         config = _load_config(config_path)
+        if exclude_method:
+            try:
+                selected, normalized_exclusions = resolve_method_selection(
+                    config.methods,
+                    [*config.excluded_methods, *exclude_method],
+                    valid_methods=tuple(METHOD_MODULES),
+                    nested_methods=NESTED_METHODS,
+                )
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc), param_hint="--exclude-method") from exc
+            config = replace(
+                config,
+                methods=selected,
+                excluded_methods=normalized_exclusions,
+            )
     elif input_path is not None:
         config = _direct_config(
             input_path,
             dataset,
             method or ["all"],
+            excluded_methods=exclude_method or [],
             post_texts=post_texts,
             user_documents=user_documents,
             user_contributions=user_contributions,
@@ -910,9 +952,9 @@ def prepare_dataset(
         seed,
     )
     if external_scores is not None:
-        command.extend(("--external-scores", str(external_scores)))
+        command.extend(("--external-scores", external_scores.as_posix()))
     if post_texts is not None:
-        command.extend(("--post-texts", str(post_texts)))
+        command.extend(("--post-texts", post_texts.as_posix()))
     _execute(
         [("dataset-and-splits", command)],
         category="prepare",
@@ -1081,6 +1123,7 @@ def _method_commands(
     embedding_model: str,
     reuse_sef_hyperparameters: bool,
     skip_existing_team_methods: bool,
+    excluded_methods: Sequence[str] = (),
 ) -> list[tuple[str, list[str]]]:
     unknown = sorted(set(selected).difference(METHOD_MODULES))
     if unknown:
@@ -1141,6 +1184,10 @@ def _method_commands(
             ]
             if skip_existing_team_methods:
                 args.append("--skip-existing")
+            for excluded in nested_exclusions(
+                "team-formation", excluded_methods, NESTED_METHODS
+            ):
+                args.extend(("--exclude-method", excluded))
         elif method == "baselines":
             args = [
                 "--votes-dir",
@@ -1165,6 +1212,14 @@ def run_methods(
             "--method",
             "-m",
             help="Repeat for a subset; omit to run every canonical method family.",
+        ),
+    ] = None,
+    exclude_method: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude-method",
+            "-x",
+            help="Method name to omit, such as bandit or sef; repeat for several.",
         ),
     ] = None,
     splits_root: Annotated[Path, typer.Option()] = DEFAULT_SPLITS,
@@ -1200,14 +1255,15 @@ def run_methods(
 ) -> None:
     """Fit/evaluate selected methods on every discovered canonical split."""
     requested = method or ["all"]
-    unknown = sorted(set(requested).difference({"all", *METHOD_MODULES}))
-    if unknown:
-        raise typer.BadParameter(f"unknown method(s): {unknown}", param_hint="--method")
-    if "all" in requested and len(requested) > 1:
-        raise typer.BadParameter(
-            "'all' cannot be combined with individual methods", param_hint="--method"
+    try:
+        selected, normalized_exclusions = resolve_method_selection(
+            requested,
+            exclude_method or [],
+            valid_methods=tuple(METHOD_MODULES),
+            nested_methods=NESTED_METHODS,
         )
-    selected = list(METHOD_MODULES) if requested == ["all"] else list(dict.fromkeys(requested))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--exclude-method") from exc
     evaluation_splits_root = _scoped_root(splits_root, KFOLD_DIRNAME) if k_fold else splits_root
     evaluation_results_root = _scoped_root(results_root, KFOLD_DIRNAME) if k_fold else results_root
     if k_fold and not (evaluation_splits_root / "manifest.json").exists() and not dry_run:
@@ -1231,6 +1287,7 @@ def run_methods(
         embedding_model,
         reuse_sef_hyperparameters,
         skip_existing_team_methods,
+        normalized_exclusions,
     )
     if k_fold:
         commands.append(
