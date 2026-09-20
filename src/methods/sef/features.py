@@ -417,14 +417,29 @@ def extract_post_features(
         "n_posts": 0.0,
     }
 
+    # Pre-group once instead of re-filtering the whole table for every item below
+    # (that per-item filter was previously O(n_items x len(vote_df))).
+    raw_votes_by_item = {
+        item_id: group["vote"].to_numpy()
+        for item_id, group in raw_votes.groupby("item_id", sort=False)
+    }
+    weights_by_item = (
+        {item_id: group for item_id, group in weights_df.groupby("item_id", sort=False)}
+        if not weights_df.empty
+        else {}
+    )
+    empty_rv = np.empty(0, dtype=float)
+    empty_pw = pd.DataFrame()
+    # Weighted votes at every T computed once for the whole batch (each item's top-T
+    # experts only depend on that item's own rows, so batching changes nothing per item).
+    weighted_votes_by_t = {
+        t: _compute_weighted_votes(item_ids, vote_df, weights_df, t) for t in top_t_list
+    }
+
     rows = []
     for item_id in item_ids:
-        rv = raw_votes[raw_votes["item_id"] == item_id]["vote"].values
-        pw = (
-            weights_df[weights_df["item_id"] == item_id]
-            if not weights_df.empty
-            else pd.DataFrame()
-        )
+        rv = raw_votes_by_item.get(item_id, empty_rv)
+        pw = weights_by_item.get(item_id, empty_pw)
         sub = post_sub.get(item_id, "__unknown__")
 
         feats: Dict[str, float] = {}
@@ -438,8 +453,7 @@ def extract_post_features(
 
         # weighted vote at multiple T
         for t in top_t_list:
-            wv = _compute_weighted_votes([item_id], vote_df, weights_df, t)
-            feats[f"wv_top{t}"] = wv.get(item_id, feats["raw_vote_mean"])
+            feats[f"wv_top{t}"] = weighted_votes_by_t[t].get(item_id, feats["raw_vote_mean"])
 
         min_t = min(top_t_list)
         feats["expert_crowd_divergence"] = feats[f"wv_top{min_t}"] - feats["raw_vote_mean"]

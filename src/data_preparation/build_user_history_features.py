@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 import json
 import math
+import multiprocessing as mp
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -501,6 +504,39 @@ def process_one_user(
     return global_rows, subreddit_rows, reply_rows
 
 
+_WORKER_AUTHOR_INDEX_CONNECTIONS: Dict[str, sqlite3.Connection] = {}
+
+
+def _worker_author_index_connection(author_index_path: Path) -> sqlite3.Connection:
+    """Return one read-only connection per (worker process, index), reused across users."""
+    key = author_index_path.as_posix()
+    connection = _WORKER_AUTHOR_INDEX_CONNECTIONS.get(key)
+    if connection is None:
+        connection = sqlite3.connect(f"file:{key}?mode=ro", uri=True)
+        _WORKER_AUTHOR_INDEX_CONNECTIONS[key] = connection
+    return connection
+
+
+def _replay_one_user_file(
+    path: Path, author_index_path: Path
+) -> Tuple[str, List[dict], List[dict], List[dict]]:
+    """Load, resolve parent authors, and replay one user's file (parallel worker entry point)."""
+    username = path.stem
+    contributions = load_and_sort_user_contributions(path)
+    parent_ids = {
+        row["parent_id"]
+        for row in contributions
+        if row["type"] == "comment" and row["parent_id"]
+    }
+    lookup = (
+        batch_lookup_authors(parent_ids, _worker_author_index_connection(author_index_path))
+        if parent_ids
+        else {}
+    )
+    global_rows, subreddit_rows, reply_rows = process_one_user(username, contributions, lookup)
+    return username, global_rows, subreddit_rows, reply_rows
+
+
 def _snapshot_output_report(feature_root: Path) -> dict:
     outputs = {}
     for name in ("user_global_snapshots", "user_subreddit_snapshots", "reply_graph"):
@@ -569,9 +605,10 @@ def build_snapshots(
         subreddit_dir, SUBREDDIT_SCHEMA, _next_part_index(subreddit_dir)
     )
     reply_writer = PartitionedParquetWriter(reply_dir, REPLY_SCHEMA, _next_part_index(reply_dir))
-    author_index = sqlite3.connect(f"file:{author_index_path.as_posix()}?mode=ro", uri=True)
     pending_users: List[str] = []
+    n_workers = min(os.cpu_count() or 1, len(todo))
     with progress_path.open("a", encoding="utf-8") as progress_handle:
+        completed_count = 0
 
         def flush_part() -> None:
             global_writer.flush()
@@ -582,26 +619,39 @@ def build_snapshots(
                 progress_handle.flush()
                 pending_users.clear()
 
-        for index, path in enumerate(tqdm(todo, desc="Replaying contributions")):
-            username = path.stem
-            contributions = load_and_sort_user_contributions(path)
-            parent_ids = {
-                row["parent_id"]
-                for row in contributions
-                if row["type"] == "comment" and row["parent_id"]
-            }
-            lookup = batch_lookup_authors(parent_ids, author_index) if parent_ids else {}
-            global_rows, subreddit_rows, reply_rows = process_one_user(
-                username, contributions, lookup
-            )
+        def consume(
+            username: str,
+            global_rows: List[dict],
+            subreddit_rows: List[dict],
+            reply_rows: List[dict],
+        ) -> None:
+            nonlocal completed_count
             global_writer.add_rows(global_rows)
             subreddit_writer.add_rows(subreddit_rows)
             reply_writer.add_rows(reply_rows)
             pending_users.append(username)
-            if (index + 1) % USERS_PER_PART == 0:
+            completed_count += 1
+            if completed_count % USERS_PER_PART == 0:
                 flush_part()
+
+        # Each user's contribution file is replayed independently (only reading a
+        # shared read-only author index), so this parallelizes cleanly across
+        # processes; results are consumed as they complete, in any order, since
+        # snapshot rows carry no cross-user ordering dependency.
+        if n_workers > 1:
+            ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
+                futures = [
+                    pool.submit(_replay_one_user_file, path, author_index_path) for path in todo
+                ]
+                for future in tqdm(
+                    as_completed(futures), total=len(futures), desc="Replaying contributions"
+                ):
+                    consume(*future.result())
+        else:
+            for path in tqdm(todo, desc="Replaying contributions"):
+                consume(*_replay_one_user_file(path, author_index_path))
         flush_part()
-    author_index.close()
 
     completed = set(progress_path.read_text(encoding="utf-8").splitlines())
     if len(completed) != len(all_files):

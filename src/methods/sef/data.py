@@ -144,24 +144,55 @@ def _get_model() -> str:
     return EMBEDDING_MODEL
 
 
+_ENCODER_CACHE: dict[str, Any] = {}
+
+
+def _get_encoder(model_name: str) -> Any:
+    """Return one resident SentenceTransformer per (model, device), loaded at most once.
+
+    Every embedding call previously constructed a fresh ``SentenceTransformer`` (a full
+    disk load + CUDA transfer of the underlying transformer), which happens thousands of
+    times across the chunked encoding loops below at dataset scale.
+    """
+    import torch
+    from sentence_transformers import SentenceTransformer
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    key = f"{model_name}::{device}"
+    encoder = _ENCODER_CACHE.get(key)
+    if encoder is None:
+        log.info("Loading sentence-transformer encoder: %s (device=%s)", model_name, device)
+        encoder = SentenceTransformer(model_name, device=device)
+        _ENCODER_CACHE[key] = encoder
+    return encoder
+
+
 def _encode_texts(
     texts: List[str],
     model_name: str,
     normalize: bool = True,
     batch_size: int = BATCH_SIZE,
 ) -> np.ndarray:
-    """Encode text batches without relying on an external utility script."""
-    from sentence_transformers import SentenceTransformer
+    """Encode text batches with one resident encoder, reused across every call."""
+    import torch
 
+    encoder = _get_encoder(model_name)
+    use_amp = getattr(encoder, "device", None) is not None and str(encoder.device).startswith(
+        "cuda"
+    )
     log.info("Encoding %d texts", len(texts))
-    encoder = SentenceTransformer(model_name)
-    return encoder.encode(
-        texts,
+    encode_kwargs = dict(
         batch_size=batch_size,
-        show_progress_bar=True,
+        show_progress_bar=len(texts) > 2000,
         convert_to_numpy=True,
         normalize_embeddings=normalize,
-    ).astype(np.float32)
+    )
+    if use_amp:
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            vectors = encoder.encode(texts, **encode_kwargs)
+    else:
+        vectors = encoder.encode(texts, **encode_kwargs)
+    return vectors.astype(np.float32)
 
 
 def _post_embedding_fingerprint(post_texts: pd.DataFrame, model_name: str) -> str:

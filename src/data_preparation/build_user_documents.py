@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from datetime import UTC, datetime, timedelta
 import hashlib
 import heapq
 from html import unescape
+import itertools
 import json
 import logging
 import math
+import multiprocessing as mp
+import os
 from pathlib import Path
 from typing import Any
 
@@ -258,13 +262,39 @@ def build_user_documents(
     totals = {"lines": 0, "invalid": 0, "usable_posts": 0, "usable_comments": 0}
     selected_total = 0
 
-    try:
-        with pq.ParquetWriter(temporary, SCHEMA, compression="zstd") as writer:
-            for path in tqdm(selected_files, desc="Local user documents"):
-                username = users[path.stem.casefold()] if users is not None else path.stem
-                selected, counts = _select_documents(
+    usernames = [
+        users[path.stem.casefold()] if users is not None else path.stem for path in selected_files
+    ]
+    n_workers = min(os.cpu_count() or 1, len(selected_files))
+
+    def _record_iter():
+        # Per-user document selection reads one independent JSONL file each, so it
+        # parallelizes cleanly across processes; the writer stays single-threaded.
+        if n_workers > 1:
+            chunksize = max(1, len(selected_files) // (n_workers * 8))
+            ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
+                results = pool.map(
+                    _select_documents,
+                    selected_files,
+                    usernames,
+                    itertools.repeat(limits),
+                    itertools.repeat(after_timestamp),
+                    itertools.repeat(before_timestamp),
+                    chunksize=chunksize,
+                )
+                yield from zip(usernames, results)
+        else:
+            for path, username in zip(selected_files, usernames):
+                yield username, _select_documents(
                     path, username, limits, after_timestamp, before_timestamp
                 )
+
+    try:
+        with pq.ParquetWriter(temporary, SCHEMA, compression="zstd") as writer:
+            for username, (selected, counts) in tqdm(
+                _record_iter(), total=len(selected_files), desc="Local user documents"
+            ):
                 for key in totals:
                     totals[key] += counts[key]
                 selected_posts = sum(row["source"] == "post" for row in selected)

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
+import math
+import multiprocessing as mp
+import os
 from pathlib import Path
 import sys
 from typing import Dict, List
@@ -12,7 +16,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from tqdm import tqdm
 from transformers import BertModel, BertTokenizer
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -127,16 +130,6 @@ def unicode_to_ascii(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 
-def encode_text(text: str, tokenizer: BertTokenizer) -> List[int]:
-    """Tokenize and encode a batch of texts."""
-    cleaned = unicode_to_ascii(text.strip())
-    if not cleaned:
-        return []
-    return tokenizer.encode(
-        cleaned, add_special_tokens=True, truncation=True, max_length=MAX_LENGTH
-    )
-
-
 def resolve_bert_source(model_id: str = BERT_TYPE) -> Path | str:
     """Prefer the exact locally cached Hugging Face snapshot when available."""
     try:
@@ -163,45 +156,189 @@ def load_model(
     return Predictor(enc, clf).to(device)
 
 
-@torch.no_grad()
-def score_texts(
-    texts: List[str],
-    predictor: Predictor,
+def _clean_text_chunk(chunk: List[str]) -> List[str]:
+    """Strip and NFD-normalize one chunk of texts (top-level for multiprocessing)."""
+    return [unicode_to_ascii(str(t).strip()) if t else "" for t in chunk]
+
+
+def _clean_texts(texts: List[str]) -> List[str]:
+    """NFD-normalize every text, spreading the work across CPU cores at scale."""
+    n = len(texts)
+    if n < 50_000:
+        return _clean_text_chunk(texts)
+    workers = min(32, os.cpu_count() or 1)
+    chunk_size = max(1, math.ceil(n / (workers * 4)))
+    chunks = [texts[i : i + chunk_size] for i in range(0, n, chunk_size)]
+    try:
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            cleaned_chunks = list(pool.map(_clean_text_chunk, chunks))
+        return [text for chunk in cleaned_chunks for text in chunk]
+    except Exception as exc:
+        print(f"Parallel text cleaning failed ({exc}); falling back to sequential", flush=True)
+        return _clean_text_chunk(texts)
+
+
+def _tokenize_all(
+    cleaned_texts: List[str],
     tokenizer: BertTokenizer,
+    max_length: int,
+    tokenize_chunk: int = 8192,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Tokenize every text exactly once, shared across every category's model."""
+    n = len(cleaned_texts)
+    valid_mask = np.fromiter((bool(t) for t in cleaned_texts), dtype=bool, count=n)
+    lengths = np.zeros(n, dtype=np.int32)
+    encoded: List[List[int] | None] = [None] * n
+    valid_positions = np.nonzero(valid_mask)[0]
+    for start in range(0, len(valid_positions), tokenize_chunk):
+        pos_chunk = valid_positions[start : start + tokenize_chunk]
+        text_chunk = [cleaned_texts[i] for i in pos_chunk]
+        batch = tokenizer(
+            text_chunk, add_special_tokens=True, truncation=True, max_length=max_length
+        )
+        for pos, ids in zip(pos_chunk, batch["input_ids"]):
+            encoded[pos] = ids
+            lengths[pos] = len(ids)
+    max_len = int(lengths.max()) if len(valid_positions) else 1
+    token_ids = np.zeros((n, max(max_len, 1)), dtype=np.int32)
+    for pos in valid_positions:
+        ids = encoded[pos]
+        token_ids[pos, : len(ids)] = ids
+    return token_ids, lengths, valid_mask
+
+
+def _visible_devices(device: torch.device) -> List[torch.device]:
+    """Fan a bare 'cuda' device out across every visible GPU; respect an explicit index."""
+    if device.type != "cuda" or device.index is not None:
+        return [device]
+    if not torch.cuda.is_available():
+        return [device]
+    count = torch.cuda.device_count()
+    if count <= 1:
+        return [device]
+    return [torch.device(f"cuda:{i}") for i in range(count)]
+
+
+def _shard_categories(
+    categories: List[str], devices: List[torch.device]
+) -> Dict[torch.device, List[str]]:
+    """Round-robin distribute independent category models across devices."""
+    shards: Dict[torch.device, List[str]] = {d: [] for d in devices}
+    for i, cat in enumerate(categories):
+        shards[devices[i % len(devices)]].append(cat)
+    return shards
+
+
+_OOM_ERRORS: tuple[type[Exception], ...] = (
+    (torch.cuda.OutOfMemoryError,) if hasattr(torch.cuda, "OutOfMemoryError") else (RuntimeError,)
+)
+
+
+@torch.no_grad()
+def _forward_probs_with_oom_backoff(
+    predictor: Predictor,
+    inp: torch.Tensor,
+    d_lens_full: torch.Tensor,
+    lengths_full: torch.Tensor,
+    idx: np.ndarray,
     device: torch.device,
-    batch_size: int = 32,
+    use_amp: bool,
 ) -> np.ndarray:
-    """Predict violation probabilities for a batch of texts."""
-    probs = np.full(len(texts), np.nan)
-    valid_idx = [i for i, t in enumerate(texts) if t.strip()]
+    """Score one batch slice, halving it and retrying on a CUDA out-of-memory error."""
+    idx_t = torch.as_tensor(idx, dtype=torch.long, device=inp.device)
+    try:
+        if use_amp:
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                logits = predictor(inp[:, idx_t], d_lens_full[idx_t], lengths_full[idx_t])
+        else:
+            logits = predictor(inp[:, idx_t], d_lens_full[idx_t], lengths_full[idx_t])
+        return torch.softmax(logits.float(), dim=-1)[:, 1].cpu().numpy()
+    except _OOM_ERRORS as exc:
+        if _OOM_ERRORS == (RuntimeError,) and "out of memory" not in str(exc).lower():
+            raise
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        if len(idx) == 1:
+            raise
+        mid = len(idx) // 2
+        left = _forward_probs_with_oom_backoff(
+            predictor, inp, d_lens_full, lengths_full, idx[:mid], device, use_amp
+        )
+        right = _forward_probs_with_oom_backoff(
+            predictor, inp, d_lens_full, lengths_full, idx[mid:], device, use_amp
+        )
+        return np.concatenate([left, right])
 
-    n_batches = (len(valid_idx) + batch_size - 1) // batch_size
-    for batch_num, start in enumerate(range(0, len(valid_idx), batch_size)):
-        if batch_num == 0:
-            print(f"Inference: {len(valid_idx):,} texts | {n_batches} batches", flush=True)
-        chunk = valid_idx[start : start + batch_size]
-        batch_texts = [texts[i] for i in chunk]
-        encoded = [encode_text(t, tokenizer) for t in batch_texts]
 
-        nonempty = [(li, e) for li, e in enumerate(encoded) if e]
-        if not nonempty:
-            continue
-        local_idx, enc_clean = zip(*nonempty)
+def _length_sorted_batches(
+    lengths: np.ndarray, valid_mask: np.ndarray, batch_size: int
+) -> List[np.ndarray]:
+    """Group valid texts into batches sorted by token length to minimize padding waste."""
+    valid_idx = np.nonzero(valid_mask)[0]
+    if len(valid_idx) == 0:
+        return []
+    order = valid_idx[np.argsort(lengths[valid_idx], kind="stable")]
+    return [order[i : i + batch_size] for i in range(0, len(order), batch_size)]
 
-        max_len = max(len(e) for e in enc_clean)
-        padded = [list(e) + [0] * (max_len - len(e)) for e in enc_clean]
 
-        inp = torch.LongTensor(padded).T.to(device)
-        lengths = torch.tensor([len(e) for e in enc_clean], dtype=torch.long).to(device)
-        d_lens = torch.ones(len(enc_clean), dtype=torch.long).to(device)
+def _score_categories_worker(
+    device_str: str,
+    categories: List[str],
+    models_dir: Path,
+    model_source: str | Path | None,
+    token_ids: np.ndarray,
+    lengths: np.ndarray,
+    valid_mask: np.ndarray,
+    batch_size: int,
+) -> Dict[str, np.ndarray]:
+    """Score every text against a shard of category models resident on one device."""
+    device = torch.device(device_str)
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+    n = len(lengths)
+    scores: Dict[str, np.ndarray] = {cat: np.full(n, np.nan) for cat in categories}
+    predictors: Dict[str, Predictor] = {}
+    for cat in categories:
+        try:
+            predictors[cat] = load_model(models_dir / cat, device, model_source=model_source)
+        except Exception as exc:
+            import traceback
 
-        logits = predictor(inp, d_lens, lengths)
-        p = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+            print(f"Failed to load {cat} on {device}: {exc}")
+            traceback.print_exc()
+    if not predictors:
+        return scores
 
-        for li, pi in zip(local_idx, p):
-            probs[chunk[li]] = float(pi)
+    batches = _length_sorted_batches(lengths, valid_mask, batch_size)
+    use_amp = device.type == "cuda"
+    total = len(batches)
+    for batch_num, idx in enumerate(batches):
+        if batch_num == 0 or (batch_num + 1) % 200 == 0 or batch_num + 1 == total:
+            print(
+                f"[{device}] {','.join(predictors)}: batch {batch_num + 1}/{total} "
+                f"(size={len(idx)})",
+                flush=True,
+            )
+        local_max_len = int(lengths[idx].max())
+        sub = token_ids[idx][:, :local_max_len]
+        inp = torch.from_numpy(np.ascontiguousarray(sub)).long().to(device).T
+        lengths_t = torch.from_numpy(np.ascontiguousarray(lengths[idx])).long().to(device)
+        d_lens = torch.ones(len(idx), dtype=torch.long, device=device)
+        local_positions = np.arange(len(idx))
+        for cat, predictor in predictors.items():
+            try:
+                probs = _forward_probs_with_oom_backoff(
+                    predictor, inp, d_lens, lengths_t, local_positions, device, use_amp
+                )
+                scores[cat][idx] = probs
+            except Exception as exc:
+                print(f"Batch scoring failed for {cat} on {device}: {exc}")
 
-    return probs
+    del predictors
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return scores
 
 
 def run_inference_all_categories(
@@ -212,34 +349,69 @@ def run_inference_all_categories(
     batch_size: int,
     model_source: str | Path | None = None,
 ) -> Dict[str, np.ndarray]:
-    """Run the inference all categories workflow."""
-    scores: Dict[str, np.ndarray] = {}
+    """Score every text against every category, tokenizing once and fanning across GPUs."""
     model_source = model_source or resolve_bert_source()
     print(f"BERT source: {model_source}")
-    for cat in tqdm(CATEGORIES, desc="NormVio categories"):
-        model_dir = models_dir / cat
-        if not model_dir.exists():
-            print(f"Skipped {cat}: model missing at {model_dir}")
-            scores[cat] = np.full(len(texts), np.nan)
-            continue
-        try:
-            predictor = load_model(model_dir, device, model_source=model_source)
-            probs = score_texts(texts, predictor, tokenizer, device, batch_size)
-            scores[cat] = probs
-        except Exception as exc:
-            import traceback
 
-            print(f"Failed {cat}: {exc}")
-            traceback.print_exc()
-            scores[cat] = np.full(len(texts), np.nan)
-        finally:
-            try:
-                del predictor
-            except NameError:
-                pass
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-    return scores
+    available = [cat for cat in CATEGORIES if (models_dir / cat).exists()]
+    missing = [cat for cat in CATEGORIES if cat not in available]
+    for cat in missing:
+        print(f"Skipped {cat}: model missing at {models_dir / cat}")
+    if not available:
+        return {cat: np.full(len(texts), np.nan) for cat in CATEGORIES}
+
+    print(f"Tokenizing {len(texts):,} texts once for {len(available)} categories", flush=True)
+    cleaned = _clean_texts(texts)
+    token_ids, lengths, valid_mask = _tokenize_all(cleaned, tokenizer, MAX_LENGTH)
+    print(f"Tokenized: {int(valid_mask.sum()):,}/{len(texts):,} non-empty texts", flush=True)
+
+    devices = _visible_devices(device)
+    shards = {
+        dev: cats for dev, cats in _shard_categories(available, devices).items() if cats
+    }
+    print(
+        "Scoring devices: "
+        + ", ".join(f"{dev}={len(cats)} categories" for dev, cats in shards.items()),
+        flush=True,
+    )
+
+    results: Dict[str, np.ndarray] = {}
+    if len(shards) > 1:
+        try:
+            ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=len(shards), mp_context=ctx) as pool:
+                futures = [
+                    pool.submit(
+                        _score_categories_worker,
+                        str(dev),
+                        cats,
+                        models_dir,
+                        model_source,
+                        token_ids,
+                        lengths,
+                        valid_mask,
+                        batch_size,
+                    )
+                    for dev, cats in shards.items()
+                ]
+                for future in futures:
+                    results.update(future.result())
+        except Exception as exc:
+            print(f"Multi-device scoring failed ({exc}); retrying sequentially", flush=True)
+            results = {}
+
+    if not results:
+        for dev, cats in shards.items():
+            results.update(
+                _score_categories_worker(
+                    str(dev), cats, models_dir, model_source, token_ids, lengths, valid_mask,
+                    batch_size,
+                )
+            )
+
+    for cat in missing:
+        results[cat] = np.full(len(texts), np.nan)
+    return {cat: results[cat] for cat in CATEGORIES}
 
 
 def load_votes(votes_dir: Path) -> pd.DataFrame:
@@ -288,22 +460,30 @@ def _load_split_votes(path: Path) -> pd.DataFrame:
 # Post violation scoring
 
 
-def _build_post_text(row: pd.Series) -> str:
-    """Build post text from the supplied data."""
+def _clean_text_column(series: pd.Series | None, index: pd.Index) -> pd.Series:
+    if series is None:
+        return pd.Series("", index=index)
+    return series.astype("string").fillna("").str.strip()
 
-    def clean_text(value: object) -> str:
-        return "" if value is None or pd.isna(value) else str(value).strip()
 
-    subreddit = clean_text(row.get("community", row.get("subreddit", "")))
-    if subreddit[:2].casefold() == "r/":
-        subreddit = subreddit[2:]
-    title = clean_text(row.get("title", ""))
+def _build_post_texts(posts: pd.DataFrame) -> pd.Series:
+    """Vectorized equivalent of building one ``r/<sub> <title> <body>`` string per row."""
+    community = _clean_text_column(
+        posts["community"] if "community" in posts.columns else posts.get("subreddit"),
+        posts.index,
+    )
+    is_r_prefixed = community.str.slice(0, 2).str.casefold() == "r/"
+    community = community.mask(is_r_prefixed, community.str.slice(2))
+
+    title = _clean_text_column(posts.get("title"), posts.index)
     # Canonical rows use raw ``selftext``; legacy rows use combined ``text``.
-    body_field = "selftext" if "selftext" in row.index else "text"
-    body = clean_text(row.get(body_field, ""))
-    body = "" if body in ("[removed]", "[deleted]") else body
-    content = (title + " " + body).strip()
-    return f"r/{subreddit} {content}" if content else ""
+    body_field = "selftext" if "selftext" in posts.columns else "text"
+    body = _clean_text_column(posts.get(body_field), posts.index)
+    body = body.mask(body.isin(["[removed]", "[deleted]"]), "")
+
+    content = (title + " " + body).str.strip()
+    text = "r/" + community + " " + content
+    return text.mask(content == "", "").astype(object)
 
 
 POST_TEXTS_PATH = Path("data/interim/reddit/auxiliary/post_texts.parquet")
@@ -365,7 +545,7 @@ def score_violations(
     if max_posts is not None:
         posts = posts.head(max_posts)
         print(f"Post limit: {max_posts:,}")
-    posts["input_text"] = posts.apply(_build_post_text, axis=1)
+    posts["input_text"] = _build_post_texts(posts)
     texts = posts["input_text"].tolist()
 
     scores = run_inference_all_categories(

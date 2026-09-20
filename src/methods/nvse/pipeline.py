@@ -13,7 +13,7 @@ import pandas as pd
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from sklearn.model_selection import KFold
 from tqdm import tqdm
-from transformers import BertTokenizer
+from transformers import BertTokenizer, BertTokenizerFast
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -114,6 +114,14 @@ def compute_user_skill(
     )
     use_meta = len(skill_feat) > 0 and alpha < 1.0
 
+    # Precompute per (username, community, category) agreement stats once as O(1) dict
+    # lookups, instead of re-filtering each group's rows once per category below.
+    cat_stats = merged.groupby(["username", "community", "top_violation_category"])["agrees"].agg(
+        ["mean", "count"]
+    )
+    mean_lookup = cat_stats["mean"].to_dict()
+    count_lookup = cat_stats["count"].to_dict()
+
     records = []
     iterator = merged.groupby(["username", "community"])
     if verbose:
@@ -125,10 +133,9 @@ def compute_user_skill(
 
         skill_vals = []
         for cat in CATEGORIES:
-            cat_grp = grp[grp["top_violation_category"] == cat]
-
-            if len(cat_grp) >= min_votes:
-                s_mod = float(cat_grp["agrees"].mean()) - 0.5
+            key = (username, community, cat)
+            if count_lookup.get(key, 0) >= min_votes:
+                s_mod = float(mean_lookup[key]) - 0.5
             else:
                 s_mod = np.nan
 
@@ -223,34 +230,31 @@ def _compute_nvse_scores(
 
     all_votes = pd.concat(records, ignore_index=True)
 
-    item_scores = []
-    for item_id, grp in all_votes.groupby("item_id"):
-        community = grp["community"].iloc[0]
-        label = grp["label"].iloc[0]
-        top_cat = (
-            votes_scores.loc[votes_scores["item_id"] == item_id, "top_violation_category"].iloc[0]
-            if len(votes_scores[votes_scores["item_id"] == item_id])
-            else None
-        )
+    # Vectorized replacement for a per-item Python loop (previously an O(n_items^2)
+    # scan of votes_scores per item, which never finished at this dataset's scale).
+    valid = all_votes.dropna(subset=["weight"])
+    abs_weight = valid["weight"].abs()
+    denom = abs_weight.groupby(valid["item_id"], sort=False).sum()
+    numer = (valid["weight"] * valid["vote"]).groupby(valid["item_id"], sort=False).sum()
+    covered = denom[denom > 0].index
+    nvse_score = (numer.loc[covered] / denom.loc[covered]).rename("nvse_score")
 
-        valid = grp.dropna(subset=["weight"])
-        denom = valid["weight"].abs().sum()
+    item_meta = (
+        all_votes[["item_id", "community", "label"]]
+        .drop_duplicates("item_id")
+        .set_index("item_id")
+    )
+    top_cat = (
+        votes_scores[["item_id", "top_violation_category"]]
+        .drop_duplicates("item_id")
+        .set_index("item_id")["top_violation_category"]
+        .rename("top_category")
+    )
 
-        if len(valid) == 0 or denom == 0:
-            # Items without a skilled voter remain uncovered.
-            continue
-        nvse_score = float((valid["weight"] * valid["vote"]).sum() / denom)
-        item_scores.append(
-            {
-                "item_id": item_id,
-                "community": community,
-                "label": label,
-                "nvse_score": nvse_score,
-                "top_category": top_cat,
-            }
-        )
-
-    return pd.DataFrame(item_scores)
+    item_scores = (
+        nvse_score.to_frame().join(item_meta, how="left").join(top_cat, how="left").reset_index()
+    )
+    return item_scores[["item_id", "community", "label", "nvse_score", "top_category"]]
 
 
 def _calibrate(item_scores: pd.DataFrame, val_ids: np.ndarray) -> float:
@@ -537,7 +541,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Recompute and overwrite the shared NormVio score cache.",
     )
-    p.add_argument("--batch_size", type=int, default=32)
+    p.add_argument(
+        "--batch_size",
+        type=int,
+        default=256,
+        help=(
+            "Per-device inference batch size (used per category, per GPU). Automatically "
+            "halved on a CUDA out-of-memory error, so it is safe to raise this on larger GPUs."
+        ),
+    )
     p.add_argument("--device", default="", help="cuda | cpu (auto-detected if empty)")
     p.add_argument(
         "--n_folds",
@@ -609,7 +621,10 @@ def main():
                 else resolve_bert_source(args.bert_model)
             )
             print(f"BERT tokenizer source: {bert_source}")
-            tokenizer = BertTokenizer.from_pretrained(str(bert_source))
+            try:
+                tokenizer = BertTokenizerFast.from_pretrained(str(bert_source))
+            except Exception:
+                tokenizer = BertTokenizer.from_pretrained(str(bert_source))
             score_violations(
                 Path(args.votes_dir),
                 Path(args.docs),

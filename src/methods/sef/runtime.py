@@ -14,6 +14,13 @@ import pandas as pd
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+try:
+    import faiss
+
+    faiss.omp_set_num_threads(os.cpu_count() or 1)
+except ImportError:
+    pass
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -29,7 +36,7 @@ ORIGINAL_CSV = Path("data/processed/final_intersection_dataset.csv")
 # Embedding model
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 
 # Hyperparameter defaults
 K_NEIGHBORS = 5

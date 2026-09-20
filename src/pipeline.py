@@ -261,6 +261,7 @@ def _direct_config(
     graphs: bool,
     device: str,
     excluded_methods: Sequence[str] = (),
+    cache_dir: Path | None = None,
 ) -> ReproductionConfig:
     """Build the conventional layout used by the simple ``--input`` interface."""
     if not dataset or any(
@@ -280,12 +281,21 @@ def _direct_config(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--exclude-method") from exc
-    interim = PROJECT_ROOT / "data" / "interim" / dataset
+    if cache_dir is not None:
+        # Route embeddings and precompute (interim features, NVSE work, embedding
+        # cache) onto a dedicated cache root, e.g. a larger/faster disk, instead of
+        # the project directory.
+        cache_root = cache_dir if cache_dir.is_absolute() else PROJECT_ROOT / cache_dir
+        interim = cache_root / "interim" / dataset
+        cache = cache_root / "cache" / dataset
+    else:
+        interim = PROJECT_ROOT / "data" / "interim" / dataset
+        cache = PROJECT_ROOT / "cache" / dataset
+        if dataset == "reddit":
+            cache = PROJECT_ROOT / "cache"
     processed = PROJECT_ROOT / "data" / "processed" / dataset
-    cache = PROJECT_ROOT / "cache" / dataset
     if dataset == "reddit":
         processed = PROJECT_ROOT / "data" / "processed"
-        cache = PROJECT_ROOT / "cache"
     default_user_contributions = PROJECT_ROOT / "data" / "raw" / dataset / "user_contributions"
     report = PROJECT_ROOT / "results" / "report" / dataset
     if dataset == "reddit":
@@ -699,6 +709,17 @@ def reproduce(
         str,
         typer.Option("--device", help="Execution device: cpu, cuda, or cuda:N."),
     ] = "cpu",
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            help=(
+                "Root directory for embeddings and precompute cache (interim features, "
+                "NVSE work, embedding cache), e.g. a large/fast scratch disk. Defaults to "
+                "the project directory."
+            ),
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", "-c", help="Optional advanced config for non-standard paths."),
@@ -711,6 +732,10 @@ def reproduce(
     """Prepare, evaluate, and render one dataset in a single launch."""
     if config_path is not None and input_path is not None:
         raise typer.BadParameter("use either --input or --config, not both")
+    if config_path is not None and cache_dir is not None:
+        raise typer.BadParameter(
+            "--cache-dir only applies to --input; set outputs.cache/outputs.interim in --config"
+        )
     if config_path is not None:
         config = _load_config(config_path)
         if exclude_method:
@@ -745,6 +770,7 @@ def reproduce(
             force=force,
             graphs=graphs,
             device=device,
+            cache_dir=cache_dir,
         )
     else:
         raise typer.BadParameter("provide the votes table with --input", param_hint="--input")

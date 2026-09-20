@@ -124,6 +124,53 @@ def make_chrono_folds(all_votes: pd.DataFrame, n_folds: int = N_FOLDS) -> List[p
     return folds
 
 
+def _safe_div(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(num, dtype=float)
+    nonzero = den > 0
+    out[nonzero] = num[nonzero] / den[nonzero]
+    return out
+
+
+def _prf_macro_over_thresholds(
+    y_true: np.ndarray, scores: np.ndarray, thr_grid: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized macro precision/recall/F1 (labels=[1,-1]) across an entire threshold grid.
+
+    Equivalent to calling ``precision_recall_fscore_support(y_true, scores >= thr, labels=[1,
+    -1], average="macro", zero_division=0)`` once per threshold, but computed for every
+    threshold at once from two sorted score arrays instead of one full-length comparison
+    per threshold.
+    """
+    y_true = np.asarray(y_true)
+    scores = np.asarray(scores, dtype=float)
+    pos_scores = np.sort(scores[y_true == 1])
+    neg_scores = np.sort(scores[y_true == -1])
+    n_pos, n_neg = len(pos_scores), len(neg_scores)
+
+    idx_pos = np.searchsorted(pos_scores, thr_grid, side="left")
+    idx_neg = np.searchsorted(neg_scores, thr_grid, side="left")
+
+    tp1 = (n_pos - idx_pos).astype(float)
+    fn1 = idx_pos.astype(float)
+    fp1 = (n_neg - idx_neg).astype(float)
+    tp_neg = idx_neg.astype(float)
+    fn_neg = fp1
+    fp_neg = fn1
+
+    precision1 = _safe_div(tp1, tp1 + fp1)
+    recall1 = _safe_div(tp1, tp1 + fn1)
+    f1_1 = _safe_div(2 * precision1 * recall1, precision1 + recall1)
+
+    precision_neg = _safe_div(tp_neg, tp_neg + fp_neg)
+    recall_neg = _safe_div(tp_neg, tp_neg + fn_neg)
+    f1_neg = _safe_div(2 * precision_neg * recall_neg, precision_neg + recall_neg)
+
+    precision = (precision1 + precision_neg) / 2.0
+    recall = (recall1 + recall_neg) / 2.0
+    f1 = (f1_1 + f1_neg) / 2.0
+    return precision, recall, f1
+
+
 # Threshold search
 def calibrate_global_threshold(
     scores_df: pd.DataFrame,
@@ -135,14 +182,10 @@ def calibrate_global_threshold(
     merged["score"] = merged["score"].fillna(0.0)
     y_true = merged["label"].values
     scores = merged["score"].values
-    records = []
-    for thr in grid:
-        y_pred = np.where(scores >= thr, 1, -1)
-        p, r, f, _ = precision_recall_fscore_support(
-            y_true, y_pred, labels=[1, -1], average="macro", zero_division=0
-        )
-        records.append({"threshold": thr, "precision": p, "recall": r, "f1": f})
-    cal_df = pd.DataFrame(records)
+    precision, recall, f1 = _prf_macro_over_thresholds(y_true, scores, grid)
+    cal_df = pd.DataFrame(
+        {"threshold": grid, "precision": precision, "recall": recall, "f1": f1}
+    )
     best = cal_df.loc[cal_df["f1"].idxmax()]
     best_thr = float(best["threshold"])
     return best_thr, cal_df
@@ -160,35 +203,34 @@ def select_alpha(
     val_labels = get_item_labels(val_df)
     best_alpha_f1, best_alpha = -1.0, 1.0
 
+    # n_up/n_down don't depend on alpha (score = n_up - alpha * n_down), so compute
+    # them once instead of re-running a full groupby for every alpha candidate below.
+    train_counts = compute_net_scores(train_df, alpha=0.0)[["item_id", "n_up", "n_down"]]
+    combined_counts = compute_net_scores(
+        pd.concat([train_df, val_df], ignore_index=True), alpha=0.0
+    )[["item_id", "n_up", "n_down"]]
+
+    merged_tr = train_labels.merge(train_counts, on="item_id", how="left")
+    merged_tr[["n_up", "n_down"]] = merged_tr[["n_up", "n_down"]].fillna(0.0)
+    y_tr = merged_tr["label"].values
+    n_up_tr = merged_tr["n_up"].to_numpy(dtype=float)
+    n_down_tr = merged_tr["n_down"].to_numpy(dtype=float)
+
+    merged_val = val_labels.merge(combined_counts, on="item_id", how="left")
+    merged_val[["n_up", "n_down"]] = merged_val[["n_up", "n_down"]].fillna(0.0)
+    y_val = merged_val["label"].values
+    n_up_val = merged_val["n_up"].to_numpy(dtype=float)
+    n_down_val = merged_val["n_down"].to_numpy(dtype=float)
+
     for alpha in alpha_grid:
-        train_scores = compute_net_scores(train_df, alpha=alpha)
-        merged_tr = train_labels.merge(
-            train_scores[["item_id", "score"]], on="item_id", how="left"
-        )
-        merged_tr["score"] = merged_tr["score"].fillna(0.0)
-        y_tr, s_tr = merged_tr["label"].values, merged_tr["score"].values
+        s_tr = n_up_tr - alpha * n_down_tr
+        _, _, f1_tr = _prf_macro_over_thresholds(y_tr, s_tr, thr_grid)
+        best_thr_tr = float(thr_grid[int(np.argmax(f1_tr))])
 
-        best_thr_tr, best_f1_tr = 0.0, -1.0
-        for thr in thr_grid:
-            y_pred = np.where(s_tr >= thr, 1, -1)
-            _, _, f, _ = precision_recall_fscore_support(
-                y_tr, y_pred, labels=[1, -1], average="macro", zero_division=0
-            )
-            if f > best_f1_tr:
-                best_f1_tr, best_thr_tr = f, thr
-
-        val_scores = compute_net_scores(
-            pd.concat([train_df, val_df], ignore_index=True), alpha=alpha
-        )
-        merged_val = val_labels.merge(val_scores[["item_id", "score"]], on="item_id", how="left")
-        merged_val["score"] = merged_val["score"].fillna(0.0)
-        y_pred_val = np.where(merged_val["score"].values >= best_thr_tr, 1, -1)
+        s_val = n_up_val - alpha * n_down_val
+        y_pred_val = np.where(s_val >= best_thr_tr, 1, -1)
         _, _, f_val, _ = precision_recall_fscore_support(
-            merged_val["label"].values,
-            y_pred_val,
-            labels=[1, -1],
-            average="macro",
-            zero_division=0,
+            y_val, y_pred_val, labels=[1, -1], average="macro", zero_division=0
         )
         if f_val > best_alpha_f1:
             best_alpha_f1, best_alpha = f_val, alpha
@@ -218,15 +260,8 @@ def calibrate_per_subreddit(
             continue
         y_true = group["label"].values
         scores = group["score"].values
-        best_f1, best_thr = -1.0, global_threshold
-        for thr in grid:
-            y_pred = np.where(scores >= thr, 1, -1)
-            _, _, f, _ = precision_recall_fscore_support(
-                y_true, y_pred, labels=[1, -1], average="macro", zero_division=0
-            )
-            if f > best_f1:
-                best_f1, best_thr = f, thr
-        sub_thresholds[sub] = best_thr
+        _, _, f1 = _prf_macro_over_thresholds(y_true, scores, grid)
+        sub_thresholds[sub] = float(grid[int(np.argmax(f1))])
     return sub_thresholds
 
 
