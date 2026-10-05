@@ -4,6 +4,14 @@
     "f1_pos": 0.9075,
     "f1_neg": 0.4393939393939394,
     "n_items": 932,
+    "n_native_items": 932,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6734469696969697,
+    "native_f1_pos": 0.9075,
+    "native_f1_neg": 0.4393939393939394,
     "roc_auc": 0.8320961241315223
   },
   "val": {
@@ -11,14 +19,35 @@
     "f1_pos": 0.8972073677956031,
     "f1_neg": 0.46439628482972134,
     "n_items": 1003,
-    "roc_auc": 0.8041448389600312
+    "n_native_items": 1003,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6808018263126622,
+    "native_f1_pos": 0.8972073677956031,
+    "native_f1_neg": 0.46439628482972134,
+    "roc_auc": 0.804144838960031
   },
   "test": {
     "macro_f1": 0.6389652014652014,
     "f1_pos": 0.8869047619047619,
     "f1_neg": 0.391025641025641,
     "n_items": 996,
+    "n_native_items": 996,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6389652014652014,
+    "native_f1_pos": 0.8869047619047619,
+    "native_f1_neg": 0.391025641025641,
     "roc_auc": 0.7790165104560557
+  },
+  "net_vote_fallback": {
+    "threshold": 1.2515644555694792,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 932,
@@ -34,14 +63,14 @@
       "accuracy": 0.8826242952332137,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8898255783805165
+      "roc_auc": 0.8898255296902673
     },
     "test": {
       "macro_f1": 0.8099358173493494,
       "accuracy": 0.893415527561869,
       "n_votes": 11193,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8969076722400553
+      "roc_auc": 0.8969076186229719
     }
   },
   "graph_attention": {
@@ -74,7 +103,7 @@
           "attention_local_experience": 0.5,
           "attention_tenure": 0.25
         },
-        "policy_train_auc": 0.789080143062444
+        "policy_train_auc": 0.7890693377419041
       },
       {
         "name": "full_social",
@@ -98,7 +127,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7934995191632359
+        "policy_train_auc": 0.7936832096124131
       }
     ],
     "n_graph_users": 1824,

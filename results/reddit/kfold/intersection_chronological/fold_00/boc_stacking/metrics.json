@@ -4,21 +4,50 @@
     "f1_pos": 0.9289827255278311,
     "f1_neg": 0.5595238095238095,
     "n_items": 605,
+    "n_native_items": 605,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7442532675258203,
+    "native_f1_pos": 0.9289827255278311,
+    "native_f1_neg": 0.5595238095238095,
     "roc_auc": 0.9275629673356945
   },
   "val": {
-    "macro_f1": 0.7076971821224183,
-    "f1_pos": 0.8960573476702509,
-    "f1_neg": 0.5193370165745856,
-    "n_items": 509,
+    "macro_f1": 0.7058608058608059,
+    "f1_pos": 0.8952380952380953,
+    "f1_neg": 0.5164835164835165,
+    "n_items": 511,
+    "n_native_items": 509,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9960861056751468,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7076971821224183,
+    "native_f1_pos": 0.8960573476702509,
+    "native_f1_neg": 0.5193370165745856,
     "roc_auc": 0.8427071306833801
   },
   "test": {
-    "macro_f1": 0.5806390536129477,
-    "f1_pos": 0.8736964078794901,
-    "f1_neg": 0.2875816993464052,
-    "n_items": 508,
+    "macro_f1": 0.5793467502474431,
+    "f1_pos": 0.8729792147806005,
+    "f1_neg": 0.2857142857142857,
+    "n_items": 510,
+    "n_native_items": 508,
+    "n_fallback_items": 2,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5806390536129477,
+    "native_f1_pos": 0.8736964078794901,
+    "native_f1_neg": 0.2875816993464052,
     "roc_auc": 0.7971453763914913
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,7 +72,7 @@
       "accuracy": 0.8403041825095057,
       "n_votes": 5523,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8346710862433568
+      "roc_auc": 0.8346713232095075
     },
     "test": {
       "macro_f1": 0.6937702657638766,
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 32,
     "eligibility_components": 8,
-    "prediction_explained_variance": 0.9974508285522461,
+    "prediction_explained_variance": 0.9974508881568909,
     "eligibility_explained_variance": 0.9937785863876343,
     "context_features": 29,
     "classifier": "standardized class-balanced L2 logistic regression",

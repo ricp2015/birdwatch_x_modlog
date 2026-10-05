@@ -16,12 +16,6 @@ import torch
 logger = logging.getLogger("birdwatch.matrix_factorization")
 logger.setLevel(logging.INFO)
 
-def _t2np(tensor): 
-  """
-  Convert torch tensor to numpy array without using the torch-numpy bridge 
-  (workaround for torch 2.2.x + NumPy 2.x incompatibility).
-  """ 
-  return np.array(tensor.tolist(), dtype=np.float32)
 
 @dataclasses.dataclass
 class Constants:
@@ -193,7 +187,6 @@ class MatrixFactorization:
         noteInit,
         on=c.noteIdKey,
         how="left",
-        unsafeAllowed={c.noteIdKey, "noteIndex_y"},
       )
 
       noteInit[c.internalNoteInterceptKey].fillna(0.0, inplace=True)
@@ -245,14 +238,18 @@ class MatrixFactorization:
     noteParams = self.noteIdMap.copy(deep=True)
     raterParams = self.raterIdMap.copy(deep=True)
 
-    noteParams[c.internalNoteInterceptKey] = _t2np(self.mf_model.note_intercepts.weight.data.cpu())
+    noteParams[c.internalNoteInterceptKey] = self.mf_model.note_intercepts.weight.data.cpu().numpy()
     raterParams[
       c.internalRaterInterceptKey
-    ] = _t2np(self.mf_model.user_intercepts.weight.data.cpu())
+    ] = self.mf_model.user_intercepts.weight.data.cpu().numpy()
 
     for i in range(self._numFactors):
-      noteParams[c.note_factor_key(i + 1)] = _t2np(self.mf_model.note_factors.weight.data.cpu())[:, i]
-      raterParams[c.rater_factor_key(i + 1)] = _t2np(self.mf_model.user_factors.weight.data.cpu())[:, i]
+      noteParams[c.note_factor_key(i + 1)] = self.mf_model.note_factors.weight.data.cpu().numpy()[
+        :, i
+      ]
+      raterParams[c.rater_factor_key(i + 1)] = self.mf_model.user_factors.weight.data.cpu().numpy()[
+        :, i
+      ]
 
     if flipFactorsForIdentification:
       noteParams, raterParams = self._flip_factors_for_identification(noteParams, raterParams)
@@ -349,7 +346,7 @@ class MatrixFactorization:
         # Log min, max, mean, delta, and histogram of the parameters with adaptive handling
         log_dict = {}
         for name, param in self.mf_model.named_parameters():
-          param_array = _t2np(param.data.cpu().clone())
+          param_array = param.data.cpu().clone().numpy()
           param_range = param_array.max() - param_array.min()
           key = f"{run_name}Parameters/{name}"
 
@@ -535,19 +532,13 @@ class MatrixFactorization:
         self.ratingFeaturesAndLabels[c.noteIdKey] == specificNoteId
       ]
 
-    rating_labels = torch.FloatTensor(
-      ratingFeaturesAndLabels[self._labelCol].to_numpy(copy=True)
-    ).to(
+    rating_labels = torch.FloatTensor(ratingFeaturesAndLabels[self._labelCol].values).to(
       self.mf_model.device
     )
-    user_indexes = torch.IntTensor(
-      ratingFeaturesAndLabels[Constants.raterIndexKey].to_numpy(copy=True)
-    ).to(
+    user_indexes = torch.IntTensor(ratingFeaturesAndLabels[Constants.raterIndexKey].values).to(
       self.mf_model.device
     )
-    note_indexes = torch.IntTensor(
-      ratingFeaturesAndLabels[Constants.noteIndexKey].to_numpy(copy=True)
-    ).to(
+    note_indexes = torch.IntTensor(ratingFeaturesAndLabels[Constants.noteIndexKey].values).to(
       self.mf_model.device
     )
     self.modelData = ModelData(rating_labels, user_indexes, note_indexes)
@@ -668,7 +659,7 @@ class MatrixFactorization:
       train_loss, loss, validate_loss = self._fit_model(validatePercent, run_name=run_name)
       self._lossModule = None
 
-    assert self.mf_model.note_factors.weight.data.cpu().shape[0] == self.noteIdMap.shape[0]
+    assert self.mf_model.note_factors.weight.data.cpu().numpy().shape[0] == self.noteIdMap.shape[0]
 
     globalIntercept = None
     if self._useGlobalIntercept:

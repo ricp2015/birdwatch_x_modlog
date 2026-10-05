@@ -4,21 +4,50 @@
     "f1_pos": 0.8627450980392157,
     "f1_neg": 0.27586206896551724,
     "n_items": 182,
+    "n_native_items": 182,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5693035835023665,
+    "native_f1_pos": 0.8627450980392157,
+    "native_f1_neg": 0.27586206896551724,
     "roc_auc": 0.6050556586270871
   },
   "val": {
-    "macro_f1": 0.6589950134253931,
-    "f1_pos": 0.8939393939393939,
-    "f1_neg": 0.4240506329113924,
-    "n_items": 1016,
+    "macro_f1": 0.6572655753511714,
+    "f1_pos": 0.8931475029036005,
+    "f1_neg": 0.42138364779874216,
+    "n_items": 1020,
+    "n_native_items": 1016,
+    "n_fallback_items": 4,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6589950134253931,
+    "native_f1_pos": 0.8939393939393939,
+    "native_f1_neg": 0.4240506329113924,
     "roc_auc": 0.6427095292766934
   },
   "test": {
-    "macro_f1": 0.5847863993025283,
-    "f1_pos": 0.8790322580645161,
-    "f1_neg": 0.2905405405405405,
-    "n_items": 1016,
+    "macro_f1": 0.5834457038503919,
+    "f1_pos": 0.878300803673938,
+    "f1_neg": 0.28859060402684567,
+    "n_items": 1020,
+    "n_native_items": 1016,
+    "n_fallback_items": 4,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5847863993025283,
+    "native_f1_pos": 0.8790322580645161,
+    "native_f1_neg": 0.2905405405405405,
     "roc_auc": 0.5581759692513368
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.8673113782889005,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8313525005106719
+      "roc_auc": 0.8313523031018697
     },
     "test": {
       "macro_f1": 0.7272082158502552,
       "accuracy": 0.8706003254260513,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8254717878062492
+      "roc_auc": 0.8254727885917656
     }
   },
   "ensemble": {
@@ -127,6 +156,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w020",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

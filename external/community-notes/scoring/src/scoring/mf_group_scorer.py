@@ -16,6 +16,12 @@ trialScoringGroup = 14
 # Group ID assigned to NMR group scorer
 nmrScoringGroup = 33
 
+# Group ID for NMR trial group scorer
+nmrTrialScoringGroup = 18
+
+# Group ID for Gaussian NMR trial group scorer
+nmrGaussGroupScoringGroup = 15
+
 
 # Mapping of how many threads to assign to each group scorer
 groupScorerParalleism = {
@@ -84,7 +90,7 @@ class MFGroupScorer(MFBaseScorer):
     crnhThresholdIntercept: float = -0.05,
     crnhThresholdNoteFactorMultiplier: float = -0.8,
     crnhThresholdNMIntercept: float = -0.15,
-    crhSuperThreshold: Optional[float] = 0.5,
+    crhSuperThreshold: Optional[float] = None,
     crhThresholdNoHighVol: float = 0.37,
     crhThresholdNoCorrelated: float = 0.37,
     lowDiligenceThreshold: float = 0.263,

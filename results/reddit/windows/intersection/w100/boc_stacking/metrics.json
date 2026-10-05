@@ -4,6 +4,14 @@
     "f1_pos": 0.9075738125802311,
     "f1_neg": 0.48936170212765956,
     "n_items": 920,
+    "n_native_items": 920,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6984677573539453,
+    "native_f1_pos": 0.9075738125802311,
+    "native_f1_neg": 0.48936170212765956,
     "roc_auc": 0.9032028085336213
   },
   "val": {
@@ -11,6 +19,14 @@
     "f1_pos": 0.8950146627565982,
     "f1_neg": 0.46567164179104475,
     "n_items": 1020,
+    "n_native_items": 1020,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6803431522738215,
+    "native_f1_pos": 0.8950146627565982,
+    "native_f1_neg": 0.46567164179104475,
     "roc_auc": 0.7736121124729632
   },
   "test": {
@@ -18,7 +34,20 @@
     "f1_pos": 0.8850174216027874,
     "f1_neg": 0.37735849056603776,
     "n_items": 1020,
+    "n_native_items": 1020,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6311879560844126,
+    "native_f1_pos": 0.8850174216027874,
+    "native_f1_neg": 0.37735849056603776,
     "roc_auc": 0.7827165188350929
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,14 +72,14 @@
       "accuracy": 0.8911831329499913,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8913784962887885
+      "roc_auc": 0.8913784469365881
     },
     "test": {
       "macro_f1": 0.8036832995908428,
       "accuracy": 0.8926094031001113,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8982418550320146
+      "roc_auc": 0.8982419050712904
     }
   },
   "boc_stacking": {
@@ -327,6 +356,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w100",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

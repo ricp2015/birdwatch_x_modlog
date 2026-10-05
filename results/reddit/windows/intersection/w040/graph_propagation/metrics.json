@@ -4,21 +4,50 @@
     "f1_pos": 0.8885448916408669,
     "f1_neg": 0.18181818181818182,
     "n_items": 367,
+    "n_native_items": 367,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5351815367295244,
+    "native_f1_pos": 0.8885448916408669,
+    "native_f1_neg": 0.18181818181818182,
     "roc_auc": 0.6183760683760684
   },
   "val": {
-    "macro_f1": 0.6532652794136893,
-    "f1_pos": 0.9037037037037037,
+    "macro_f1": 0.6533200866398112,
+    "f1_pos": 0.9038133181559477,
     "f1_neg": 0.4028268551236749,
-    "n_items": 1019,
+    "n_items": 1020,
+    "n_native_items": 1019,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990196078431373,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6532652794136893,
+    "native_f1_pos": 0.9037037037037037,
+    "native_f1_neg": 0.4028268551236749,
     "roc_auc": 0.6619396193255818
   },
   "test": {
-    "macro_f1": 0.6031941275667096,
-    "f1_pos": 0.9005059021922428,
-    "f1_neg": 0.3058823529411765,
-    "n_items": 1017,
-    "roc_auc": 0.6975862989917874
+    "macro_f1": 0.6024558576233183,
+    "f1_pos": 0.9002242152466368,
+    "f1_neg": 0.3046875,
+    "n_items": 1020,
+    "n_native_items": 1017,
+    "n_fallback_items": 3,
+    "score_coverage": 0.9970588235294118,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6031941275667096,
+    "native_f1_pos": 0.9005059021922428,
+    "native_f1_neg": 0.3058823529411765,
+    "roc_auc": 0.6975946451225212
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 367,
@@ -30,18 +59,18 @@
   },
   "simulator_fidelity_on_observed_votes": {
     "val": {
-      "macro_f1": 0.773290536410732,
-      "accuracy": 0.8768078062380206,
+      "macro_f1": 0.7734017656131775,
+      "accuracy": 0.8768949294302143,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8706743104670935
+      "roc_auc": 0.8706744091714944
     },
     "test": {
       "macro_f1": 0.7727562106449068,
       "accuracy": 0.8815620450458166,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8681700766931965
+      "roc_auc": 0.8681704770074031
     }
   },
   "graph_attention": {
@@ -74,7 +103,7 @@
           "attention_local_experience": 0.5,
           "attention_tenure": 0.25
         },
-        "policy_train_auc": 0.602014652014652
+        "policy_train_auc": 0.6020757020757022
       },
       {
         "name": "full_social",
@@ -98,7 +127,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6030525030525031
+        "policy_train_auc": 0.603052503052503
       }
     ],
     "n_graph_users": 1713,
@@ -130,6 +159,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w040",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

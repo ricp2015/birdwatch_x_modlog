@@ -4,21 +4,50 @@
     "f1_pos": 0.9036608863198459,
     "f1_neg": 0.4186046511627907,
     "n_items": 605,
+    "n_native_items": 605,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6611327687413183,
+    "native_f1_pos": 0.9036608863198459,
+    "native_f1_neg": 0.4186046511627907,
     "roc_auc": 0.6176333136560409
   },
   "val": {
-    "macro_f1": 0.7227215775998257,
-    "f1_pos": 0.9052132701421801,
-    "f1_neg": 0.5402298850574713,
-    "n_items": 509,
+    "macro_f1": 0.7207556080283353,
+    "f1_pos": 0.9043683589138135,
+    "f1_neg": 0.5371428571428571,
+    "n_items": 511,
+    "n_native_items": 509,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9960861056751468,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7227215775998257,
+    "native_f1_pos": 0.9052132701421801,
+    "native_f1_neg": 0.5402298850574713,
     "roc_auc": 0.5862884160756501
   },
   "test": {
-    "macro_f1": 0.5818868036451806,
-    "f1_pos": 0.8707799767171129,
-    "f1_neg": 0.2929936305732484,
-    "n_items": 508,
+    "macro_f1": 0.5806044230373872,
+    "f1_pos": 0.8700696055684455,
+    "f1_neg": 0.2911392405063291,
+    "n_items": 510,
+    "n_native_items": 508,
+    "n_fallback_items": 2,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5818868036451806,
+    "native_f1_pos": 0.8707799767171129,
+    "native_f1_neg": 0.2929936305732484,
     "roc_auc": 0.8009203130166428
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,7 +69,7 @@
       "accuracy": 0.8403041825095057,
       "n_votes": 5523,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8346710862433568
+      "roc_auc": 0.8346713232095075
     },
     "test": {
       "macro_f1": 0.6937702657638766,

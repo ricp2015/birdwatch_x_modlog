@@ -20,6 +20,12 @@ from . import constants as c, contributor_state, note_ratings, note_status_histo
 from .constants import FinalScoringArgs, ModelResult, PrescoringArgs, ScoringArgs
 from .enums import Scorers, Topics
 from .gaussian_core_with_topics_scorer import GaussianCoreWithTopicsScorer
+from .gaussian_expansion_scorer import GaussianExpansionScorer
+from .gaussian_group_scorer import (
+  GaussianCoreGroupScorer,
+  GaussianGroupScorer,
+  coreGroupScoringGroup,
+)
 from .gaussian_scorer import GaussianScorer, compute_empirical_prior_df
 from .gaussian_topic_scorer import GaussianTopicScorer
 from .matrix_factorization.normalized_loss import NormalizedLossHyperparameters
@@ -33,7 +39,9 @@ from .mf_group_scorer import (
   coalesce_group_model_scored_notes,
   groupScorerCount,
   groupScorerParalleism,
+  nmrGaussGroupScoringGroup,
   nmrScoringGroup,
+  nmrTrialScoringGroup,
   trialScoringGroup,
 )
 from .mf_multi_group_scorer import (
@@ -42,10 +50,22 @@ from .mf_multi_group_scorer import (
   coalesce_multi_group_model_scored_notes,
 )
 from .mf_topic_scorer import MFTopicScorer, coalesce_topic_models
-from .pandas_utils import get_df_fingerprint, get_df_info, keep_columns, patch_pandas
-from .pflip_plus_model import LABEL as PFLIP_LABEL, PFlipPlusModel
+from .pandas_utils import get_df_fingerprint, get_df_info, keep_columns
+from .pcrh_model import (
+  PCRHModel,
+  collect_previous_pcrh_state,
+  compute_pcrh_predictions,
+  merge_pcrh_results,
+  suppress_pcrh_ineligible,
+)
+from .pflip_plus_model import LABEL as PFLIP_LABEL, PFLIP_PROBA, PFlipPlusModel
 from .post_selection_similarity import PostSelectionSimilarity, apply_post_selection_similarity
-from .process_data import CommunityNotesDataLoader, filter_input_data_for_testing, preprocess_data
+from .process_data import (
+  CommunityNotesDataLoader,
+  ensure_int64_participant_ids,
+  filter_input_data_for_testing,
+  preprocess_data,
+)
 from .quasi_clique_detection import QuasiCliqueDetection
 from .reputation_scorer import ReputationScorer
 from .scorer import Scorer
@@ -59,6 +79,27 @@ import sklearn
 
 logger = logging.getLogger("birdwatch.run_scoring")
 logger.setLevel(logging.INFO)
+
+
+def _align_participant_id_dtypes_with_notes(
+  notes: pd.DataFrame,
+  ratings: pd.DataFrame,
+  noteStatusHistory: pd.DataFrame,
+  userEnrollment: pd.DataFrame,
+  prescoringRaterModelOutput: Optional[pd.DataFrame] = None,
+) -> None:
+  participantIdDtype = (
+    np.int64 if pd.api.types.is_integer_dtype(notes[c.noteAuthorParticipantIdKey].dtype) else str
+  )
+  ratings[c.raterParticipantIdKey] = ratings[c.raterParticipantIdKey].astype(participantIdDtype)
+  noteStatusHistory[c.noteAuthorParticipantIdKey] = noteStatusHistory[
+    c.noteAuthorParticipantIdKey
+  ].astype(participantIdDtype)
+  userEnrollment[c.participantIdKey] = userEnrollment[c.participantIdKey].astype(participantIdDtype)
+  if prescoringRaterModelOutput is not None:
+    prescoringRaterModelOutput[c.raterParticipantIdKey] = prescoringRaterModelOutput[
+      c.raterParticipantIdKey
+    ].astype(participantIdDtype)
 
 
 def _get_scorers(
@@ -81,6 +122,19 @@ def _get_scorers(
     scorers[Scorers.GaussianScorer] = [GaussianScorer(seed=seed, threads=12)]
     scorers[Scorers.GaussianCoreWithTopicsScorer] = [
       GaussianCoreWithTopicsScorer(seed=seed, threads=12)
+    ]
+    scorers[Scorers.GaussianExpansionScorer] = [GaussianExpansionScorer(seed=seed, threads=12)]
+    scorers[Scorers.GaussianGroupScorer] = [
+      GaussianGroupScorer(
+        includedGroups={nmrGaussGroupScoringGroup},
+        groupId=nmrGaussGroupScoringGroup,
+        threads=4,
+        seed=seed,
+        saveIntermediateState=True,
+        crhThreshold=0.25,
+      ),
+      # Core-group Gaussian NMR veto: group 21 ratings only; MFCoreScorer prescoring.
+      GaussianCoreGroupScorer(seed=seed, threads=4),
     ]
   scorers[Scorers.MFCoreWithTopicsScorer] = [
     MFCoreWithTopicsScorer(
@@ -124,10 +178,9 @@ def _get_scorers(
         globalSignNorm=True, noteSignAlpha=None, noteNormExp=0, raterNormExp=-0.25
       ),
       maxFinalMFTrainError=0.16,
-      groupThreshold=0.4,
+      groupThreshold=0.51,
       minMeanNoteScore=-0.01,
       crhThreshold=0.15,
-      crhSuperThreshold=None,
       crnhThresholdIntercept=-0.01,
       crnhThresholdNoteFactorMultiplier=0,
       crnhThresholdNMIntercept=-0.02,
@@ -152,6 +205,39 @@ def _get_scorers(
       seed=seed,
     )
   )
+  scorers[Scorers.MFGroupScorer].append(
+    MFGroupScorer(
+      includedGroups={nmrTrialScoringGroup},
+      groupId=nmrTrialScoringGroup,
+      threads=groupScorerParalleism.get(nmrTrialScoringGroup, 4),
+      seed=seed,
+      noteInterceptLambda=0.03 * 5,
+      userInterceptLambda=0.03,
+      globalInterceptLambda=0,
+      noteFactorLambda=0.03,
+      userFactorLambda=0.03,
+      crhThreshold=0.2,
+      crhThresholdNoHighVol=0.18,
+      crhThresholdNoCorrelated=0.18,
+      groupThreshold=0.51,
+    )
+  )
+  if not final:
+    scorers[Scorers.MFGroupScorer].append(
+      MFGroupScorer(
+        includedGroups={nmrGaussGroupScoringGroup},
+        groupId=nmrGaussGroupScoringGroup,
+        threads=groupScorerParalleism.get(nmrGaussGroupScoringGroup, 4),
+        seed=seed,
+        saveIntermediateState=True,
+        noteInterceptLambda=0.03 * 3,
+        userInterceptLambda=0.03,
+        globalInterceptLambda=0,
+        noteFactorLambda=0.03,
+        userFactorLambda=0.03,
+        crhThreshold=0.25,
+      )
+    )
   topicScorers: List[Scorer] = []
   for topic in Topics:
     if topic == Topics.InDimensionTwo:
@@ -212,22 +298,8 @@ def _merge_results(
     c.noteIdKey
   }, "column names must be globally unique"
   scoredNotesSize = len(scoredNotes)
-  unsafeAllowed = set(
-    [
-      c.noteIdKey,
-      c.defaultIndexKey,
-    ]
-    + [f"{c.modelingGroupKey}_{group}" for group in range(groupScorerCount, 0, -1)]
-    + [f"{c.topicNoteConfidentKey}_{topic.name}" for topic in Topics]
-    + [f"{c.groupNumFinalRoundRatingsKey}_{group}" for group in range(groupScorerCount, 0, -1)]
-    + [f"{c.topicNumFinalRoundRatingsKey}_{topic.name}" for topic in Topics]
-  )
-  scoredNotes = scoredNotes.merge(
-    modelScoredNotes,
-    on=c.noteIdKey,
-    how="outer",
-    unsafeAllowed=unsafeAllowed,
-  )
+  scoredNotes = scoredNotes.merge(modelScoredNotes, on=c.noteIdKey, how="outer")
+
   assert len(scoredNotes) == scoredNotesSize, "scoredNotes should not expand"
 
   # Merge auxiliaryNoteInfo
@@ -294,7 +366,6 @@ def _load_data_from_shared_memory_parallelizable(
 
 
 # patch_pandas is needed since we're using 'forkserver' to create new process.
-@patch_pandas
 def _run_scorer_in_parallel(
   args,
   scorer: Scorer,
@@ -417,7 +488,7 @@ def get_df_from_shared_memory(
   existing_shm = shared_memory.SharedMemory(name=sharedMemoryDfInfo.sharedMemoryName)
   size = sharedMemoryDfInfo.dataSize
   with io.BytesIO(existing_shm.buf[:size]) as buf:
-    return pd.read_parquet(buf)
+    return pd.read_parquet(buf, dtype_backend="pyarrow")
 
 
 def _save_dfs_to_shared_memory(
@@ -601,17 +672,7 @@ def combine_prescorer_scorer_results(
     if modelResult.metaScores is not None and modelResult.scorerName is not None:
       prescoringMetaOutput.metaScorerOutput[modelResult.scorerName] = modelResult.metaScores
 
-  prescoringNoteModelOutput = pd.concat(
-    prescoringNoteModelOutputList,
-    unsafeAllowed={
-      c.defaultIndexKey,
-      c.noteIdKey,
-      c.internalNoteInterceptKey,
-      c.internalNoteFactor1Key,
-      c.lowDiligenceNoteInterceptKey,
-      c.lowDiligenceNoteFactor1Key,
-    },
-  )
+  prescoringNoteModelOutput = pd.concat(prescoringNoteModelOutputList)
   # BUG: The type error for this concat operation shows a mix of Int64 and float64 values in
   # some columns, suggesting that an input may be emtpy.  The type error is preceeded by this
   # warning from Pandas, which also points to an empty input:
@@ -624,21 +685,6 @@ def combine_prescorer_scorer_results(
   # and raterParticipantId mixes Int64 and object.
   raterParamsUnfilteredMultiScorers = pd.concat(
     raterParamsUnfilteredMultiScorersList,
-    unsafeAllowed={
-      c.defaultIndexKey,
-      c.internalRaterInterceptKey,
-      c.internalRaterFactor1Key,
-      c.crhCrnhRatioDifferenceKey,
-      c.meanNoteScoreKey,
-      c.raterAgreeRatioKey,
-      c.aboveHelpfulnessThresholdKey,
-      c.internalRaterReputationKey,
-      c.lowDiligenceRaterInterceptKey,
-      c.lowDiligenceRaterFactor1Key,
-      c.lowDiligenceRaterReputationKey,
-      c.incorrectTagRatingsMadeByRaterKey,
-      c.raterParticipantIdKey,
-    },
   )
   return (
     prescoringNoteModelOutput[c.prescoringNoteModelOutputTSVColumns],
@@ -725,7 +771,6 @@ def convert_prescoring_rater_model_output_to_coalesced_helpfulness_scores(
         scorerOutputExternalNames,
         on=c.raterParticipantIdKey,
         how="outer",
-        unsafeAllowed=scorer._modelingGroupKey,
       )
     else:
       helpfulnessScores = helpfulnessScores.merge(
@@ -813,6 +858,19 @@ def meta_score(
           c.expansionRatingStatusKey,
         )
       )
+    # Gaussian Expansion runs after MF Expansion and *before* Core so that Core's
+    # ApplyModelResult overwrites it whenever Core scores a note — the same
+    # ordering that prevents MF Expansion from leaving decidedBy on Core-scored notes.
+    if enabledScorers is None or Scorers.GaussianExpansionScorer in enabledScorers:
+      rules.append(
+        scoring_rules.ApplyCoverageModelResult(
+          RuleID.GAUSSIAN_EXPANSION_MODEL,
+          {RuleID.META_INITIAL_NMR},
+          c.gaussianExpansionRatingStatusKey,
+          checkFirmReject=True,
+          crnhCoverage=True,
+        )
+      )
     if enabledScorers is None or Scorers.MFCoreWithTopicsScorer in enabledScorers:
       rules.append(
         scoring_rules.ApplyModelResult(
@@ -891,6 +949,32 @@ def meta_score(
           nmrScoringGroup,
         )
       )
+      # group 18 scorers
+      # rules.append(
+      #   scoring_rules.ApplyGroupModelResult(
+      #     RuleID[f"GROUP_MODEL_{nmrTrialScoringGroup}"],
+      #     {RuleID.EXPANSION_MODEL, RuleID.CORE_MODEL},
+      #     nmrTrialScoringGroup,
+      #     None,
+      #     None,
+      #     minSafeguardThreshold=0.25,
+      #   )
+      # )
+      rules.append(
+        scoring_rules.ApplyNMRGroupModelResult(
+          RuleID[f"GROUP_MODEL_{nmrTrialScoringGroup}_NMR"],
+          {RuleID.EXPANSION_MODEL, RuleID.CORE_MODEL},
+          nmrTrialScoringGroup,
+        )
+      )
+    if enabledScorers is None or Scorers.GaussianGroupScorer in enabledScorers:
+      rules.append(
+        scoring_rules.ApplyNMRGroupModelResult(
+          RuleID[f"GROUP_MODEL_{nmrGaussGroupScoringGroup}_NMR"],
+          {RuleID.EXPANSION_MODEL, RuleID.CORE_MODEL},
+          nmrGaussGroupScoringGroup,
+        )
+      )
     if enabledScorers is None or Scorers.GaussianScorer in enabledScorers:
       rules.append(
         scoring_rules.ApplyCoverageModelResult(
@@ -899,6 +983,16 @@ def meta_score(
           c.gaussianRatingStatusKey,
           checkFirmReject=True,
           crnhCoverage=True,
+        )
+      )
+    # Core-group (21) Gaussian NMR veto: listed after GAUSSIAN_MODEL so it can
+    # demote CRH promoted by main GaussianScorer when the group-21 model disagrees.
+    if enabledScorers is None or Scorers.GaussianGroupScorer in enabledScorers:
+      rules.append(
+        scoring_rules.ApplyNMRGroupModelResult(
+          RuleID[f"GROUP_MODEL_{coreGroupScoringGroup}_NMR"],
+          {RuleID.EXPANSION_MODEL, RuleID.CORE_MODEL},
+          coreGroupScoringGroup,
         )
       )
     if enabledScorers is None or Scorers.GaussianCoreWithTopicsScorer in enabledScorers:
@@ -1076,16 +1170,22 @@ def _compute_note_stats(
   return scoredNotesCols, auxiliaryNoteInfoCols
 
 
-def _compute_14d_stats(
+def _compute_past_n_days_stats(
   ratings: pd.DataFrame,
   noteStatusHistory: pd.DataFrame,
+  nDays: int,
+  onlyIncludeNotesWithStatusOrEnoughRatings: bool,
+  crhCountColumn: str,
+  crnhCountColumn: str,
+  nmrCountColumn: str,
 ) -> pd.DataFrame:
-  """Helper function to compute 14d CRH, CRNH and NMR totals.
+  """Helper function to compute past n days' CRH, CRNH and NMR totals.
 
-  Only notes written in the last 14 days count, and a note must either have status or
-  at least 10 ratings to count towards the totals.
+  Only notes written in the last n days count, and if
+  onlyIncludeNotesWithStatusOrEnoughRatings is True, a note must either
+  have status or at least 10 ratings to count towards the totals.
   """
-  cutoff = noteStatusHistory[c.createdAtMillisKey].max() - (1000 * 60 * 60 * 24 * 14)
+  cutoff = noteStatusHistory[c.createdAtMillisKey].max() - (1000 * 60 * 60 * 24 * nDays)
   # Purge notes that are too old
   recentStats = (
     noteStatusHistory[noteStatusHistory[c.createdAtMillisKey] > cutoff][
@@ -1094,19 +1194,22 @@ def _compute_14d_stats(
     .rename(columns={c.noteAuthorParticipantIdKey: c.raterParticipantIdKey})
     .copy()
   )
-  # Purge notes that either lack status or too few ratings
-  ratingTotals = ratings[c.noteIdKey].value_counts().to_frame().reset_index(drop=False)
-  recentStats = recentStats.merge(
-    ratingTotals, how="inner", on=c.noteIdKey
-  )  # Implicitly drop notes with 0 ratings
-  recentStats = recentStats[
-    (recentStats["count"] >= 10)
-    | (recentStats[c.currentLabelKey].isin({c.currentlyRatedHelpful, c.currentlyRatedNotHelpful}))
-  ].drop(columns=[c.noteIdKey, "count"])
+  if onlyIncludeNotesWithStatusOrEnoughRatings:
+    # Purge notes that either lack status or too few ratings
+    ratingTotals = ratings[c.noteIdKey].value_counts().to_frame().reset_index(drop=False)
+    recentStats = recentStats.merge(
+      ratingTotals, how="inner", on=c.noteIdKey
+    )  # Implicitly drop notes with 0 ratings
+    recentStats = recentStats[
+      (recentStats["count"] >= 10)
+      | (recentStats[c.currentLabelKey].isin({c.currentlyRatedHelpful, c.currentlyRatedNotHelpful}))
+    ].drop(columns=[c.noteIdKey, "count"])
+  else:
+    recentStats = recentStats.drop(columns=[c.noteIdKey])
   # Compute totals
-  recentStats[c.crhTotal14dKey] = recentStats[c.currentLabelKey] == c.currentlyRatedHelpful
-  recentStats[c.crnhTotal14dKey] = recentStats[c.currentLabelKey] == c.currentlyRatedNotHelpful
-  recentStats[c.nmrTotal14dKey] = recentStats[c.currentLabelKey] == c.needsMoreRatings
+  recentStats[crhCountColumn] = recentStats[c.currentLabelKey] == c.currentlyRatedHelpful
+  recentStats[crnhCountColumn] = recentStats[c.currentLabelKey] == c.currentlyRatedNotHelpful
+  recentStats[nmrCountColumn] = recentStats[c.currentLabelKey] == c.needsMoreRatings
   recentStats = (
     recentStats.drop(columns=[c.currentLabelKey])
     .groupby(c.raterParticipantIdKey)
@@ -1114,6 +1217,22 @@ def _compute_14d_stats(
     .reset_index(drop=False)
   )
   return recentStats
+
+
+def _compute_past_n_days_rating_counts(
+  ratings: pd.DataFrame,
+  nDays: int,
+  countColumn: str,
+) -> pd.DataFrame:
+  """Helper function to compute the number of ratings made in the past n days."""
+  cutoff = ratings[c.createdAtMillisKey].max() - (1000 * 60 * 60 * 24 * nDays)
+  return (
+    ratings[ratings[c.createdAtMillisKey] > cutoff]
+    .groupby(c.raterParticipantIdKey)
+    .size()
+    .to_frame(countColumn)
+    .reset_index(drop=False)
+  )
 
 
 def _compute_helpfulness_scores(
@@ -1170,6 +1289,14 @@ def _compute_helpfulness_scores(
       ]
     ]
     assert len(scoredNotesWithStats) == len(scoredNotes)
+    # Ensure boolean columns are bool dtype for downstream boolean operations.
+    # After TSV round-trip these may be int8[pyarrow] which doesn't support | operator.
+    for col in [
+      c.currentlyRatedHelpfulBoolKey,
+      c.currentlyRatedNotHelpfulBoolKey,
+      c.awaitingMoreRatingsBoolKey,
+    ]:
+      scoredNotesWithStats[col] = scoredNotesWithStats[col].astype(bool)
 
   with c.time_block("Meta Helpfulness Scores: Contributor Scores"):
     # Return one row per rater with stats including trackrecord identifying note labels.
@@ -1205,7 +1332,6 @@ def _compute_helpfulness_scores(
       ],
       on=c.raterParticipantIdKey,
       how="outer",
-      unsafeAllowed={c.enrollmentState, c.isEmergingWriterKey},
     )
     contributorScores = contributor_state.single_trigger_earn_out(contributorScores)
     contributorScores = contributor_state.calculate_ri_to_earn_in(contributorScores)
@@ -1222,7 +1348,6 @@ def _compute_helpfulness_scores(
       left_on=c.raterParticipantIdKey,
       right_on=c.participantIdKey,
       how="left",
-      unsafeAllowed=(c.enrollmentState + "_prev"),
     ).drop(c.participantIdKey, axis=1)
 
     # For users who did not earn a new enrollmentState, carry over the previous one
@@ -1235,12 +1360,13 @@ def _compute_helpfulness_scores(
     helpfulnessScores[c.timestampOfLastEarnOut].fillna(1, inplace=True)
 
   with c.time_block("Computing 14d contributor stats"):
-    recentStats = _compute_14d_stats(ratings, noteStatusHistory)
+    recentStats = _compute_past_n_days_stats(
+      ratings, noteStatusHistory, 14, True, c.crhTotal14dKey, c.crnhTotal14dKey, c.nmrTotal14dKey
+    )
     helpfulnessScores = helpfulnessScores.merge(
       recentStats,
       how="left",
       on=c.raterParticipantIdKey,
-      unsafeAllowed={c.crhTotal14dKey, c.crnhTotal14dKey, c.nmrTotal14dKey},
     )
     helpfulnessScores = helpfulnessScores.fillna(
       {c.crhTotal14dKey: 0.0, c.crnhTotal14dKey: 0.0, c.nmrTotal14dKey: 0.0}
@@ -1251,6 +1377,40 @@ def _compute_helpfulness_scores(
         c.nmrTotal14dKey: pd.Int64Dtype(),
       }
     )
+  with c.time_block("Computing 90d contributor stats"):
+    recentStats = _compute_past_n_days_stats(
+      ratings,
+      noteStatusHistory,
+      90,
+      False,
+      c.crhTotal90dKey,
+      c.crnhTotal90dKey,
+      c.nmrTotal90dKey,
+    )
+    helpfulnessScores = helpfulnessScores.merge(
+      recentStats,
+      how="left",
+      on=c.raterParticipantIdKey,
+    )
+    helpfulnessScores = helpfulnessScores.fillna(
+      {c.crhTotal90dKey: 0.0, c.crnhTotal90dKey: 0.0, c.nmrTotal90dKey: 0.0}
+    ).astype(
+      {
+        c.crhTotal90dKey: pd.Int64Dtype(),
+        c.crnhTotal90dKey: pd.Int64Dtype(),
+        c.nmrTotal90dKey: pd.Int64Dtype(),
+      }
+    )
+  with c.time_block("Computing 14d and 90d rating counts"):
+    for nDays, countColumn in [(14, c.ratingsMade14dKey), (90, c.ratingsMade90dKey)]:
+      helpfulnessScores = helpfulnessScores.merge(
+        _compute_past_n_days_rating_counts(ratings, nDays, countColumn),
+        how="left",
+        on=c.raterParticipantIdKey,
+      )
+      helpfulnessScores = helpfulnessScores.fillna({countColumn: 0.0}).astype(
+        {countColumn: pd.Int64Dtype()}
+      )
 
   return helpfulnessScores
 
@@ -1266,9 +1426,9 @@ def _add_deprecated_columns(scoredNotes: pd.DataFrame) -> pd.DataFrame:
   """
   for column, columnType in c.deprecatedNoteModelOutputTSVColumnsAndTypes:
     assert column not in scoredNotes.columns
-    if columnType == np.double:
+    if columnType == "double[pyarrow]":
       scoredNotes[column] = np.nan
-    elif columnType == str:
+    elif columnType == "string[pyarrow]":
       scoredNotes[column] = ""
     elif columnType == "category":
       scoredNotes[column] = np.nan
@@ -1354,6 +1514,7 @@ def run_prescoring(
   pd.DataFrame,
   sklearn.pipeline.Pipeline,
   PFlipPlusModel,
+  PCRHModel,
   c.PrescoringMetaOutput,
   pd.DataFrame,
   pd.DataFrame,
@@ -1397,25 +1558,14 @@ def run_prescoring(
     useStableInitialization=useStableInitialization,
   )
 
-  # Attempt to convert IDs to Int64 before prescoring.  We expect this to succeed in production,
-  # fail when running on public data and fail in some unit tests.
-  conversion = False
-  try:
-    # Complete all three conversions before doing any updates, so if there are any errors the
-    # updates don't happen.
-    ratingIds = ratings[c.raterParticipantIdKey].astype(pd.Int64Dtype())
-    noteStatusHistoryIds = noteStatusHistory[c.noteAuthorParticipantIdKey].astype(pd.Int64Dtype())
-    userEnrollmentIds = userEnrollment[c.participantIdKey].astype(pd.Int64Dtype())
-    ratings[c.raterParticipantIdKey] = ratingIds
-    noteStatusHistory[c.noteAuthorParticipantIdKey] = noteStatusHistoryIds
-    userEnrollment[c.participantIdKey] = userEnrollmentIds
-    del ratingIds, noteStatusHistoryIds, userEnrollmentIds
-    logger.info(
-      "User IDs for ratings, noteStatusHistory and userEnrollment converted to Int64Dtype."
+  if runParallel:
+    ensure_int64_participant_ids(
+      [
+        (ratings, c.raterParticipantIdKey),
+        (noteStatusHistory, c.noteAuthorParticipantIdKey),
+        (userEnrollment, c.participantIdKey),
+      ]
     )
-    conversion = True
-  except ValueError as e:
-    logger.info(f"Error converting user IDs to ints.  IDs will remain as strings. {repr(e)}")
   with c.time_block("Logging Prescoring Inputs RAM usage before _run_scorers"):
     logger.info(get_df_info(notes, "notes"))
     logger.info(get_df_info(ratings, "ratings"))
@@ -1446,28 +1596,21 @@ def run_prescoring(
   del scorers
   gc.collect()
 
-  with c.time_block("Logging Prescoring Results RAM usage (before conversion)"):
+  if runParallel:
+    logger.info("Aligning participant ID dtypes after parallel prescoring.")
+    _align_participant_id_dtypes_with_notes(
+      notes, ratings, noteStatusHistory, userEnrollment, prescoringRaterModelOutput
+    )
+    logger.info("Aligned participant ID dtypes after parallel prescoring.")
+
+  with c.time_block("Logging Prescoring Results RAM usage before fitting post-prescoring models"):
     logger.info(get_df_info(notes, "notes"))
     logger.info(get_df_info(ratings, "ratings"))
     logger.info(get_df_info(noteStatusHistory, "noteStatusHistory"))
     logger.info(get_df_info(userEnrollment, "userEnrollment"))
     logger.info(get_df_info(prescoringNoteModelOutput, "prescoringNoteModelOutput"))
     logger.info(get_df_info(prescoringRaterModelOutput, "prescoringRaterModelOutput"))
-  # Restore IDs as string objects now that prescoring is over and memory pressure is relaxed.
-  if conversion:
-    logger.info("Restoring string IDs.")
-    ratings[c.raterParticipantIdKey] = ratings[c.raterParticipantIdKey].astype(str)
-    noteStatusHistory[c.noteAuthorParticipantIdKey] = noteStatusHistory[
-      c.noteAuthorParticipantIdKey
-    ].astype(str)
-    userEnrollment[c.participantIdKey] = userEnrollment[c.participantIdKey].astype(str)
-    # Notice that we also do conversion on the prescoring results.
-    prescoringRaterModelOutput[c.raterParticipantIdKey] = prescoringRaterModelOutput[
-      c.raterParticipantIdKey
-    ].astype(str)
-    logger.info("Restoration of original string IDs complete.")
-
-  with c.time_block("Logging Prescoring Results RAM usage (after conversion)"):
+  with c.time_block("Logging Prescoring Results RAM usage after parallel scoring"):
     logger.info(get_df_info(notes, "notes"))
     logger.info(get_df_info(ratings, "ratings"))
     logger.info(get_df_info(noteStatusHistory, "noteStatusHistory"))
@@ -1477,9 +1620,6 @@ def run_prescoring(
 
   prescoringRaterModelOutput = pd.concat(
     [prescoringRaterModelOutput, postSelectionSimilarityValues],
-    unsafeAllowed={
-      c.postSelectionValueKey,
-    },
   )
   with c.time_block("Logging Prescoring Results RAM usage (after concatenation)"):
     logger.info(get_df_info(prescoringRaterModelOutput, "prescoringRaterModelOutput"))
@@ -1487,6 +1627,17 @@ def run_prescoring(
   with c.time_block("Fitting pflip model"):
     pflipPlusModel = PFlipPlusModel(seed=seed)
     pflipPlusModel.fit(notes, ratings, noteStatusHistory, prescoringRaterModelOutput)
+
+  with c.time_block("Fitting PCRH model"):
+    pcrhModel = PCRHModel(seed=seed)
+    pcrhModel.fit(
+      notes,
+      ratings,
+      noteStatusHistory,
+      prescoringRaterModelOutput,
+      userEnrollment=userEnrollment,
+      noteTopics=noteTopics,
+    )
 
   with c.time_block("Computing empirical prior."):
     currentTime = time.time()
@@ -1520,7 +1671,9 @@ def run_prescoring(
       ].dropna(),
     )
     logger.info(f"recent core ratings for empirical prior {len(priorRatings)}")
-    priorRatings[c.raterParticipantIdKey] = priorRatings[c.raterParticipantIdKey].astype(str)
+    priorRatings[c.raterParticipantIdKey] = priorRatings[c.raterParticipantIdKey].astype(
+      prescoringRaterModelOutput[c.raterParticipantIdKey].dtype
+    )
     priorRatings = (
       priorRatings[[c.noteIdKey, c.raterParticipantIdKey, c.helpfulNumKey]]
       .merge(
@@ -1559,6 +1712,7 @@ def run_prescoring(
       prescoringRaterModelOutput=prescoringRaterModelOutput,
       noteTopicClassifier=noteTopicClassifierPipe,
       pflipClassifier=pflipPlusModel,
+      pcrhClassifier=pcrhModel,
       prescoringMetaOutput=prescoringMetaOutput,
       checkFlips=checkFlips,
       enableNmrDueToMinStableCrhTime=enableNmrDueToMinStableCrhTime,
@@ -1573,6 +1727,7 @@ def run_prescoring(
     prescoringRaterModelOutput,
     noteTopicClassifierPipe,
     pflipPlusModel,
+    pcrhModel,
     prescoringMetaOutput,
     scoredNotes,
     empiricalTotals,
@@ -1588,6 +1743,23 @@ def run_contributor_scoring(
   userEnrollment: pd.DataFrame,
   strictColumns: bool = True,
 ) -> pd.DataFrame:
+  ratings[c.raterParticipantIdKey] = ratings[c.raterParticipantIdKey].astype(str)
+  prescoringRaterModelOutput[c.raterParticipantIdKey] = prescoringRaterModelOutput[
+    c.raterParticipantIdKey
+  ].astype(str)
+  noteStatusHistory[c.noteAuthorParticipantIdKey] = noteStatusHistory[
+    c.noteAuthorParticipantIdKey
+  ].astype(str)
+  userEnrollment[c.participantIdKey] = userEnrollment[c.participantIdKey].astype(str)
+  if c.noteAuthorParticipantIdKey in scoredNotes.columns:
+    scoredNotes[c.noteAuthorParticipantIdKey] = scoredNotes[c.noteAuthorParticipantIdKey].astype(
+      str
+    )
+  if c.noteAuthorParticipantIdKey in auxiliaryNoteInfo.columns:
+    auxiliaryNoteInfo[c.noteAuthorParticipantIdKey] = auxiliaryNoteInfo[
+      c.noteAuthorParticipantIdKey
+    ].astype(str)
+
   helpfulnessScores = convert_prescoring_rater_model_output_to_coalesced_helpfulness_scores(
     prescoringRaterModelOutput, userEnrollment
   )
@@ -1610,8 +1782,6 @@ def run_contributor_scoring(
 
 
 def determine_which_notes_to_rescore(
-  notes: pd.DataFrame,
-  ratings: pd.DataFrame,
   noteStatusHistory: pd.DataFrame,
   previousRatingCutoffTimestampMillis: Optional[int] = None,
   scoreRecentNotesMinimumFrequencyMillis: Optional[int] = 1000 * 60 * 60 * 24,  # 1 day
@@ -1619,12 +1789,23 @@ def determine_which_notes_to_rescore(
   scoreRecentlyFlippedNotesMinimumFrequencyMillis: Optional[int] = 1000 * 60 * 60 * 1,  # 1 hour
   recentlyFlippedNoteAgeCutoffMillis: Optional[int] = 1000 * 60 * 60 * 24,  # 1 day
   lockingRescoreWindowMillis: int = 1000 * 60 * 60 * 24 * 7,  # 7 days
-) -> Tuple[List[c.NoteSubset], set]:
+  precomputedNotesWithNewRatings: Optional[set] = None,
+  ratings: Optional[
+    pd.DataFrame
+  ] = None,  # Required when precomputedNotesWithNewRatings is not provided.
+) -> c.NotesToRescore:
   notesToRescoreSet = set()
   noteSubsets = []
 
   # 1. Rescore all notes with a new rating since last scoring run.
-  if previousRatingCutoffTimestampMillis is not None:
+  if precomputedNotesWithNewRatings is not None:
+    notesWithNewRatings = precomputedNotesWithNewRatings
+    logger.info(f"1. Num notes with new ratings (precomputed): {len(notesWithNewRatings)}")
+    notesToRescoreSet.update(notesWithNewRatings)
+  elif previousRatingCutoffTimestampMillis is not None:
+    assert (
+      ratings is not None
+    ), "ratings required when precomputedNotesWithNewRatings is not provided"
     notesWithNewRatings = set(
       ratings.loc[ratings[c.createdAtMillisKey] > previousRatingCutoffTimestampMillis, c.noteIdKey]
     )
@@ -1800,10 +1981,10 @@ def determine_which_notes_to_rescore(
         * {len(recentlyFlippedNotesNotRescoredRecentlyEnough)} notes that flipped status recently and not rescored recently enough.
         * {len(nmrDueToMinStableCrhTimeNotes)} notes that were NMRed due to MinStableCrhTime was not met.
         * {len(lockingEligibleUnlockedNotes)} recent notes that are eligible to lock but haven't locked yet.
-      Overall: {len(notesToRescoreSet)} notes to rescore, out of {len(notes)} total.\n----"""
+      Overall: {len(notesToRescoreSet)} notes to rescore, out of {len(noteStatusHistory)} in noteStatusHistory.\n----"""
   )
 
-  return noteSubsets, notesToRescoreSet
+  return c.NotesToRescore(noteSubsets=noteSubsets, noteIds=notesToRescoreSet)
 
 
 def run_final_note_scoring(
@@ -1831,6 +2012,9 @@ def run_final_note_scoring(
   enableNmrDueToMinStableCrhTime: bool = True,
   maxWorkers: Optional[int] = None,
   empiricalTotals: Optional[pd.DataFrame] = None,
+  pcrhClassifier: Optional[PCRHModel] = None,
+  pcrhRespectFirmReject: bool = True,
+  notesToRescore: Optional[c.NotesToRescore] = None,
 ):
   metrics = {}
   with c.time_block("Logging Final Scoring RAM usage"):
@@ -1849,12 +2033,48 @@ def run_final_note_scoring(
   # any note scored by pflip, we  compute pflip predictions before pruning the notes and
   # ratings datasets.
   with c.time_block("Computing pflip scores."):
-    # Identify set of adjacent notes to scope notes and ratings datasets.
-    pflipNoteIds = noteStatusHistory[
-      noteStatusHistory[c.timestampMillisOfNmrDueToMinStableCrhTimeKey] > 0
-    ][[c.noteIdKey]]  # Compute pflip for any note currently in stabilization.
-    logger.info(f"computing pflip for {len(pflipNoteIds)} notes in stabilization")
+    # Identify the TARGET set of notes that should receive a pflipProba score:
+    #   (1) notes currently in stabilization (held by NmrDueToMinStableCrhTime), and
+    #   (2) notes that are currently CRH and (re)gained CRH within the past 24 hours.
+    # These are the notes whose flip risk matters for correction-notification timing. pflip
+    # additionally requires every note colocated on the same tweet for peer features, so we
+    # expand to adjacent notes below -- but we track the target set itself for coverage logging.
+    pflipCrhRecencyMillis = 24 * 60 * 60 * 1000
+    firstNonNmrMillis = pd.to_numeric(
+      noteStatusHistory[c.timestampMillisOfNoteFirstNonNMRLabelKey], errors="coerce"
+    )
+    mostRecentNonNmrMillis = pd.to_numeric(
+      noteStatusHistory[c.timestampMillisOfNoteMostRecentNonNMRLabelKey], errors="coerce"
+    )
+    inStabilizationMask = noteStatusHistory[c.timestampMillisOfNmrDueToMinStableCrhTimeKey] > 0
+    isCurrentlyCrhMask = noteStatusHistory[c.currentLabelKey] == c.currentlyRatedHelpful
+    crhRecencyCutoff = c.epochMillis - pflipCrhRecencyMillis
+    recentlyCrhMask = isCurrentlyCrhMask & (
+      firstNonNmrMillis.ge(crhRecencyCutoff) | mostRecentNonNmrMillis.ge(crhRecencyCutoff)
+    )
+    pflipTargetMask = inStabilizationMask | recentlyCrhMask
+    pflipNoteIds = noteStatusHistory[pflipTargetMask][[c.noteIdKey]]
     assert len(pflipNoteIds) == pflipNoteIds[c.noteIdKey].nunique()
+    # Keep an immutable copy of the target set (pflipNoteIds is expanded to peers below).
+    pflipTargetNoteIds = pflipNoteIds.copy()
+    logger.info(
+      "pflip target selection: total=%d (in_stabilization=%d, currently_crh=%d, "
+      "recently_crh_within_24h=%d, stabilization_and_recent_crh_overlap=%d). "
+      "epochMillis=%d, crhRecencyCutoffMillis=%d (window=24h)"
+      % (
+        int(pflipTargetMask.sum()),
+        int(inStabilizationMask.sum()),
+        int(isCurrentlyCrhMask.sum()),
+        int(recentlyCrhMask.sum()),
+        int((inStabilizationMask & recentlyCrhMask).sum()),
+        c.epochMillis,
+        crhRecencyCutoff,
+      )
+    )
+    logger.info(
+      f"computing pflip for {len(pflipNoteIds)} target notes "
+      "(stabilization + recently-CRH); peers on the same tweets added next"
+    )
     pflipTweetIds = (
       notes[[c.noteIdKey, c.tweetIdKey]].merge(pflipNoteIds)[[c.tweetIdKey]].drop_duplicates()
     )
@@ -1881,6 +2101,66 @@ def run_final_note_scoring(
       pflipNotes, pflipRatings, pflipNoteStatusHistory, prescoringRaterModelOutput
     )
     logger.info(f"pflip prediction summary:\n{pflipPredictions[PFLIP_LABEL].value_counts()}")
+    # Persist the flip PROBABILITY (used by correction-notification timing) as the canonical
+    # scored-notes `pflipProba` column; PFLIP_LABEL is consumed by scoring rules then dropped below.
+    pflipPredictions = pflipPredictions.rename(columns={PFLIP_PROBA: c.pflipProbaKey})
+
+    # --- pflip target coverage diagnostics ---
+    # Reconcile which of the TARGET notes (stabilization + recently-CRH) actually received a
+    # non-null pflipProba, and bucket the misses by likely cause so the gap is explainable from
+    # stdout alone. Note IDs are canonicalized to Int64 to avoid join-key dtype mismatches.
+    def _canonical_note_ids(series):
+      return set(pd.to_numeric(series, errors="coerce").astype("Int64").dropna())
+
+    targetIds = _canonical_note_ids(pflipTargetNoteIds[c.noteIdKey])
+    if c.pflipProbaKey in pflipPredictions.columns:
+      scoredSeries = pflipPredictions.loc[pflipPredictions[c.pflipProbaKey].notna(), c.noteIdKey]
+    else:
+      # predict() produced no pflipProba column (e.g. no candidate tweets were scored at all).
+      scoredSeries = pd.Series([], dtype="object")
+    scoredIds = _canonical_note_ids(scoredSeries)
+    coveredIds = targetIds & scoredIds
+    missingIds = targetIds - scoredIds
+    logger.info(
+      f"pflip coverage: {len(coveredIds)}/{len(targetIds)} target notes received a non-null "
+      f"pflipProba; {len(missingIds)} target notes did NOT."
+    )
+    if missingIds:
+      ratingNoteIds = _canonical_note_ids(pflipRatings[c.noteIdKey])
+      tweetById = notes[[c.noteIdKey, c.tweetIdKey, c.classificationKey]].copy()
+      tweetById["_cid"] = pd.to_numeric(tweetById[c.noteIdKey], errors="coerce").astype("Int64")
+      missingMeta = tweetById[tweetById["_cid"].isin(missingIds)]
+      # tweetId may be a string in some pipelines (e.g. prescoring's internal scoring call), so
+      # coerce to numeric before the > 0 sentinel check.
+      missingTweetNumeric = pd.to_numeric(missingMeta[c.tweetIdKey], errors="coerce")
+      sentinelTweetIds = set(
+        missingMeta.loc[~missingTweetNumeric.gt(0).fillna(False), "_cid"].dropna()
+      )
+      missingClassIds = set(
+        missingMeta.loc[missingMeta[c.classificationKey].isna(), "_cid"].dropna()
+      )
+      noRatingIds = missingIds - ratingNoteIds
+      notInNotesIds = missingIds - set(tweetById["_cid"].dropna())
+      explainedIds = sentinelTweetIds | missingClassIds | noRatingIds | notInNotesIds
+      otherIds = missingIds - explainedIds
+      logger.info(
+        "pflip missing-target breakdown (reasons may overlap): sentinel_tweetId<=0_or_null=%d, "
+        "classification_null=%d, no_ratings_after_pruning=%d, note_absent_from_notes_df=%d, "
+        "other_dropped_in_feature_extraction=%d"
+        % (
+          len(sentinelTweetIds),
+          len(missingClassIds),
+          len(noRatingIds),
+          len(notInNotesIds),
+          len(otherIds),
+        )
+      )
+      logger.info(f"pflip missing-target sample noteIds (up to 30): {sorted(missingIds)[:30]}")
+      if otherIds:
+        logger.info(
+          "pflip missing-target notes dropped in feature extraction (see 'pflip feature funnel' "
+          f"lines above for the exact step); sample (up to 30): {sorted(otherIds)[:30]}"
+        )
 
   with c.time_block("Determine which notes to score."):
     if previousScoredNotes is None:
@@ -1924,10 +2204,13 @@ def run_final_note_scoring(
         ),
       ]
 
-      noteSubsetsForProdScoring, _ = determine_which_notes_to_rescore(
-        notes, ratings, noteStatusHistory, previousRatingCutoffTimestampMillis
-      )
-      for noteSubset in noteSubsetsForProdScoring:
+      if notesToRescore is None:
+        notesToRescore = determine_which_notes_to_rescore(
+          noteStatusHistory=noteStatusHistory,
+          previousRatingCutoffTimestampMillis=previousRatingCutoffTimestampMillis,
+          ratings=ratings,
+        )
+      for noteSubset in notesToRescore.noteSubsets:
         if noteSubset.description == c.RescoringRuleID.NEW_NOTES_NOT_RESCORED_RECENTLY_ENOUGH:
           noteSubsets.append(noteSubset)
     else:
@@ -1935,9 +2218,15 @@ def run_final_note_scoring(
       assert previousRatingCutoffTimestampMillis is not None
       logger.info("Previous scored notes passed; determining which notes to rescore.")
       # Filter all datasets to smaller versions which only contain notes which need to be scored.
-      noteSubsets, notesToRescoreSet = determine_which_notes_to_rescore(
-        notes, ratings, noteStatusHistory, previousRatingCutoffTimestampMillis
-      )
+      if notesToRescore is None:
+        notesToRescore = determine_which_notes_to_rescore(
+          noteStatusHistory=noteStatusHistory,
+          previousRatingCutoffTimestampMillis=previousRatingCutoffTimestampMillis,
+          ratings=ratings,
+        )
+      else:
+        logger.info("Using precomputed NotesToRescore from merge.")
+      noteSubsets, notesToRescoreSet = notesToRescore.noteSubsets, notesToRescore.noteIds
 
       scoredNotesPassthrough = previousScoredNotes[
         ~previousScoredNotes[c.noteIdKey].isin(notesToRescoreSet)
@@ -1979,6 +2268,19 @@ def run_final_note_scoring(
     topicModel = TopicModel()
     noteTopics = topicModel.get_note_topics(notesFull, noteTopicClassifiers=[noteTopicClassifier])
 
+  with c.time_block("Computing PCRH predictions."):
+    pcrhPredictions = compute_pcrh_predictions(
+      pcrhClassifier,
+      notes,
+      ratings,
+      noteStatusHistory,
+      prescoringRaterModelOutput,
+      previousScoredNotes,
+      c.epochMillis,
+      userEnrollment=userEnrollment,
+      noteTopics=noteTopics,
+    )
+
   with c.time_block("Post Selection Similarity: Final Scoring"):
     logger.info(f"Post Selection Similarity Final Scoring: begin with {len(ratings)} ratings.")
     ratings = apply_post_selection_similarity(
@@ -2001,6 +2303,17 @@ def run_final_note_scoring(
   # system tests run with full scale data and previousScoredNotes=None.
   maxWorkers = maxWorkers or (4 if previousScoredNotes is None else 6)
   logger.info(f"Number of concurrent scoring workers: {maxWorkers}")
+
+  if runParallel:
+    ensure_int64_participant_ids(
+      [
+        (ratings, c.raterParticipantIdKey),
+        (noteStatusHistory, c.noteAuthorParticipantIdKey),
+        (userEnrollment, c.participantIdKey),
+        (prescoringRaterModelOutput, c.raterParticipantIdKey),
+      ]
+    )
+
   modelResults = _run_scorers(
     args,
     scorers=list(chain(*scorers.values())),
@@ -2019,6 +2332,13 @@ def run_final_note_scoring(
     maxWorkers=maxWorkers,
   )
 
+  if runParallel:
+    logger.info("Aligning participant ID dtypes after parallel final scoring.")
+    _align_participant_id_dtypes_with_notes(
+      notes, ratings, noteStatusHistory, userEnrollment, prescoringRaterModelOutput
+    )
+    logger.info("Aligned participant ID dtypes after parallel final scoring.")
+
   scoredNotes, auxiliaryNoteInfo = combine_final_scorer_results(modelResults, noteStatusHistory)
 
   # Fill NaN values in core population sampled columns after merging all scorer results
@@ -2032,6 +2352,14 @@ def run_final_note_scoring(
       auxiliaryNoteInfo[col] = auxiliaryNoteInfo[col].fillna(0).astype(np.int64)
 
   scoredNotes = scoredNotes.merge(pflipPredictions, how="left")
+  # Guarantee the pflip column exists even when no notes were in stabilization: in that case
+  # predict() returns an empty frame whose pflip column is dropped by pd.concat, so the merge
+  # above adds nothing. Mirrors how merge_pcrh_results guarantees pcrhAboveThresholdTime.
+  if c.pflipProbaKey not in scoredNotes.columns:
+    scoredNotes[c.pflipProbaKey] = np.nan
+  scoredNotes, auxiliaryNoteInfo = merge_pcrh_results(
+    pcrhPredictions, scoredNotes, auxiliaryNoteInfo
+  )
   scoredNotes, newNoteStatusHistory, auxiliaryNoteInfo = post_note_scoring(
     scorers,
     scoredNotes,
@@ -2058,7 +2386,6 @@ def run_final_note_scoring(
     scoredNotesPassthrough[c.rescoringActiveRulesKey] = ""
     scoredNotes = pd.concat(
       [scoredNotes, scoredNotesPassthrough],
-      unsafeAllowed=[c.topicNoteConfidentKey],  # concat 'O' with BooleanDtype
     )
 
     # Convert auxiliaryNoteInfo dtypes to match auxiliaryNoteInfoPassthrough
@@ -2071,6 +2398,19 @@ def run_final_note_scoring(
     )
 
     newNoteStatusHistory = pd.concat([newNoteStatusHistory, noteStatusHistoryPassthrough])
+
+  previousPcrhNoteIds, previousPcrhTimes = collect_previous_pcrh_state(
+    previousScoredNotes, noteStatusHistory
+  )
+  scoredNotes = suppress_pcrh_ineligible(
+    scoredNotes,
+    previousPcrhNoteIds=previousPcrhNoteIds or None,
+    previousPcrhTimes=previousPcrhTimes or None,
+    currentTimeMillis=c.epochMillis,
+  )
+  newNoteStatusHistory[c.pcrhAboveThresholdTimeKey] = newNoteStatusHistory[c.noteIdKey].map(
+    scoredNotes.set_index(c.noteIdKey)[c.pcrhAboveThresholdTimeKey]
+  )
 
   return scoredNotes, newNoteStatusHistory, auxiliaryNoteInfo, metrics
 
@@ -2131,6 +2471,8 @@ def post_note_scoring(
       noteStatusHistory
     ), "noteStatusHistory should be complete, and all notes should be scored."
 
+  scoredNotes = suppress_pcrh_ineligible(scoredNotes)
+
   # Merge scoring results into noteStatusHistory, check flip rates, and set rescoringActiveRules.
   with c.time_block("Post-scorers: Update note status history"):
     mergedNoteStatuses = note_status_history.merge_old_and_new_note_statuses(
@@ -2171,6 +2513,8 @@ def post_note_scoring(
     scoredNotes[c.timestampMillisOfNmrDueToMinStableCrhTimeKey] = newNoteStatusHistory[
       c.timestampMillisOfNmrDueToMinStableCrhTimeKey
     ]
+    # Set by run_combine_scoring_outputs from the minute partition path.
+    scoredNotes[c.timestampMinuteOfFinalScoringOutput] = np.nan
 
     scoredNotes = _add_deprecated_columns(scoredNotes)
     scoredNotes = scoredNotes.drop(columns=PFLIP_LABEL)
@@ -2222,6 +2566,8 @@ def run_scoring(
   previousScoredNotes: Optional[pd.DataFrame] = None,
   previousAuxiliaryNoteInfo: Optional[pd.DataFrame] = None,
   previousRatingCutoffTimestampMillis: Optional[int] = 0,
+  maxWorkers: Optional[int] = None,
+  skipPss: bool = False,
 ):
   """Runs both phases of scoring consecutively. Only for adhoc/testing use.
   In prod, we run each phase as a separate binary.
@@ -2267,13 +2613,26 @@ def run_scoring(
     filterPrescoringInputToSimulateDelayInHours,
   )
 
-  postSelectionSimilarityValues = run_rater_clustering(notes=notes, ratings=ratings)
+  if skipPss:
+    # Validation / debug path: skip the multi-hour PSS pair-counts step and feed
+    # an empty PSS DataFrame downstream. `apply_post_selection_similarity`
+    # tolerates this (no correlated raters identified, no filtering applied) and
+    # `prescoringRaterModelOutput`'s concat with PSS values becomes a no-op.
+    # Output scores will differ slightly from a full run because PSS-based
+    # correlated-rater suppression is disabled.
+    logger.info("skipPss=True: skipping run_rater_clustering; using empty PSS DataFrame.")
+    postSelectionSimilarityValues = pd.DataFrame(
+      columns=[c.raterParticipantIdKey, c.postSelectionValueKey, c.quasiCliqueValueKey]
+    )
+  else:
+    postSelectionSimilarityValues = run_rater_clustering(notes=notes, ratings=ratings)
 
   (
     prescoringNoteModelOutput,
     prescoringRaterModelOutput,
     prescoringNoteTopicClassifier,
     prescoringPflipClassifier,
+    prescoringPcrhClassifier,
     prescoringMetaOutput,
     prescoringScoredNotes,
     empiricalTotals,
@@ -2291,6 +2650,7 @@ def run_scoring(
     useStableInitialization=useStableInitialization,
     checkFlips=False,
     previousRatingCutoffTimestampMillis=previousRatingCutoffTimestampMillis,
+    maxWorkers=maxWorkers,
   )
 
   logger.info("We invoked run_scoring and are now in between prescoring and scoring.")
@@ -2324,12 +2684,14 @@ def run_scoring(
     prescoringRaterModelOutput=prescoringRaterModelOutput,
     noteTopicClassifier=prescoringNoteTopicClassifier,
     pflipClassifier=prescoringPflipClassifier,
+    pcrhClassifier=prescoringPcrhClassifier,
     prescoringMetaOutput=prescoringMetaOutput,
     checkFlips=checkFlips,
     previousScoredNotes=previousScoredNotes,
     previousAuxiliaryNoteInfo=previousAuxiliaryNoteInfo,
     previousRatingCutoffTimestampMillis=previousRatingCutoffTimestampMillis,
     empiricalTotals=empiricalTotals,
+    maxWorkers=maxWorkers,
   )
 
   logger.info("Starting contributor scoring")

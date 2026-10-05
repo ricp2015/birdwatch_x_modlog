@@ -4,21 +4,50 @@
     "f1_pos": 0.9167180752621839,
     "f1_neg": 0.4444444444444444,
     "n_items": 932,
-    "roc_auc": 0.8997158200698021
+    "n_native_items": 932,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6805812598533141,
+    "native_f1_pos": 0.9167180752621839,
+    "native_f1_neg": 0.4444444444444444,
+    "roc_auc": 0.8997158200698022
   },
   "val": {
     "macro_f1": 0.7331183278638408,
     "f1_pos": 0.9167158889545186,
     "f1_neg": 0.549520766773163,
     "n_items": 1003,
-    "roc_auc": 0.8146100116414434
+    "n_native_items": 1003,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7331183278638408,
+    "native_f1_pos": 0.9167158889545186,
+    "native_f1_neg": 0.549520766773163,
+    "roc_auc": 0.8146100116414435
   },
   "test": {
     "macro_f1": 0.6231383633104309,
     "f1_pos": 0.892919836161498,
     "f1_neg": 0.35335689045936397,
     "n_items": 996,
+    "n_native_items": 996,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6231383633104309,
+    "native_f1_pos": 0.892919836161498,
+    "native_f1_neg": 0.35335689045936397,
     "roc_auc": 0.7764163048188778
+  },
+  "net_vote_fallback": {
+    "threshold": 1.2515644555694792,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,14 +72,14 @@
       "accuracy": 0.8826242952332137,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8898255783805165
+      "roc_auc": 0.8898255296902673
     },
     "test": {
       "macro_f1": 0.8099358173493494,
       "accuracy": 0.893415527561869,
       "n_votes": 11193,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8969076722400553
+      "roc_auc": 0.8969076186229719
     }
   },
   "boc_stacking": {
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 16,
     "eligibility_components": 12,
-    "prediction_explained_variance": 0.9873703718185425,
+    "prediction_explained_variance": 0.9873701333999634,
     "eligibility_explained_variance": 0.9999980926513672,
     "context_features": 31,
     "classifier": "standardized class-balanced L2 logistic regression",

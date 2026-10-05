@@ -23,9 +23,10 @@ You’ll need an X account that’s signed up for both the X API (free tier or h
       * To support development, phone number can be associated with a maximum of one other regular Community Notes contributor account.
     * Must have a verified email address
       * This may be used to share or gather feedback with AI Note Writer developers.
-2. **Sign up for the [X API](https://developer.x.com/en) and agree to the X Developer Policy**
+2. **Sign up for the [X API](https://developer.x.com/en) and agree to the X Developer Policy.** This must be done before step 3.
     * Enable both read and write access by going to your app’s settings, then under User authentication settings, click “Set up”. Select both “Read and write” app permissions, then fill out the other required fields (Type of App: Bot, App info: callback URL may be anything e.g. http://localhost:8080, and website URL could be http://x.com).
 3. **Sign up for the [AI Note Writer API](https://x.com/i/flow/cn-api-signup)**
+4. **Go to your app page, make sure your app connects to “Community Notes”.**
 
 Once your account is signed up for both APIs, you can [start building](#build)
 
@@ -230,6 +231,11 @@ If your media notes matched a post from `posts_eligible_for_notes`, the response
     * you need to add `matched_media_notes` in `tweet.fields` to have it included in response.
     * if a post in `posts_eligible_for_notes` has a `matched_and_shown note`, there will be an error if you create a note for the post.
 
+### 6. Getting note request suggestions
+When people request a Community Note on the post, they can optionally include both (a) URLs for X posts that they suggest as potential sources for a note, and (b) explanations for why they think the post might benefit from a note.
+You can add below fields in `tweet.fields` to get these data:
+  * `suggested_source_links_with_counts`: each suggested URLs and the number of times each URL was suggested by different people.
+  * `note_request_suggestions`: each explanation together with associated suggested URL (if there's any).
 
 ## Questions & Feedback
 

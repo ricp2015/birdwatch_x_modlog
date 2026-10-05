@@ -4,21 +4,50 @@
     "f1_pos": 0.9015625,
     "f1_neg": 0.32978723404255317,
     "n_items": 734,
-    "roc_auc": 0.6086436170212766
+    "n_native_items": 734,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6156748670212766,
+    "native_f1_pos": 0.9015625,
+    "native_f1_neg": 0.32978723404255317,
+    "roc_auc": 0.6086269946808511
   },
   "val": {
-    "macro_f1": 0.6806670194772177,
-    "f1_pos": 0.9144475920679886,
+    "macro_f1": 0.680715436233263,
+    "f1_pos": 0.9145444255800792,
     "f1_neg": 0.4468864468864469,
-    "n_items": 1019,
+    "n_items": 1020,
+    "n_native_items": 1019,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990196078431373,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6806670194772177,
+    "native_f1_pos": 0.9144475920679886,
+    "native_f1_neg": 0.4468864468864469,
     "roc_auc": 0.65247375606082
   },
   "test": {
-    "macro_f1": 0.6438370765131329,
-    "f1_pos": 0.9092957746478874,
-    "f1_neg": 0.3783783783783784,
-    "n_items": 1017,
+    "macro_f1": 0.6429559204840103,
+    "f1_pos": 0.9089887640449438,
+    "f1_neg": 0.3769230769230769,
+    "n_items": 1020,
+    "n_native_items": 1017,
+    "n_fallback_items": 3,
+    "score_coverage": 0.9970588235294118,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6438370765131329,
+    "native_f1_pos": 0.9092957746478874,
+    "native_f1_neg": 0.3783783783783784,
     "roc_auc": 0.6686502637377312
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.8877853284544346,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8869548858209697
+      "roc_auc": 0.8869549845253708
     },
     "test": {
       "macro_f1": 0.7998026786998073,
       "accuracy": 0.8916673803202877,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8930077217608099
+      "roc_auc": 0.89300772176081
     }
   },
   "ensemble": {
@@ -127,6 +156,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w080",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

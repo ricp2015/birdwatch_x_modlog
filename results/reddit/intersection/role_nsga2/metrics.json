@@ -1,17 +1,38 @@
 {
   "val": {
-    "macro_f1": 0.6501012907333449,
-    "f1_pos": 0.9104589917231001,
-    "f1_neg": 0.38974358974358975,
-    "n_items": 762,
-    "roc_auc": 0.5686854561101549
+    "macro_f1": 0.7174738841405508,
+    "f1_pos": 0.9135802469135802,
+    "f1_neg": 0.5213675213675214,
+    "n_items": 765,
+    "n_native_items": 762,
+    "n_fallback_items": 3,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7172729079705824,
+    "native_f1_pos": 0.9131782945736434,
+    "native_f1_neg": 0.5213675213675214,
+    "roc_auc": 0.5487767396115073
   },
   "test": {
-    "macro_f1": 0.6347785945101381,
-    "f1_pos": 0.9097688292319165,
-    "f1_neg": 0.35978835978835977,
-    "n_items": 765,
-    "roc_auc": 0.5699398496240602
+    "macro_f1": 0.6650473521977094,
+    "f1_pos": 0.8938807126258714,
+    "f1_neg": 0.43621399176954734,
+    "n_items": 767,
+    "n_native_items": 765,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9973924380704041,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6662132334069093,
+    "native_f1_pos": 0.8944099378881988,
+    "native_f1_neg": 0.4380165289256198,
+    "roc_auc": 0.5810977443609022
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 762,
@@ -25,7 +46,7 @@
       "accuracy": 0.8869200279785497,
       "n_votes": 8578,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.889863776564874
+      "roc_auc": 0.8898638684097726
     },
     "test": {
       "macro_f1": 0.8057799800271852,
@@ -87,6 +108,7 @@
   "outer_split_protocol": {
     "split": "intersection",
     "split_type": "seeded_item",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

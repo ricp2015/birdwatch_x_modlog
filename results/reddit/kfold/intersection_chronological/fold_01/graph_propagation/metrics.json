@@ -4,21 +4,50 @@
     "f1_pos": 0.8824902723735408,
     "f1_neg": 0.37344398340248963,
     "n_items": 763,
+    "n_native_items": 763,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6279671278880152,
+    "native_f1_pos": 0.8824902723735408,
+    "native_f1_neg": 0.37344398340248963,
     "roc_auc": 0.7983303912915564
   },
   "val": {
-    "macro_f1": 0.8010762385762386,
-    "f1_pos": 0.9398148148148148,
-    "f1_neg": 0.6623376623376623,
-    "n_items": 509,
+    "macro_f1": 0.798396419914227,
+    "f1_pos": 0.9387283236994219,
+    "f1_neg": 0.6580645161290323,
+    "n_items": 510,
+    "n_native_items": 509,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9980392156862745,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.8010762385762386,
+    "native_f1_pos": 0.9398148148148148,
+    "native_f1_neg": 0.6623376623376623,
     "roc_auc": 0.5983836384628072
   },
   "test": {
-    "macro_f1": 0.6011237828464719,
-    "f1_pos": 0.8934240362811792,
-    "f1_neg": 0.3088235294117647,
-    "n_items": 509,
-    "roc_auc": 0.7619795049433499
+    "macro_f1": 0.5994907870481355,
+    "f1_pos": 0.8924122310305775,
+    "f1_neg": 0.30656934306569344,
+    "n_items": 510,
+    "n_native_items": 509,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9980392156862745,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6011237828464719,
+    "native_f1_pos": 0.8934240362811792,
+    "native_f1_neg": 0.3088235294117647,
+    "roc_auc": 0.7619614635202425
+  },
+  "net_vote_fallback": {
+    "threshold": 3.254067584480623,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 763,
@@ -34,14 +63,14 @@
       "accuracy": 0.8541513592946363,
       "n_votes": 5444,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8280282204579097
+      "roc_auc": 0.8280285162078354
     },
     "test": {
       "macro_f1": 0.7100925024331106,
       "accuracy": 0.8495826114348717,
       "n_votes": 6349,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8197386262381032
+      "roc_auc": 0.8197389490811886
     }
   },
   "graph_attention": {
@@ -97,7 +126,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.731303324507208
+        "policy_train_auc": 0.7316784348337747
       }
     ],
     "n_graph_users": 1612,

@@ -4,21 +4,50 @@
     "f1_pos": 0.8878576952822892,
     "f1_neg": 0.3776824034334764,
     "n_items": 763,
+    "n_native_items": 763,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6327700493578828,
+    "native_f1_pos": 0.8878576952822892,
+    "native_f1_neg": 0.3776824034334764,
     "roc_auc": 0.5707708149455722
   },
   "val": {
-    "macro_f1": 0.7785993910395824,
-    "f1_pos": 0.9256198347107438,
-    "f1_neg": 0.631578947368421,
-    "n_items": 509,
+    "macro_f1": 0.7762176393154893,
+    "f1_pos": 0.9245283018867925,
+    "f1_neg": 0.627906976744186,
+    "n_items": 510,
+    "n_native_items": 509,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9980392156862745,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7785993910395824,
+    "native_f1_pos": 0.9256198347107438,
+    "native_f1_neg": 0.631578947368421,
     "roc_auc": 0.69333113420199
   },
   "test": {
-    "macro_f1": 0.6404070466570466,
-    "f1_pos": 0.8912037037037037,
-    "f1_neg": 0.38961038961038963,
-    "n_items": 509,
-    "roc_auc": 0.6373673955401603
+    "macro_f1": 0.6386350922990863,
+    "f1_pos": 0.8901734104046243,
+    "f1_neg": 0.3870967741935484,
+    "n_items": 510,
+    "n_native_items": 509,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9980392156862745,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6404070466570466,
+    "native_f1_pos": 0.8912037037037037,
+    "native_f1_neg": 0.38961038961038963,
+    "roc_auc": 0.6373493541170528
+  },
+  "net_vote_fallback": {
+    "threshold": 3.254067584480623,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.8541513592946363,
       "n_votes": 5444,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8280282204579097
+      "roc_auc": 0.8280285162078354
     },
     "test": {
       "macro_f1": 0.7100925024331106,
       "accuracy": 0.8495826114348717,
       "n_votes": 6349,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8197386262381032
+      "roc_auc": 0.8197389490811886
     }
   },
   "ensemble": {

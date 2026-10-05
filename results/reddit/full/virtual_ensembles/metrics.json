@@ -4,21 +4,50 @@
     "f1_pos": 0.8424933259883893,
     "f1_neg": 0.416758198650557,
     "n_items": 14986,
-    "roc_auc": 0.6877753310159405
+    "n_native_items": 14986,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6296257623194732,
+    "native_f1_pos": 0.8424933259883893,
+    "native_f1_neg": 0.416758198650557,
+    "roc_auc": 0.6877751903974441
   },
   "val": {
-    "macro_f1": 0.6641265890558309,
-    "f1_pos": 0.8383024765568646,
-    "f1_neg": 0.48995070155479714,
-    "n_items": 10955,
-    "roc_auc": 0.7314669917017289
+    "macro_f1": 0.6637050011893721,
+    "f1_pos": 0.8381959712401212,
+    "f1_neg": 0.48921403113862316,
+    "n_items": 11080,
+    "n_native_items": 10955,
+    "n_fallback_items": 125,
+    "score_coverage": 0.9887184115523465,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6641265890558309,
+    "native_f1_pos": 0.8383024765568646,
+    "native_f1_neg": 0.48995070155479714,
+    "roc_auc": 0.7314669009199553
   },
   "test": {
-    "macro_f1": 0.6453095262342012,
-    "f1_pos": 0.8269486404833837,
-    "f1_neg": 0.46367041198501874,
-    "n_items": 10945,
-    "roc_auc": 0.7399348015352981
+    "macro_f1": 0.6442170737008404,
+    "f1_pos": 0.8269242234543612,
+    "f1_neg": 0.4615099239473196,
+    "n_items": 11082,
+    "n_native_items": 10945,
+    "n_fallback_items": 137,
+    "score_coverage": 0.9876376105396137,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6453095262342012,
+    "native_f1_pos": 0.8269486404833837,
+    "native_f1_neg": 0.46367041198501874,
+    "roc_auc": 0.7399346422304571
+  },
+  "net_vote_fallback": {
+    "threshold": -0.7509386733416648,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.8188500547761247,
       "n_votes": 28297,
       "post_embedding_coverage": 0.9998194945848375,
-      "roc_auc": 0.8483144889407191
+      "roc_auc": 0.8483146281125243
     },
     "test": {
       "macro_f1": 0.7595864077547653,
       "accuracy": 0.8215023875703799,
       "n_votes": 28062,
       "post_embedding_coverage": 0.9996390543223245,
-      "roc_auc": 0.8527440305112319
+      "roc_auc": 0.8527440271632056
     }
   },
   "ensemble": {
@@ -75,19 +104,19 @@
         },
         {
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.6616345767745029
+          "inner_tune_auc": 0.6616349658686604
         },
         {
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.661622514855615
+          "inner_tune_auc": 0.6616217366672996
         },
         {
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.6616178457257229
+          "inner_tune_auc": 0.6616174566315651
         },
         {
           "regularization_c": 1.0,
-          "inner_tune_auc": 0.6616166784432498
+          "inner_tune_auc": 0.6616166784432499
         }
       ],
       "selection_metric": "ROC-AUC",
@@ -127,6 +156,7 @@
   "outer_split_protocol": {
     "split": "full",
     "split_type": "seeded_item",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

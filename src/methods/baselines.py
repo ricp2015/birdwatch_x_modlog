@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
+    f1_score,
     precision_recall_curve,
     precision_recall_fscore_support,
     roc_auc_score,
@@ -131,8 +132,8 @@ def calibrate_global_threshold(
     grid: np.ndarray = THRESHOLD_GRID,
 ) -> Tuple[float, pd.DataFrame]:
     """Calibrate global threshold on validation data."""
-    merged = val_labels.merge(scores_df[["item_id", "score"]], on="item_id", how="left")
-    merged["score"] = merged["score"].fillna(0.0)
+    merged = val_labels.merge(scores_df[["item_id", "score"]], on="item_id", how="inner")
+    merged = merged.dropna(subset=["score"])
     y_true = merged["label"].values
     scores = merged["score"].values
     records = []
@@ -205,8 +206,8 @@ def calibrate_per_subreddit(
     min_items: int = MIN_SUB_VAL_ITEMS,
 ) -> Dict[str, float]:
     """Calibrate per subreddit on validation data."""
-    merged = val_labels_full.merge(scores_df[["item_id", "score"]], on="item_id", how="left")
-    merged["score"] = merged["score"].fillna(0.0)
+    merged = val_labels_full.merge(scores_df[["item_id", "score"]], on="item_id", how="inner")
+    merged = merged.dropna(subset=["score"])
 
     sub_thresholds: Dict[str, float] = {}
     for sub, group in merged.groupby("community"):
@@ -235,19 +236,24 @@ def evaluate_fold(
     scores_df: pd.DataFrame,
     test_df: pd.DataFrame,
     predictions: np.ndarray,
-    fallback_scores: Optional[Dict[str, float]] = None,
     auc_observed_only: bool = False,
+    omit_missing_scores: bool = False,
 ) -> Dict:
     """Evaluate fold and return its metrics."""
     test_labels = get_item_labels(test_df)
     items_test = test_labels.merge(scores_df, on="item_id", how="left")
+    n_test_items = int(len(items_test))
     n_missing_score = int(items_test["score"].isna().sum())
     observed_score = items_test["score"].notna()
-    if fallback_scores:
-        fallback_series = items_test["item_id"].map(fallback_scores)
-        items_test["score"] = items_test["score"].fillna(fallback_series).fillna(0.0)
+    score_coverage = float(observed_score.mean()) if n_test_items else 0.0
+    if omit_missing_scores:
+        items_test = items_test.loc[observed_score].copy()
     else:
         items_test["score"] = items_test["score"].fillna(0.0)
+    if len(predictions) != len(items_test):
+        raise ValueError(
+            f"Prediction count {len(predictions)} does not match evaluated items {len(items_test)}"
+        )
     items_test["prediction"] = predictions
     y_true = items_test["label"].values
     y_pred = items_test["prediction"].values
@@ -262,17 +268,42 @@ def evaluate_fold(
     p_1, r_1, f_1, _ = precision_recall_fscore_support(
         y_true, y_pred, labels=[-1], average="binary", pos_label=-1, zero_division=0
     )
-    auc_mask = (
-        observed_score.to_numpy() if auc_observed_only else np.ones(len(items_test), dtype=bool)
-    )
+    auc_mask = np.ones(len(items_test), dtype=bool)
+    if auc_observed_only and not omit_missing_scores:
+        auc_mask = observed_score.to_numpy()
     try:
         auc = float(roc_auc_score((y_true[auc_mask] == 1).astype(int), scores[auc_mask]))
     except ValueError:
         auc = float("nan")
 
-    diagnostic_items = items_test.loc[observed_score] if auc_observed_only else items_test
+    diagnostic_items = items_test.loc[auc_mask] if auc_observed_only else items_test
     mean_s_pos = float(diagnostic_items.loc[diagnostic_items["label"] == 1, "score"].mean())
     mean_s_neg = float(diagnostic_items.loc[diagnostic_items["label"] == -1, "score"].mean())
+
+    native_true = y_true[auc_mask]
+    native_pred = y_pred[auc_mask]
+    native_macro_f1 = (
+        float(
+            f1_score(
+                native_true,
+                native_pred,
+                average="macro",
+                zero_division=0,
+            )
+        )
+        if len(native_true)
+        else float("nan")
+    )
+    native_f1_pos = (
+        float(f1_score(native_true, native_pred, pos_label=1, zero_division=0))
+        if len(native_true)
+        else float("nan")
+    )
+    native_f1_neg = (
+        float(f1_score(native_true, native_pred, pos_label=-1, zero_division=0))
+        if len(native_true)
+        else float("nan")
+    )
 
     try:
         prec_curve, rec_curve, thr_curve = precision_recall_curve(
@@ -297,14 +328,25 @@ def evaluate_fold(
         "roc_auc": auc,
         "polarity_correct": mean_s_pos > mean_s_neg,
         "n_items": int(len(items_test)),
+        "n_test_items": n_test_items,
         "n_items_missing_score": n_missing_score,
-        "score_coverage": float(observed_score.mean()),
+        "n_native_items": int(auc_mask.sum()),
+        "n_fallback_items": 0,
+        "score_coverage": score_coverage,
+        "final_decision_coverage": (
+            float(len(items_test) / n_test_items) if n_test_items else 0.0
+        ),
+        "native_macro_f1": native_macro_f1,
+        "native_f1_pos": native_f1_pos,
+        "native_f1_neg": native_f1_neg,
         "auc_observed_only": bool(auc_observed_only),
         "n_auc_items": int(auc_mask.sum()),
         "auc_population": (
             "items_with_observed_external_score" if auc_observed_only else "all_test_items"
         ),
-        "prediction_population": "all_test_items",
+        "prediction_population": (
+            "items_with_observed_external_score" if omit_missing_scores else "all_test_items"
+        ),
         "mean_score_approve": mean_s_pos,
         "mean_score_remove": mean_s_neg,
         "pr_curve_precision": pr_precision,
@@ -327,6 +369,9 @@ def aggregate_fold_metrics(fold_results: List[Dict], baseline_name: str, alpha: 
         "recall_neg",
         "f1_neg",
         "roc_auc",
+        "score_coverage",
+        "final_decision_coverage",
+        "native_macro_f1",
     ]
     agg = {"baseline": baseline_name, "alpha": alpha, "n_folds": len(fold_results)}
     for key in scalar_keys:
@@ -491,7 +536,7 @@ def run_bl4_kfold(
 
     # Signed log compression limits outliers.
     scores_df = external_scores[["item_id"]].copy()
-    raw = pd.to_numeric(external_scores["score"], errors="coerce").fillna(0.0)
+    raw = pd.to_numeric(external_scores["score"], errors="coerce")
     scores_df["score"] = np.sign(raw) * np.log1p(np.abs(raw))
 
     for k, val_fold in enumerate(folds):
@@ -506,10 +551,16 @@ def run_bl4_kfold(
         test_items = get_item_labels(val_fold).merge(
             scores_df[["item_id", "score"]], on="item_id", how="left"
         )
-        test_items["score"] = test_items["score"].fillna(0.0)
+        test_items = test_items.dropna(subset=["score"])
         preds = np.where(test_items["score"].values >= threshold, 1, -1)
 
-        fold_metric = evaluate_fold(scores_df, val_fold, preds, auc_observed_only=True)
+        fold_metric = evaluate_fold(
+            scores_df,
+            val_fold,
+            preds,
+            auc_observed_only=True,
+            omit_missing_scores=True,
+        )
         fold_metric["fold"] = k
         fold_metric["alpha"] = float("nan")
         fold_metric["threshold"] = threshold
@@ -542,7 +593,7 @@ def run_bl5_kfold(
 
     # Use the same fixed log compression as BL4.
     scores_df = external_scores[["item_id"]].copy()
-    raw = pd.to_numeric(external_scores["score"], errors="coerce").fillna(0.0)
+    raw = pd.to_numeric(external_scores["score"], errors="coerce")
     scores_df["score"] = np.sign(raw) * np.log1p(np.abs(raw))
 
     for k, val_fold in enumerate(folds):
@@ -578,12 +629,18 @@ def run_bl5_kfold(
             )
             .merge(scores_df[["item_id", "score"]], on="item_id", how="left")
         )
-        test_items["score"] = test_items["score"].fillna(0.0)
+        test_items = test_items.dropna(subset=["score"])
 
         thr_per_item = test_items["community"].map(sub_thr).fillna(threshold_global)
         preds = np.where(test_items["score"].values >= thr_per_item.values, 1, -1)
 
-        fold_metric = evaluate_fold(scores_df, val_fold, preds, auc_observed_only=True)
+        fold_metric = evaluate_fold(
+            scores_df,
+            val_fold,
+            preds,
+            auc_observed_only=True,
+            omit_missing_scores=True,
+        )
         fold_metric["fold"] = k
         fold_metric["alpha"] = float("nan")
         fold_metric["threshold"] = threshold_global
@@ -755,10 +812,8 @@ def run_single_split_external(
         .merge(external_scores[["item_id", "score"]], on="item_id", how="left")
     )
 
-    # Missing external scores use the item's net vote as a decision fallback.
-    # Do not mix that [-1, 1] fallback into the external score scale for AUC.
     missing_external = test_items["score"].isna()
-    test_items["score"] = test_items["score"].fillna(0.0)
+    test_items = test_items.loc[~missing_external].copy()
 
     if use_subreddit:
         val_labels_full = val_for_cal.drop_duplicates("item_id")[
@@ -770,13 +825,15 @@ def run_single_split_external(
         thr_per_item = pd.Series(threshold, index=test_items.index)
 
     preds = np.where(test_items["score"].values >= thr_per_item.values, 1, -1)
-    if missing_external.any():
-        net_vote = test_df.groupby("item_id")["vote"].mean()
-        fallback_pred = np.where(test_items["item_id"].map(net_vote).fillna(0.0) >= 0.0, 1, -1)
-        preds[missing_external.to_numpy()] = fallback_pred[missing_external.to_numpy()]
-    test_items["is_fallback"] = missing_external.to_numpy(dtype=bool)
+    test_items["decision_source"] = "archived_reddit_score"
 
-    metric = evaluate_fold(external_scores, test_df, preds, auc_observed_only=True)
+    metric = evaluate_fold(
+        external_scores,
+        test_df,
+        preds,
+        auc_observed_only=True,
+        omit_missing_scores=True,
+    )
     metric["split"] = split_label
     metric["baseline"] = baseline_name
     metric["alpha"] = float("nan")
@@ -784,18 +841,15 @@ def run_single_split_external(
     metric["validation_roc_auc_raw"] = validation_raw_auc
     metric["n_train_items"] = int(train_df["item_id"].nunique())
     metric["n_val_items"] = int(val_df["item_id"].nunique())
-    metric["n_fallback_items"] = int(metric.get("n_items_missing_score", 0))
-    metric["used_net_vote_fallback"] = bool(metric["n_fallback_items"])
-    metric["prediction_score_policy"] = "external_score_when_observed_else_net_vote"
+    metric["prediction_score_policy"] = "observed_external_score_only"
     if metric.get("n_items_missing_score", 0) > 0:
         log.warning(
-            "[%s/%s] score coverage=%.2f%% | AUC items=%d | F1 fallbacks=%d/%d",
+            "[%s/%s] score coverage=%.2f%% | evaluated=%d | omitted=%d",
             split_label,
             baseline_name,
             100.0 * metric["score_coverage"],
-            metric["n_auc_items"],
-            metric["n_fallback_items"],
             metric["n_items"],
+            metric["n_items_missing_score"],
         )
 
     log.info(
@@ -899,24 +953,6 @@ def evaluate_splits(
             del summary[split_name]
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary_slim = {
-        split_name: {
-            baseline_name: {
-                k: v
-                for k, v in m.items()
-                if k not in ("pr_curve_precision", "pr_curve_recall", "pr_curve_thresholds")
-            }
-            for baseline_name, m in baselines.items()
-        }
-        for split_name, baselines in summary.items()
-    }
-    summary_name = "baselines_external.json" if only_external else "baselines.json"
-    summary_path = output_dir / "summaries" / summary_name
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(summary_path, "w") as fh:
-        json.dump(summary_slim, fh, indent=2)
-    log.info("Split summary saved: %s", summary_path)
-
     return summary
 
 
@@ -941,7 +977,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--only-external",
         action="store_true",
-        help="Run only BL4/BL5 and keep their summary separate from other methods.",
+        help="Run only BL4/BL5.",
     )
     args = parser.parse_args()
     evaluate_splits(

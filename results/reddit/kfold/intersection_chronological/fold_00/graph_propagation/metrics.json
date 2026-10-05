@@ -4,21 +4,50 @@
     "f1_pos": 0.8704453441295547,
     "f1_neg": 0.42342342342342343,
     "n_items": 605,
+    "n_native_items": 605,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.646934383776489,
+    "native_f1_pos": 0.8704453441295547,
+    "native_f1_neg": 0.42342342342342343,
     "roc_auc": 0.8097943722943722
   },
   "val": {
-    "macro_f1": 0.7080738798632895,
-    "f1_pos": 0.8784119106699751,
-    "f1_neg": 0.5377358490566038,
-    "n_items": 509,
+    "macro_f1": 0.7064189836174029,
+    "f1_pos": 0.8776266996291718,
+    "f1_neg": 0.5352112676056338,
+    "n_items": 511,
+    "n_native_items": 509,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9960861056751468,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7080738798632895,
+    "native_f1_pos": 0.8784119106699751,
+    "native_f1_neg": 0.5377358490566038,
     "roc_auc": 0.7700395843641763
   },
   "test": {
-    "macro_f1": 0.544043284789644,
-    "f1_pos": 0.8276699029126213,
-    "f1_neg": 0.2604166666666667,
-    "n_items": 508,
+    "macro_f1": 0.5430766049958963,
+    "f1_pos": 0.8270858524788391,
+    "f1_neg": 0.25906735751295334,
+    "n_items": 510,
+    "n_native_items": 508,
+    "n_fallback_items": 2,
+    "score_coverage": 0.996078431372549,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.544043284789644,
+    "native_f1_pos": 0.8276699029126213,
+    "native_f1_neg": 0.2604166666666667,
     "roc_auc": 0.7345420478342335
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 605,
@@ -34,7 +63,7 @@
       "accuracy": 0.8403041825095057,
       "n_votes": 5523,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8346710862433568
+      "roc_auc": 0.8346713232095075
     },
     "test": {
       "macro_f1": 0.6937702657638766,
@@ -97,7 +126,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6555735930735931
+        "policy_train_auc": 0.6579840613931522
       }
     ],
     "n_graph_users": 1471,

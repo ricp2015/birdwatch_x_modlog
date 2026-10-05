@@ -1,17 +1,38 @@
 {
   "val": {
-    "macro_f1": 0.6330489836107813,
-    "f1_pos": 0.8176131187367143,
-    "f1_neg": 0.4484848484848485,
-    "n_items": 10955,
-    "roc_auc": 0.6208786549990299
+    "macro_f1": 0.62999923813266,
+    "f1_pos": 0.8092893184996048,
+    "f1_neg": 0.4507091577657153,
+    "n_items": 11080,
+    "n_native_items": 10955,
+    "n_fallback_items": 125,
+    "score_coverage": 0.9887184115523465,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6300316269716374,
+    "native_f1_pos": 0.8090551181102362,
+    "native_f1_neg": 0.45100813583303856,
+    "roc_auc": 0.6186029601939171
   },
   "test": {
-    "macro_f1": 0.6038668745549627,
-    "f1_pos": 0.8053536821705426,
-    "f1_neg": 0.40238006693938266,
-    "n_items": 10945,
-    "roc_auc": 0.614256686342787
+    "macro_f1": 0.6154196157847792,
+    "f1_pos": 0.8010468017771286,
+    "f1_neg": 0.4297924297924298,
+    "n_items": 11082,
+    "n_native_items": 10945,
+    "n_fallback_items": 137,
+    "score_coverage": 0.9876376105396137,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6161269433652556,
+    "native_f1_pos": 0.800715695952616,
+    "native_f1_neg": 0.4315381907778951,
+    "roc_auc": 0.6233407718073762
+  },
+  "net_vote_fallback": {
+    "threshold": -0.7509386733416648,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 10955,
@@ -25,14 +46,14 @@
       "accuracy": 0.8188500547761247,
       "n_votes": 28297,
       "post_embedding_coverage": 0.9998194945848375,
-      "roc_auc": 0.8483144889407191
+      "roc_auc": 0.8483146281125243
     },
     "test": {
       "macro_f1": 0.7595864077547653,
       "accuracy": 0.8215023875703799,
       "n_votes": 28062,
       "post_embedding_coverage": 0.9996390543223245,
-      "roc_auc": 0.8527440305112319
+      "roc_auc": 0.8527440271632056
     }
   },
   "composition": {
@@ -87,6 +108,7 @@
   "outer_split_protocol": {
     "split": "full",
     "split_type": "seeded_item",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

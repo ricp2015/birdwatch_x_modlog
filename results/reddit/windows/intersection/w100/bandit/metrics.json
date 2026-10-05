@@ -4,21 +4,50 @@
     "f1_pos": 0.8745980707395499,
     "f1_neg": 0.3157894736842105,
     "n_items": 920,
-    "roc_auc": 0.5811396165271401
+    "n_native_items": 920,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5951937722118802,
+    "native_f1_pos": 0.8745980707395499,
+    "native_f1_neg": 0.3157894736842105,
+    "roc_auc": 0.5807939508506617
   },
   "val": {
     "macro_f1": 0.6485590492563612,
     "f1_pos": 0.8873321657910099,
     "f1_neg": 0.40978593272171254,
     "n_items": 1020,
-    "roc_auc": 0.6377112002758535
+    "n_native_items": 1020,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6485590492563612,
+    "native_f1_pos": 0.8873321657910099,
+    "native_f1_neg": 0.40978593272171254,
+    "roc_auc": 0.6376641798062758
   },
   "test": {
     "macro_f1": 0.5988303493561792,
     "f1_pos": 0.8808290155440415,
     "f1_neg": 0.31683168316831684,
     "n_items": 1020,
-    "roc_auc": 0.6417323160096221
+    "n_native_items": 1020,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5988303493561792,
+    "native_f1_pos": 0.8808290155440415,
+    "native_f1_neg": 0.31683168316831684,
+    "roc_auc": 0.6417157831215745
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 1020,
@@ -32,14 +61,14 @@
       "accuracy": 0.8911831329499913,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8913784962887885
+      "roc_auc": 0.8913784469365881
     },
     "test": {
       "macro_f1": 0.8036832995908428,
       "accuracy": 0.8926094031001113,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8982418550320146
+      "roc_auc": 0.8982419050712904
     }
   },
   "protocol": {
@@ -66,7 +95,7 @@
     "n_candidate_profiles": 2557,
     "n_candidate_communities": 13,
     "linucb_updates": 2756,
-    "linucb_total_update_weight": 920.0000000000003,
+    "linucb_total_update_weight": 919.9999999999977,
     "ucb_alpha": 0.5,
     "ridge": 1.0,
     "softmax_temperature": 1.0,
@@ -76,6 +105,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w100",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

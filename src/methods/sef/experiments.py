@@ -10,7 +10,12 @@ import faiss
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
+
 from src.methods.team_formation_v2.shared_features import attach_causal_features
+from src.utils.net_vote_fallback import (
+    calibrate_net_vote_threshold,
+    net_vote_item_scores,
+)
 from src.utils.splits import discover_splits, split_dataset
 
 from . import runtime
@@ -26,7 +31,6 @@ from .features import (
 )
 from .modeling import (
     _items_with_real_expert_signal,
-    _net_vote_predictions,
     add_oof_negative_probabilities,
     apply_neg_predictor,
     calibrate_probability_thresholds_per_subreddit,
@@ -67,7 +71,7 @@ def run_single_split(
 ) -> Tuple[Optional[Dict], pd.DataFrame, pd.DataFrame]:
     """Run the single split workflow."""
     train_vote_df = vote_df[vote_df["item_id"].isin(train_ids)]
-    use_net_vote_fallback = dataset == "full" or split_label in {"full", "splits_full"}
+    use_net_vote_fallback = True
     prec_df = precompute_vote_precision(train_vote_df, LAMBDA_SMOOTH, min_coverage)
     base_rates = compute_subreddit_base_rates(train_vote_df)
     log.info(
@@ -211,8 +215,14 @@ def run_single_split(
         .set_index("item_id")["label"]
         .to_dict()
     )
+    cal_vote_df = vote_df[vote_df["item_id"].isin(cal_ids)]
+    net_vote_threshold = calibrate_net_vote_threshold(cal_vote_df)
     cal_expert_ids = _items_with_real_expert_signal(weights_cal)
-    _, cal_net_predictions = _net_vote_predictions(cal_ids, vote_df)
+    cal_net_scores = net_vote_item_scores(cal_vote_df).set_index("item_id")["net_vote_score"]
+    cal_net_predictions = {
+        item_id: 1 if float(cal_net_scores.get(item_id, 0.0)) >= net_vote_threshold else -1
+        for item_id in cal_ids
+    }
     cal_fixed_predictions = (
         {
             item_id: cal_net_predictions[item_id]
@@ -258,6 +268,7 @@ def run_single_split(
         neg_scaler=neg_scaler,
         neg_feat_cols=neg_feat_cols,
         use_net_vote_fallback=use_net_vote_fallback,
+        net_vote_threshold=net_vote_threshold,
     )
     decisions["split"] = split_label
     decisions["k"] = k
@@ -294,6 +305,7 @@ def run_single_split(
             neg_scaler=neg_scaler,
             neg_feat_cols=neg_feat_cols,
             use_net_vote_fallback=use_net_vote_fallback,
+            net_vote_threshold=net_vote_threshold,
         )
         if val_decisions["label"].nunique() >= 2:
             val_metrics = evaluate_fold(val_decisions)
@@ -334,6 +346,7 @@ def run_single_split(
             "expert_weight_grid_optimizes_final_meta_model": False,
             "fallback_definition": "no_history_local_evidence_or_user_embedding",
             "used_net_vote_fallback": use_net_vote_fallback,
+            "net_vote_fallback_threshold": net_vote_threshold,
             "causal_metadata_profile": "full",
             "causal_metadata_weight": runtime.causal_metadata_weight,
             "semantic_user_profiles_are_static": False,
@@ -556,28 +569,6 @@ def evaluate_splits(
         with open(split_out_dir / "metrics.json", "w") as fh:
             json.dump(metrics, fh, indent=2)
         summary[split_name] = metrics
-
-    summaries_dir = output_dir / "summaries"
-    summaries_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = summaries_dir / "sef.json"
-    with open(summary_path, "w") as fh:
-        json.dump(summary, fh, indent=2)
-    with open(summaries_dir / "sef_scope.json", "w") as fh:
-        json.dump(
-            {
-                "semantic_profile_regime": "causal_as_of_case_time",
-                "semantic_profile_timestamp_rule": (
-                    "document.timestamp < max_case_vote_timestamp"
-                ),
-                "semantic_profile_cache_key": user_profiles.cache_key,
-                "chronological_evaluation_supported": True,
-                "chronological_evaluation_is_prospective": True,
-                "excluded_splits": {},
-            },
-            fh,
-            indent=2,
-        )
-    log.info("Split summary saved to %s", summary_path)
 
     return summary
 

@@ -4,21 +4,50 @@
     "f1_pos": 0.856826308102936,
     "f1_neg": 0.515755407937319,
     "n_items": 12864,
-    "roc_auc": 0.8371648346780678
+    "n_native_items": 12864,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6862908580201275,
+    "native_f1_pos": 0.856826308102936,
+    "native_f1_neg": 0.515755407937319,
+    "roc_auc": 0.8371649045452964
   },
   "val": {
-    "macro_f1": 0.6986567788874958,
-    "f1_pos": 0.8484598459845984,
-    "f1_neg": 0.548853711790393,
-    "n_items": 14572,
-    "roc_auc": 0.7832677282408664
+    "macro_f1": 0.6960168310474077,
+    "f1_pos": 0.8470928655393797,
+    "f1_neg": 0.5449407965554359,
+    "n_items": 14775,
+    "n_native_items": 14572,
+    "n_fallback_items": 203,
+    "score_coverage": 0.9862605752961083,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6986567788874958,
+    "native_f1_pos": 0.8484598459845984,
+    "native_f1_neg": 0.548853711790393,
+    "roc_auc": 0.7832674843271303
   },
   "test": {
-    "macro_f1": 0.6802501842885385,
-    "f1_pos": 0.8395332875772135,
-    "f1_neg": 0.5209670809998634,
-    "n_items": 14588,
-    "roc_auc": 0.7828931973418434
+    "macro_f1": 0.6794368951315237,
+    "f1_pos": 0.839176002891218,
+    "f1_neg": 0.5196977873718295,
+    "n_items": 14774,
+    "n_native_items": 14588,
+    "n_fallback_items": 186,
+    "score_coverage": 0.9874103154189793,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6802501842885385,
+    "native_f1_pos": 0.8395332875772135,
+    "native_f1_neg": 0.5209670809998634,
+    "roc_auc": 0.7828932357914062
+  },
+  "net_vote_fallback": {
+    "threshold": -0.7509386733416648,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -50,7 +79,7 @@
       "accuracy": 0.8177196221669208,
       "n_votes": 37371,
       "post_embedding_coverage": 0.999932313523758,
-      "roc_auc": 0.8503317871200216
+      "roc_auc": 0.8503318600249843
     }
   },
   "boc_stacking": {
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 64,
     "eligibility_components": 4,
-    "prediction_explained_variance": 0.9958186149597168,
+    "prediction_explained_variance": 0.9958184957504272,
     "eligibility_explained_variance": 0.8601565957069397,
     "context_features": 202,
     "classifier": "standardized class-balanced L2 logistic regression",
@@ -105,7 +134,7 @@
           "prediction_components": 16,
           "eligibility_components": 8,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7764875437294041
+          "inner_tune_auc": 0.7764880751516015
         },
         {
           "prediction_components": 16,
@@ -147,7 +176,7 @@
           "prediction_components": 16,
           "eligibility_components": 12,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7760485889943526
+          "inner_tune_auc": 0.7760496518387474
         },
         {
           "prediction_components": 32,
@@ -177,43 +206,43 @@
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7778644586428647
+          "inner_tune_auc": 0.777864990065062
         },
         {
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7777464829150421
+          "inner_tune_auc": 0.7777459514928448
         },
         {
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7779202579735915
+          "inner_tune_auc": 0.7779213208179863
         },
         {
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7783182931994433
+          "inner_tune_auc": 0.7783214817326277
         },
         {
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7778160992229013
+          "inner_tune_auc": 0.7778166306450987
         },
         {
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7777486086038317
+          "inner_tune_auc": 0.777749140026029
         },
         {
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7779606460605938
+          "inner_tune_auc": 0.7779611774827911
         },
         {
           "prediction_components": 32,
@@ -237,7 +266,7 @@
           "prediction_components": 64,
           "eligibility_components": 4,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7796532257593092
+          "inner_tune_auc": 0.7796537571815068
         },
         {
           "prediction_components": 64,
@@ -255,7 +284,7 @@
           "prediction_components": 64,
           "eligibility_components": 8,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7796872367799429
+          "inner_tune_auc": 0.7796867053577454
         },
         {
           "prediction_components": 64,
@@ -267,13 +296,13 @@
           "prediction_components": 64,
           "eligibility_components": 8,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7798323150398327
+          "inner_tune_auc": 0.779833909306425
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7803653315038238
+          "inner_tune_auc": 0.7803648000816265
         },
         {
           "prediction_components": 64,
@@ -285,13 +314,13 @@
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7796734198028105
+          "inner_tune_auc": 0.7796739512250079
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7798620746828872
+          "inner_tune_auc": 0.7798626061050844
         }
       ],
       "selection_metric": "ROC-AUC",

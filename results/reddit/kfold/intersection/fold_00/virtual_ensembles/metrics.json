@@ -4,21 +4,50 @@
     "f1_pos": 0.888045540796964,
     "f1_neg": 0.2948207171314741,
     "n_items": 916,
+    "n_native_items": 916,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5914331289642191,
+    "native_f1_pos": 0.888045540796964,
+    "native_f1_neg": 0.2948207171314741,
     "roc_auc": 0.6472280456557187
   },
   "val": {
-    "macro_f1": 0.6762801473208981,
-    "f1_pos": 0.9051918735891648,
+    "macro_f1": 0.676333590458672,
+    "f1_pos": 0.9052987598647125,
     "f1_neg": 0.4473684210526316,
-    "n_items": 1038,
+    "n_items": 1039,
+    "n_native_items": 1038,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990375360923965,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6762801473208981,
+    "native_f1_pos": 0.9051918735891648,
+    "native_f1_neg": 0.4473684210526316,
     "roc_auc": 0.7239396834628007
   },
   "test": {
-    "macro_f1": 0.6326961296535333,
-    "f1_pos": 0.8829471182412358,
+    "macro_f1": 0.6328349001120499,
+    "f1_pos": 0.8832246591582691,
     "f1_neg": 0.3824451410658307,
-    "n_items": 1001,
-    "roc_auc": 0.6798343705432387
+    "n_items": 1003,
+    "n_native_items": 1001,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9980059820538385,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6326961296535333,
+    "native_f1_pos": 0.8829471182412358,
+    "native_f1_neg": 0.3824451410658307,
+    "roc_auc": 0.6798343705432388
+  },
+  "net_vote_fallback": {
+    "threshold": 0.2503128911139072,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.890631659705055,
       "n_votes": 11731,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8993436074718892
+      "roc_auc": 0.8993435590135432
     },
     "test": {
       "macro_f1": 0.7929278607753855,
       "accuracy": 0.8844182470527935,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8872826083833995
+      "roc_auc": 0.8872825596931501
     }
   },
   "ensemble": {

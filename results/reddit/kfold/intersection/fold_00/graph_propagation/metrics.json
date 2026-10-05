@@ -4,21 +4,50 @@
     "f1_pos": 0.9028642590286425,
     "f1_neg": 0.30973451327433627,
     "n_items": 916,
+    "n_native_items": 916,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6062993861514894,
+    "native_f1_pos": 0.9028642590286425,
+    "native_f1_neg": 0.30973451327433627,
     "roc_auc": 0.7658805031446541
   },
   "val": {
-    "macro_f1": 0.638303156314072,
-    "f1_pos": 0.8985994397759104,
+    "macro_f1": 0.6383598997725075,
+    "f1_pos": 0.8987129266927812,
     "f1_neg": 0.37800687285223367,
-    "n_items": 1038,
+    "n_items": 1039,
+    "n_native_items": 1038,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990375360923965,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.638303156314072,
+    "native_f1_pos": 0.8985994397759104,
+    "native_f1_neg": 0.37800687285223367,
     "roc_auc": 0.754970298674864
   },
   "test": {
-    "macro_f1": 0.576961391010354,
-    "f1_pos": 0.8672985781990521,
+    "macro_f1": 0.577118248482932,
+    "f1_pos": 0.8676122931442081,
     "f1_neg": 0.28662420382165604,
-    "n_items": 1001,
+    "n_items": 1003,
+    "n_native_items": 1001,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9980059820538385,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.576961391010354,
+    "native_f1_pos": 0.8672985781990521,
+    "native_f1_neg": 0.28662420382165604,
     "roc_auc": 0.7666885453131076
+  },
+  "net_vote_fallback": {
+    "threshold": 0.2503128911139072,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 916,
@@ -34,14 +63,14 @@
       "accuracy": 0.890631659705055,
       "n_votes": 11731,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8993436074718892
+      "roc_auc": 0.8993435590135432
     },
     "test": {
       "macro_f1": 0.7929278607753855,
       "accuracy": 0.8844182470527935,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8872826083833995
+      "roc_auc": 0.8872825596931501
     }
   },
   "graph_attention": {
@@ -85,7 +114,7 @@
           "attention_tenure": 0.25,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7390170044258094
+        "policy_train_auc": 0.7390170044258095
       },
       {
         "name": "content_social",
@@ -97,7 +126,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7279058933146983
+        "policy_train_auc": 0.7283077102259492
       }
     ],
     "n_graph_users": 1834,

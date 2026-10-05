@@ -4,21 +4,50 @@
     "f1_pos": 0.911036036036036,
     "f1_neg": 0.5706521739130435,
     "n_items": 1072,
-    "roc_auc": 0.9026589912280701
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7408441049745398,
+    "native_f1_pos": 0.911036036036036,
+    "native_f1_neg": 0.5706521739130435,
+    "roc_auc": 0.9026624177631579
   },
   "val": {
     "macro_f1": 0.8060721062618597,
     "f1_pos": 0.9411764705882353,
     "f1_neg": 0.6709677419354839,
     "n_items": 511,
-    "roc_auc": 0.8610326744655104
+    "n_native_items": 511,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.8060721062618597,
+    "native_f1_pos": 0.9411764705882353,
+    "native_f1_neg": 0.6709677419354839,
+    "roc_auc": 0.8610326744655102
   },
   "test": {
     "macro_f1": 0.6721998658618377,
     "f1_pos": 0.892018779342723,
     "f1_neg": 0.4523809523809524,
     "n_items": 510,
+    "n_native_items": 510,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6721998658618377,
+    "native_f1_pos": 0.892018779342723,
+    "native_f1_neg": 0.4523809523809524,
     "roc_auc": 0.7962320639672861
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,7 +72,7 @@
       "accuracy": 0.825336838646073,
       "n_votes": 6086,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8058410130843088
+      "roc_auc": 0.805840779331584
     },
     "test": {
       "macro_f1": 0.7176303001919794,
@@ -99,7 +128,7 @@
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7572654812998161
+          "inner_tune_auc": 0.7571428571428571
         },
         {
           "prediction_components": 16,

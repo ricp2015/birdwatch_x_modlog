@@ -4,21 +4,50 @@
     "f1_pos": 0.9150537634408602,
     "f1_neg": 0.44366197183098594,
     "n_items": 1072,
-    "roc_auc": 0.9026589912280701
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6793578676359231,
+    "native_f1_pos": 0.9150537634408602,
+    "native_f1_neg": 0.44366197183098594,
+    "roc_auc": 0.9026624177631579
   },
   "val": {
     "macro_f1": 0.7563945300077235,
     "f1_pos": 0.9370314842578711,
     "f1_neg": 0.5757575757575758,
     "n_items": 766,
-    "roc_auc": 0.8434384384384384
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7563945300077235,
+    "native_f1_pos": 0.9370314842578711,
+    "native_f1_neg": 0.5757575757575758,
+    "roc_auc": 0.8434384384384385
   },
   "test": {
     "macro_f1": 0.6742141278029267,
     "f1_pos": 0.9255711127487104,
     "f1_neg": 0.4228571428571429,
     "n_items": 766,
-    "roc_auc": 0.8311599511599512
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6742141278029267,
+    "native_f1_pos": 0.9255711127487104,
+    "native_f1_neg": 0.4228571428571429,
+    "roc_auc": 0.8311762311762313
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -50,7 +79,7 @@
       "accuracy": 0.8430271726925668,
       "n_votes": 8906,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8410843322216343
+      "roc_auc": 0.8410841612961892
     }
   },
   "boc_stacking": {
@@ -99,7 +128,7 @@
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7572654812998161
+          "inner_tune_auc": 0.7571428571428571
         },
         {
           "prediction_components": 16,
@@ -327,6 +356,7 @@
   "outer_split_protocol": {
     "split": "intersection_chronological",
     "split_type": "chronological",
+    "cv_protocol": null,
     "strict_temporal_order": true,
     "prospective_interpretation": true,
     "note": "Outer TRAIN strictly precedes VAL/TEST."

@@ -10,6 +10,14 @@ import pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
+from .data import TemporalUserProfiles
+from .features import _compute_weighted_votes, compute_expert_weights
+from .modeling import (
+    _items_with_real_expert_signal,
+    _net_vote_predictions,
+    apply_neg_predictor,
+    predict_meta_model,
+)
 from .runtime import (
     ALPHA,
     BETA,
@@ -19,14 +27,6 @@ from .runtime import (
     K_NEIGHBORS,
     TOP_T,
     log,
-)
-from .features import _compute_weighted_votes, compute_expert_weights
-from .data import TemporalUserProfiles
-from .modeling import (
-    _items_with_real_expert_signal,
-    _net_vote_predictions,
-    apply_neg_predictor,
-    predict_meta_model,
 )
 
 # 9. GRID SEARCH (K/alpha/beta; multi-scale T is learned by the meta-model)
@@ -138,6 +138,7 @@ def predict_fold(
     neg_scaler: Optional[StandardScaler] = None,
     neg_feat_cols: Optional[List[str]] = None,
     use_net_vote_fallback: bool = False,
+    net_vote_threshold: float = 0.0,
 ) -> pd.DataFrame:
     """Generate predictions for one evaluation fold."""
     labels = vote_df[vote_df["item_id"].isin(test_ids)].drop_duplicates("item_id")[
@@ -159,6 +160,12 @@ def predict_fold(
     wv = _compute_weighted_votes(test_ids, vote_df, weights_df, top_t)
     expert_ids = _items_with_real_expert_signal(weights_df)
     raw_mean, _ = _net_vote_predictions(test_ids, vote_df)
+    net_score = (
+        vote_df[vote_df["item_id"].isin(test_ids)]
+        .groupby("item_id")["vote"]
+        .sum()
+        .to_dict()
+    )
 
     rows = []
     for item_id in test_ids:
@@ -169,8 +176,10 @@ def predict_fold(
         meta_pred, meta_proba = meta_preds.get(item_id, (None, None))
         if use_net_vote_fallback and fallback:
             score = float(raw_mean.get(item_id, 0.0))
-            meta_proba = float(np.clip((score + 1.0) / 2.0, 0.0, 1.0))
-            predicted = 1 if score >= 0.0 else -1
+            predicted = (
+                1 if float(net_score.get(item_id, 0.0)) >= net_vote_threshold else -1
+            )
+            meta_proba = float(predicted == 1)
             score_source = "net_vote_fallback"
         elif meta_proba is not None:
             predicted = 1 if meta_proba >= thr else -1
@@ -187,6 +196,8 @@ def predict_fold(
                 "predicted": predicted,
                 "used_fallback": fallback,
                 "score_source": score_source,
+                "net_vote_score": float(net_score.get(item_id, 0.0)),
+                "net_vote_threshold": float(net_vote_threshold),
                 "subreddit": sub,
             }
         )
@@ -230,22 +241,65 @@ def evaluate_fold(decisions: pd.DataFrame) -> Dict:
     is_hybrid = bool(
         "score_source" in decisions and (decisions["score_source"] == "net_vote_fallback").any()
     )
+    native_macro_f1 = (
+        float(
+            f1_score(
+                covered_decisions["label"],
+                covered_decisions["predicted"],
+                average="macro",
+                zero_division=0,
+            )
+        )
+        if len(covered_decisions)
+        else float("nan")
+    )
+    native_f1_pos = (
+        float(
+            f1_score(
+                covered_decisions["label"],
+                covered_decisions["predicted"],
+                pos_label=1,
+                zero_division=0,
+            )
+        )
+        if len(covered_decisions)
+        else float("nan")
+    )
+    native_f1_neg = (
+        float(
+            f1_score(
+                covered_decisions["label"],
+                covered_decisions["predicted"],
+                pos_label=-1,
+                zero_division=0,
+            )
+        )
+        if len(covered_decisions)
+        else float("nan")
+    )
     return {
         "macro_f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
-        # Backwards-compatible key: this is the final system score, which is
-        # hybrid whenever full-split net-vote fallback is active.
-        "roc_auc": system_auc,
+        "roc_auc": expert_covered_auc,
         "roc_auc_system": system_auc,
         "roc_auc_expert_covered": expert_covered_auc,
         "roc_auc_system_is_hybrid": is_hybrid,
         "n_auc_expert_covered": int(covered.sum()),
         "n_auc_system": int(len(decisions)),
-        "auc_population": (
+        "auc_population": "items_with_real_expert_signal",
+        "auc_system_population": (
             "hybrid_meta_plus_net_vote_all_test_items"
             if is_hybrid
             else "meta_model_all_test_items"
         ),
         "auc_expert_covered_population": "items_with_real_expert_signal",
+        "n_items": int(len(decisions)),
+        "n_native_items": int(covered.sum()),
+        "n_fallback_items": int((~covered).sum()),
+        "score_coverage": float(covered.mean()) if len(decisions) else 0.0,
+        "final_decision_coverage": 1.0 if len(decisions) else 0.0,
+        "native_macro_f1": native_macro_f1,
+        "native_f1_pos": native_f1_pos,
+        "native_f1_neg": native_f1_neg,
         "f1_pos": f1_score(y_true, y_pred, pos_label=1, average="binary", zero_division=0),
         "f1_neg": f1_score(y_true, y_pred, pos_label=-1, average="binary", zero_division=0),
         "macro_precision": precision_score(y_true, y_pred, average="macro", zero_division=0),

@@ -4,21 +4,50 @@
     "f1_pos": 0.918869644484959,
     "f1_neg": 0.3046875,
     "n_items": 1225,
-    "roc_auc": 0.6442411008283941
+    "n_native_items": 1225,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6117785722424796,
+    "native_f1_pos": 0.918869644484959,
+    "native_f1_neg": 0.3046875,
+    "roc_auc": 0.6442382124247571
   },
   "val": {
     "macro_f1": 0.6637362637362638,
     "f1_pos": 0.9274725274725275,
     "f1_neg": 0.4,
     "n_items": 510,
-    "roc_auc": 0.6532914673774143
+    "n_native_items": 510,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6637362637362638,
+    "native_f1_pos": 0.9274725274725275,
+    "native_f1_neg": 0.4,
+    "roc_auc": 0.6532914673774144
   },
   "test": {
     "macro_f1": 0.5233622559652928,
     "f1_pos": 0.9067245119305857,
     "f1_neg": 0.14,
     "n_items": 511,
+    "n_native_items": 511,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5233622559652928,
+    "native_f1_pos": 0.9067245119305857,
+    "native_f1_neg": 0.14,
     "roc_auc": 0.6359835600907029
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -40,14 +69,14 @@
       "accuracy": 0.849394821510648,
       "n_votes": 6527,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8376420980910145
+      "roc_auc": 0.8376419223031862
     },
     "test": {
       "macro_f1": 0.7532485581266068,
       "accuracy": 0.84564979978158,
       "n_votes": 5494,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8492190480838339
+      "roc_auc": 0.8492188262540039
     }
   },
   "ensemble": {

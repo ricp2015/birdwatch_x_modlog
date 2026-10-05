@@ -1,24 +1,53 @@
 {
   "policy_train": {
-    "macro_f1": 0.6691358024691358,
-    "f1_pos": 0.9,
-    "f1_neg": 0.4382716049382716,
+    "macro_f1": 0.6822427089351654,
+    "f1_pos": 0.9024793388429752,
+    "f1_neg": 0.46200607902735563,
     "n_items": 1072,
-    "roc_auc": 0.6358895285087719
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6822427089351654,
+    "native_f1_pos": 0.9024793388429752,
+    "native_f1_neg": 0.46200607902735563,
+    "roc_auc": 0.636071134868421
   },
   "val": {
-    "macro_f1": 0.737938642425258,
-    "f1_pos": 0.9254185692541856,
-    "f1_neg": 0.5504587155963303,
+    "macro_f1": 0.7488359892451963,
+    "f1_pos": 0.927536231884058,
+    "f1_neg": 0.5701357466063348,
     "n_items": 766,
-    "roc_auc": 0.5410585585585586
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7488359892451963,
+    "native_f1_pos": 0.927536231884058,
+    "native_f1_neg": 0.5701357466063348,
+    "roc_auc": 0.5407657657657658
   },
   "test": {
-    "macro_f1": 0.6995991168951894,
-    "f1_pos": 0.918429003021148,
-    "f1_neg": 0.4807692307692308,
+    "macro_f1": 0.7059458761314672,
+    "f1_pos": 0.919000757002271,
+    "f1_neg": 0.4928909952606635,
     "n_items": 766,
-    "roc_auc": 0.5398941798941799
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7059458761314672,
+    "native_f1_pos": 0.919000757002271,
+    "native_f1_neg": 0.4928909952606635,
+    "roc_auc": 0.5403663003663004
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 766,
@@ -39,7 +68,7 @@
       "accuracy": 0.8430271726925668,
       "n_votes": 8906,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8410843322216343
+      "roc_auc": 0.8410841612961892
     }
   },
   "protocol": {
@@ -66,7 +95,7 @@
     "n_candidate_profiles": 2515,
     "n_candidate_communities": 13,
     "linucb_updates": 3212,
-    "linucb_total_update_weight": 1071.9999999999995,
+    "linucb_total_update_weight": 1071.9999999999998,
     "ucb_alpha": 0.5,
     "ridge": 1.0,
     "softmax_temperature": 1.0,
@@ -76,6 +105,7 @@
   "outer_split_protocol": {
     "split": "intersection_chronological",
     "split_type": "chronological",
+    "cv_protocol": null,
     "strict_temporal_order": true,
     "prospective_interpretation": true,
     "note": "Outer TRAIN strictly precedes VAL/TEST."

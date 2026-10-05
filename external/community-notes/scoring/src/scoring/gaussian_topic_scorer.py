@@ -19,7 +19,7 @@ class GaussianTopicScorer(GaussianScorer):
     crnhThresholdNoteFactorMultiplier: float = -0.8,
     crnhThresholdNMIntercept: float = -0.15,
     crnhThresholdUCBIntercept: float = -0.5,
-    crhSuperThreshold: float = 0.5,
+    crhSuperThreshold: Optional[float] = None,
     crhThresholdNoHighVol: float = 0.37,
     crhThresholdNoCorrelated: float = 0.37,
     lowDiligenceThreshold: float = 0.263,
@@ -230,7 +230,8 @@ class GaussianTopicScorer(GaussianScorer):
     confidentNotes = posFactorCounts.merge(negFactorCounts)
     confidentNotes[self._noteTopicConfidentKey] = True
     noteScores = noteScores.merge(
-      confidentNotes, how="left", unsafeAllowed=[self._noteTopicConfidentKey, c.defaultIndexKey]
+      confidentNotes,
+      how="left",
     )
     noteScores = noteScores.fillna({self._noteTopicConfidentKey: False})
     return noteScores, userScores

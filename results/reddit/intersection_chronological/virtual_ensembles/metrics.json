@@ -4,13 +4,29 @@
     "f1_pos": 0.8975609756097561,
     "f1_neg": 0.36789297658862874,
     "n_items": 1072,
-    "roc_auc": 0.7632332785087721
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6327269760991925,
+    "native_f1_pos": 0.8975609756097561,
+    "native_f1_neg": 0.36789297658862874,
+    "roc_auc": 0.7632298519736843
   },
   "val": {
     "macro_f1": 0.7403109734486,
     "f1_pos": 0.9342301943198804,
     "f1_neg": 0.5463917525773195,
     "n_items": 766,
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7403109734486,
+    "native_f1_pos": 0.9342301943198804,
+    "native_f1_neg": 0.5463917525773195,
     "roc_auc": 0.5636336336336336
   },
   "test": {
@@ -18,7 +34,20 @@
     "f1_pos": 0.9096340552651232,
     "f1_neg": 0.37305699481865284,
     "n_items": 766,
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.641345525041888,
+    "native_f1_pos": 0.9096340552651232,
+    "native_f1_neg": 0.37305699481865284,
     "roc_auc": 0.6757671957671957
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "meta_train": {
@@ -47,7 +76,7 @@
       "accuracy": 0.8430271726925668,
       "n_votes": 8906,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8410843322216343
+      "roc_auc": 0.8410841612961892
     }
   },
   "ensemble": {
@@ -127,6 +156,7 @@
   "outer_split_protocol": {
     "split": "intersection_chronological",
     "split_type": "chronological",
+    "cv_protocol": null,
     "strict_temporal_order": true,
     "prospective_interpretation": true,
     "note": "Outer TRAIN strictly precedes VAL/TEST."

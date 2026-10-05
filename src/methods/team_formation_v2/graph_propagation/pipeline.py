@@ -34,6 +34,7 @@ from src.methods.team_formation_v2.shared_features import (  # noqa: E402
     apply_thresholds,
     calibrate_thresholds_per_community,
     classification_metrics,
+    complete_with_net_vote_fallback,
     load_and_enrich_splits,
 )
 
@@ -504,8 +505,19 @@ def main() -> None:
         "val": apply_thresholds(val_eligible, thresholds, global_threshold),
         "test": apply_thresholds(test_eligible, thresholds, global_threshold),
     }
+    predictions["val"], net_vote_threshold = complete_with_net_vote_fallback(
+        predictions["val"], val, val
+    )
+    predictions["test"], _ = complete_with_net_vote_fallback(
+        predictions["test"], val, test
+    )
     results = {
         name: classification_metrics(frame) for name, frame in predictions.items()
+    }
+    results["net_vote_fallback"] = {
+        "threshold": net_vote_threshold,
+        "threshold_source": "validation",
+        "applies_when": "candidate_pool_empty",
     }
     results["coverage"] = {
         "policy_train_eligible_items": int(len(policy_scores)),

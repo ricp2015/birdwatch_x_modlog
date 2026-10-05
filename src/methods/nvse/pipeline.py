@@ -34,7 +34,11 @@ from src.methods.team_formation_v2.shared_features import (  # noqa: E402
     attach_causal_features,
     load_causal_features,
 )
-from src.utils.splits import discover_splits, split_dataset  # noqa: E402
+from src.utils.net_vote_fallback import (  # noqa: E402
+    add_net_vote_fallback,
+    calibrate_net_vote_threshold,
+)
+from src.utils.splits import discover_splits  # noqa: E402
 
 THRESHOLD_GRID = np.linspace(-1.5, 1.5, 300)
 MIN_VOTES_SKILL = 5
@@ -271,8 +275,14 @@ def _evaluate(item_scores: pd.DataFrame, test_ids: np.ndarray, threshold: float)
     """Calculate metrics for scored items."""
     test = item_scores[item_scores["item_id"].isin(test_ids)].dropna(subset=["label"])
     y_true = test["label"].values
-    y_pred = np.where(test["nvse_score"].values >= threshold, 1, -1)
-    y_sc = test["nvse_score"].values
+    y_pred = (
+        test["y_hat"].to_numpy(dtype=int)
+        if "y_hat" in test
+        else np.where(test["nvse_score"].values >= threshold, 1, -1)
+    )
+    fallback = test.get("is_fallback", pd.Series(False, index=test.index)).astype(bool)
+    native = test.loc[~fallback]
+    y_sc = native["nvse_score"].to_numpy(dtype=float)
 
     p, r, f, _ = precision_recall_fscore_support(
         y_true, y_pred, labels=[1, -1], average="macro", zero_division=0
@@ -284,9 +294,20 @@ def _evaluate(item_scores: pd.DataFrame, test_ids: np.ndarray, threshold: float)
         y_true, y_pred, labels=[-1], average="binary", pos_label=-1, zero_division=0
     )
     try:
-        auc = float(roc_auc_score((y_true == 1).astype(int), y_sc))
+        auc = float(roc_auc_score((native["label"].to_numpy() == 1).astype(int), y_sc))
     except ValueError:
         auc = float("nan")
+
+    native_macro_f1 = float("nan")
+    if not native.empty:
+        native_pred = np.where(native["nvse_score"].to_numpy() >= threshold, 1, -1)
+        _, _, native_macro_f1, _ = precision_recall_fscore_support(
+            native["label"].to_numpy(),
+            native_pred,
+            labels=[1, -1],
+            average="macro",
+            zero_division=0,
+        )
 
     return {
         "threshold": threshold,
@@ -303,6 +324,12 @@ def _evaluate(item_scores: pd.DataFrame, test_ids: np.ndarray, threshold: float)
         "recall_neg": float(r_),
         "roc_auc": auc,
         "n_items": len(test),
+        "n_native_items": int((~fallback).sum()),
+        "n_fallback_items": int(fallback.sum()),
+        "score_coverage": float((~fallback).mean()) if len(test) else 0.0,
+        "native_macro_f1": float(native_macro_f1),
+        "used_net_vote_fallback": bool(fallback.any()),
+        "auc_population": "native_nvse_items",
     }
 
 
@@ -370,35 +397,6 @@ def evaluate_kfold(
 # Canonical multi-split benchmark
 
 
-def _add_net_vote_fallback(
-    item_scores: pd.DataFrame,
-    votes: pd.DataFrame,
-) -> pd.DataFrame:
-    """Fill missing item scores with unweighted net votes."""
-    covered_ids = set(item_scores["item_id"].unique()) if not item_scores.empty else set()
-    all_ids = set(votes["item_id"].unique())
-    missing_ids = all_ids - covered_ids
-    if not missing_ids:
-        return item_scores
-
-    missing_votes = votes[votes["item_id"].isin(missing_ids)]
-    net_vote = (
-        missing_votes.groupby("item_id")
-        .agg(
-            community=("community", "first"), label=("label", "first"), nvse_score=("vote", "mean")
-        )
-        .reset_index()
-    )
-    net_vote["top_category"] = None
-    net_vote["is_fallback"] = True
-
-    item_scores = item_scores.copy()
-    if "is_fallback" not in item_scores.columns:
-        item_scores["is_fallback"] = False
-
-    return pd.concat([item_scores, net_vote], ignore_index=True)
-
-
 def evaluate_splits(
     votes_dir: Path,
     scores_path: Path,
@@ -437,14 +435,21 @@ def evaluate_splits(
 
         threshold = _calibrate(item_scores_val, item_scores_val["item_id"].values)
 
-        # Full splits use net vote for uncovered test items.
-        is_full_split = split_dataset(split_path, split_name) == "full"
-        if is_full_split:
-            n_before = len(item_scores_test)
-            item_scores_test = _add_net_vote_fallback(item_scores_test, test_votes)
-            n_fallback = len(item_scores_test) - n_before
-        else:
-            n_fallback = 0
+        n_native = len(item_scores_test)
+        item_scores_test = item_scores_test.copy()
+        item_scores_test["y_hat"] = np.where(
+            item_scores_test["nvse_score"].to_numpy() >= threshold, 1, -1
+        )
+        net_vote_threshold = calibrate_net_vote_threshold(val_votes)
+        item_scores_test = add_net_vote_fallback(
+            item_scores_test,
+            test_votes,
+            net_vote_threshold,
+            prediction_column="y_hat",
+            native_score_column="nvse_score",
+            native_source="nvse",
+        )
+        n_fallback = len(item_scores_test) - n_native
 
         metrics = _evaluate(item_scores_test, item_scores_test["item_id"].values, threshold)
 
@@ -453,18 +458,17 @@ def evaluate_splits(
         metrics["n_train_items"] = train_votes["item_id"].nunique()
         metrics["n_val_items"] = val_votes["item_id"].nunique()
         metrics["n_test_items"] = n_test_items
-        metrics["coverage_test"] = len(item_scores_test) / max(n_test_items, 1)
+        metrics["coverage_test"] = n_native / max(n_test_items, 1)
+        metrics["final_decision_coverage"] = len(item_scores_test) / max(n_test_items, 1)
+        metrics["net_vote_fallback_threshold"] = net_vote_threshold
         metrics["user_profile"] = "causal train-only activity/tenure/social metadata"
         metrics["collection_time_karma_used"] = False
-        if is_full_split:
-            metrics["used_net_vote_fallback"] = True
-            metrics["n_fallback_items"] = n_fallback
 
         print(
             f"NVSE {split_name}: threshold={threshold:.3f} | "
             f"profiles={n_valid_skill:,} | macro-F1={metrics['macro_f1']:.4f} | "
             f"AUC={metrics['roc_auc']:.4f} | coverage={metrics['coverage_test']:.1%}"
-            + (f" | fallback_items={n_fallback}" if is_full_split else "")
+            + (f" | fallback_items={n_fallback}" if n_fallback else "")
         )
 
         split_out_dir = out_dir / split_name / "normvio-skill-extraction"
@@ -475,12 +479,6 @@ def evaluate_splits(
         with open(split_out_dir / "metrics.json", "w") as fh:
             json.dump(metrics, fh, indent=2)
         summary[split_name] = metrics
-
-    summary_path = out_dir / "summaries" / "nvse.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(summary_path, "w") as fh:
-        json.dump(summary, fh, indent=2)
-    print(f"NVSE summary: {summary_path} | splits={len(summary)}")
 
     return summary
 

@@ -4,21 +4,50 @@
     "f1_pos": 0.8588170481294135,
     "f1_neg": 0.5094832086305898,
     "n_items": 12857,
-    "roc_auc": 0.8407161196869146
+    "n_native_items": 12857,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6841501283800017,
+    "native_f1_pos": 0.8588170481294135,
+    "native_f1_neg": 0.5094832086305898,
+    "roc_auc": 0.840716048736277
   },
   "val": {
-    "macro_f1": 0.687953096755825,
-    "f1_pos": 0.8469967717000864,
-    "f1_neg": 0.5289094218115638,
-    "n_items": 14568,
-    "roc_auc": 0.7901660935626471
+    "macro_f1": 0.6875781503180041,
+    "f1_pos": 0.8467919114020536,
+    "f1_neg": 0.5283643892339545,
+    "n_items": 14774,
+    "n_native_items": 14568,
+    "n_fallback_items": 206,
+    "score_coverage": 0.9860565858941384,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.687953096755825,
+    "native_f1_pos": 0.8469967717000864,
+    "native_f1_neg": 0.5289094218115638,
+    "roc_auc": 0.7901661579105663
   },
   "test": {
-    "macro_f1": 0.6777321387206751,
-    "f1_pos": 0.8413297557869844,
-    "f1_neg": 0.5141345216543657,
-    "n_items": 14585,
-    "roc_auc": 0.7860041984849009
+    "macro_f1": 0.6772592735513456,
+    "f1_pos": 0.8409233809395491,
+    "f1_neg": 0.513595166163142,
+    "n_items": 14774,
+    "n_native_items": 14585,
+    "n_fallback_items": 189,
+    "score_coverage": 0.9872072559902532,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6777321387206751,
+    "native_f1_pos": 0.8413297557869844,
+    "native_f1_neg": 0.5141345216543657,
+    "roc_auc": 0.7860038899693789
+  },
+  "net_vote_fallback": {
+    "threshold": -0.7509386733416648,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,14 +72,14 @@
       "accuracy": 0.8128998288798209,
       "n_votes": 37985,
       "post_embedding_coverage": 0.9997969405712739,
-      "roc_auc": 0.8457748637160973
+      "roc_auc": 0.845774850987747
     },
     "test": {
       "macro_f1": 0.7549829395623975,
       "accuracy": 0.818629763589663,
       "n_votes": 38154,
       "post_embedding_coverage": 0.9995938811425478,
-      "roc_auc": 0.852578227147063
+      "roc_auc": 0.8525781873465692
     }
   },
   "boc_stacking": {
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 64,
     "eligibility_components": 4,
-    "prediction_explained_variance": 0.9958724975585938,
+    "prediction_explained_variance": 0.9958726763725281,
     "eligibility_explained_variance": 0.8657481074333191,
     "context_features": 202,
     "classifier": "standardized class-balanced L2 logistic regression",
@@ -74,32 +103,32 @@
         "prediction_components": 64,
         "eligibility_components": 4,
         "regularization_c": 0.01,
-        "inner_tune_auc": 0.794399851215007
+        "inner_tune_auc": 0.7943993228592081
       },
       "candidates": [
         {
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7919794532996876
+          "inner_tune_auc": 0.7919789249438887
         },
         {
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7916761770710491
+          "inner_tune_auc": 0.7916767054268481
         },
         {
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7918811791210695
+          "inner_tune_auc": 0.7918822358326676
         },
         {
           "prediction_components": 16,
           "eligibility_components": 4,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7923947409577188
+          "inner_tune_auc": 0.7923931558903218
         },
         {
           "prediction_components": 16,
@@ -111,61 +140,61 @@
           "prediction_components": 16,
           "eligibility_components": 8,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7915900550758085
+          "inner_tune_auc": 0.7915895267200095
         },
         {
           "prediction_components": 16,
           "eligibility_components": 8,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7917485618155151
+          "inner_tune_auc": 0.791749090171314
         },
         {
           "prediction_components": 16,
           "eligibility_components": 8,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7922357058622131
+          "inner_tune_auc": 0.7922346491506153
         },
         {
           "prediction_components": 16,
           "eligibility_components": 12,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7918679702260941
+          "inner_tune_auc": 0.7918674418702949
         },
         {
           "prediction_components": 16,
           "eligibility_components": 12,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7915847715178181
+          "inner_tune_auc": 0.7915842431620191
         },
         {
           "prediction_components": 16,
           "eligibility_components": 12,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7918193614925839
+          "inner_tune_auc": 0.791819361492584
         },
         {
           "prediction_components": 16,
           "eligibility_components": 12,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7923223562132529
+          "inner_tune_auc": 0.79232394128065
         },
         {
           "prediction_components": 32,
           "eligibility_components": 4,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7916339086071273
+          "inner_tune_auc": 0.7916339086071272
         },
         {
           "prediction_components": 32,
           "eligibility_components": 4,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.791068039546375
+          "inner_tune_auc": 0.7910675111905758
         },
         {
           "prediction_components": 32,
           "eligibility_components": 4,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7909581415401783
+          "inner_tune_auc": 0.7909576131843793
         },
         {
           "prediction_components": 32,
@@ -183,19 +212,19 @@
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7909158730762565
+          "inner_tune_auc": 0.7909153447204575
         },
         {
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7908408465527954
+          "inner_tune_auc": 0.7908413749085945
         },
         {
           "prediction_components": 32,
           "eligibility_components": 8,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.791169483859787
+          "inner_tune_auc": 0.7911694838597871
         },
         {
           "prediction_components": 32,
@@ -207,25 +236,25 @@
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7909449326452027
+          "inner_tune_auc": 0.7909449326452028
         },
         {
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7908878702189084
+          "inner_tune_auc": 0.7908878702189085
         },
         {
           "prediction_components": 32,
           "eligibility_components": 12,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7911895613801497
+          "inner_tune_auc": 0.791189033024351
         },
         {
           "prediction_components": 64,
           "eligibility_components": 4,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.794399851215007
+          "inner_tune_auc": 0.7943993228592081
         },
         {
           "prediction_components": 64,
@@ -237,25 +266,25 @@
           "prediction_components": 64,
           "eligibility_components": 4,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7931719523380802
+          "inner_tune_auc": 0.793171423982281
         },
         {
           "prediction_components": 64,
           "eligibility_components": 4,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7930784333616533
+          "inner_tune_auc": 0.7930779050058543
         },
         {
           "prediction_components": 64,
           "eligibility_components": 8,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7942466280332907
+          "inner_tune_auc": 0.7942460996774916
         },
         {
           "prediction_components": 64,
           "eligibility_components": 8,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7934926643080865
+          "inner_tune_auc": 0.7934916075964884
         },
         {
           "prediction_components": 64,
@@ -267,31 +296,31 @@
           "prediction_components": 64,
           "eligibility_components": 8,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7929648368648635
+          "inner_tune_auc": 0.7929669502880596
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.01,
-          "inner_tune_auc": 0.7942334191383151
+          "inner_tune_auc": 0.7942344758499131
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.03,
-          "inner_tune_auc": 0.7934990045776746
+          "inner_tune_auc": 0.7934995329334738
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.1,
-          "inner_tune_auc": 0.7930911139008296
+          "inner_tune_auc": 0.7930905855450306
         },
         {
           "prediction_components": 64,
           "eligibility_components": 12,
           "regularization_c": 0.3,
-          "inner_tune_auc": 0.7929859710968244
+          "inner_tune_auc": 0.7929849143852263
         }
       ],
       "selection_metric": "ROC-AUC",

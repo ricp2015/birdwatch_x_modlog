@@ -1,17 +1,38 @@
 {
   "val": {
-    "macro_f1": 0.682627484874676,
-    "f1_pos": 0.9191011235955057,
-    "f1_neg": 0.4461538461538462,
+    "macro_f1": 0.7178910976663786,
+    "f1_pos": 0.9280898876404494,
+    "f1_neg": 0.5076923076923077,
     "n_items": 510,
-    "roc_auc": 0.6248199884792627
+    "n_native_items": 510,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7178910976663786,
+    "native_f1_pos": 0.9280898876404494,
+    "native_f1_neg": 0.5076923076923077,
+    "roc_auc": 0.650597638248848
   },
   "test": {
-    "macro_f1": 0.7246569437459587,
-    "f1_pos": 0.933184855233853,
-    "f1_neg": 0.5161290322580645,
+    "macro_f1": 0.7167405764966741,
+    "f1_pos": 0.9334811529933481,
+    "f1_neg": 0.5,
     "n_items": 511,
-    "roc_auc": 0.5322374613419389
+    "n_native_items": 511,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7167405764966741,
+    "native_f1_pos": 0.9334811529933481,
+    "native_f1_neg": 0.5,
+    "roc_auc": 0.5202030388597554
+  },
+  "net_vote_fallback": {
+    "threshold": 3.254067584480623,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 510,
@@ -25,7 +46,7 @@
       "accuracy": 0.8573003622617735,
       "n_votes": 6349,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8366289155485535
+      "roc_auc": 0.8366314982932361
     },
     "test": {
       "macro_f1": 0.6730078625200845,

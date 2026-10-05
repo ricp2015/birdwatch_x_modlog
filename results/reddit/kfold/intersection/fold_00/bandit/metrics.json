@@ -4,21 +4,50 @@
     "f1_pos": 0.9043151969981238,
     "f1_neg": 0.34334763948497854,
     "n_items": 916,
-    "roc_auc": 0.6784125320288843
+    "n_native_items": 916,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6238314182415512,
+    "native_f1_pos": 0.9043151969981238,
+    "native_f1_neg": 0.34334763948497854,
+    "roc_auc": 0.6771896109946425
   },
   "val": {
-    "macro_f1": 0.6721478760313712,
-    "f1_pos": 0.9298813376483279,
+    "macro_f1": 0.6721856554830692,
+    "f1_pos": 0.9299568965517241,
     "f1_neg": 0.4144144144144144,
-    "n_items": 1038,
-    "roc_auc": 0.749661446433764
+    "n_items": 1039,
+    "n_native_items": 1038,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990375360923965,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6721478760313712,
+    "native_f1_pos": 0.9298813376483279,
+    "native_f1_neg": 0.4144144144144144,
+    "roc_auc": 0.7501682382752461
   },
   "test": {
-    "macro_f1": 0.6276433720056991,
-    "f1_pos": 0.9096077316657192,
+    "macro_f1": 0.6277459157020511,
+    "f1_pos": 0.9098128190584232,
     "f1_neg": 0.345679012345679,
-    "n_items": 1001,
-    "roc_auc": 0.7334289511214831
+    "n_items": 1003,
+    "n_native_items": 1001,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9980059820538385,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6276433720056991,
+    "native_f1_pos": 0.9096077316657192,
+    "native_f1_neg": 0.345679012345679,
+    "roc_auc": 0.7329022429664203
+  },
+  "net_vote_fallback": {
+    "threshold": 0.2503128911139072,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 1038,
@@ -32,14 +61,14 @@
       "accuracy": 0.890631659705055,
       "n_votes": 11731,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8993436074718892
+      "roc_auc": 0.8993435590135432
     },
     "test": {
       "macro_f1": 0.7929278607753855,
       "accuracy": 0.8844182470527935,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8872826083833995
+      "roc_auc": 0.8872825596931501
     }
   },
   "protocol": {
@@ -66,7 +95,7 @@
     "n_candidate_profiles": 2536,
     "n_candidate_communities": 12,
     "linucb_updates": 2748,
-    "linucb_total_update_weight": 915.9999999999966,
+    "linucb_total_update_weight": 916.0000000000008,
     "ucb_alpha": 0.5,
     "ridge": 1.0,
     "softmax_temperature": 1.0,

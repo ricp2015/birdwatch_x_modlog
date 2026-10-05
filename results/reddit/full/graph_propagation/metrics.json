@@ -4,21 +4,50 @@
     "f1_pos": 0.83272511245014,
     "f1_neg": 0.38463940056197315,
     "n_items": 14986,
-    "roc_auc": 0.6576949637102011
+    "n_native_items": 14986,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6086822565060566,
+    "native_f1_pos": 0.83272511245014,
+    "native_f1_neg": 0.38463940056197315,
+    "roc_auc": 0.6576948230917048
   },
   "val": {
-    "macro_f1": 0.6505527331187568,
-    "f1_pos": 0.8294391112721126,
-    "f1_neg": 0.47166635496540116,
-    "n_items": 10955,
-    "roc_auc": 0.6991340871307122
+    "macro_f1": 0.6502833634811416,
+    "f1_pos": 0.8294342325137264,
+    "f1_neg": 0.47113249444855665,
+    "n_items": 11080,
+    "n_native_items": 10955,
+    "n_fallback_items": 125,
+    "score_coverage": 0.9887184115523465,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6505527331187568,
+    "native_f1_pos": 0.8294391112721126,
+    "native_f1_neg": 0.47166635496540116,
+    "roc_auc": 0.6991339963489386
   },
   "test": {
-    "macro_f1": 0.6305021254989656,
-    "f1_pos": 0.8226950354609929,
-    "f1_neg": 0.4383092155369383,
-    "n_items": 10945,
-    "roc_auc": 0.7143176272718236
+    "macro_f1": 0.629541891162472,
+    "f1_pos": 0.8227270031433486,
+    "f1_neg": 0.4363567791815953,
+    "n_items": 11082,
+    "n_native_items": 10945,
+    "n_fallback_items": 137,
+    "score_coverage": 0.9876376105396137,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6305021254989656,
+    "native_f1_pos": 0.8226950354609929,
+    "native_f1_neg": 0.4383092155369383,
+    "roc_auc": 0.7143172859043072
+  },
+  "net_vote_fallback": {
+    "threshold": -0.7509386733416648,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 14986,
@@ -34,14 +63,14 @@
       "accuracy": 0.8188500547761247,
       "n_votes": 28297,
       "post_embedding_coverage": 0.9998194945848375,
-      "roc_auc": 0.8483144889407191
+      "roc_auc": 0.8483146281125243
     },
     "test": {
       "macro_f1": 0.7595864077547653,
       "accuracy": 0.8215023875703799,
       "n_votes": 28062,
       "post_embedding_coverage": 0.9996390543223245,
-      "roc_auc": 0.8527440305112319
+      "roc_auc": 0.8527440271632056
     }
   },
   "graph_attention": {
@@ -54,7 +83,7 @@
         "attention_local_experience": 0.5,
         "attention_tenure": 0.25
       },
-      "policy_train_auc": 0.6576949637102011
+      "policy_train_auc": 0.6576948230917048
     },
     "candidates": [
       {
@@ -62,7 +91,7 @@
         "weights": {
           "attention_graph": 1.0
         },
-        "policy_train_auc": 0.5565711662540153
+        "policy_train_auc": 0.5565710767695176
       },
       {
         "name": "skill_affinity",
@@ -73,7 +102,7 @@
           "attention_local_experience": 0.5,
           "attention_tenure": 0.25
         },
-        "policy_train_auc": 0.6576949637102011
+        "policy_train_auc": 0.6576948230917048
       },
       {
         "name": "full_social",
@@ -85,7 +114,7 @@
           "attention_tenure": 0.25,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6455519301550485
+        "policy_train_auc": 0.6455519685055475
       },
       {
         "name": "content_social",
@@ -97,7 +126,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6504038435381455
+        "policy_train_auc": 0.6504063874545802
       }
     ],
     "n_graph_users": 11750,
@@ -129,6 +158,7 @@
   "outer_split_protocol": {
     "split": "full",
     "split_type": "seeded_item",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

@@ -4,21 +4,50 @@
     "f1_pos": 0.8989508558807289,
     "f1_neg": 0.45045045045045046,
     "n_items": 1072,
-    "roc_auc": 0.6358895285087719
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6747006531655897,
+    "native_f1_pos": 0.8989508558807289,
+    "native_f1_neg": 0.45045045045045046,
+    "roc_auc": 0.636071134868421
   },
   "val": {
-    "macro_f1": 0.7737500100627108,
-    "f1_pos": 0.9375709421112373,
-    "f1_neg": 0.6099290780141844,
+    "macro_f1": 0.7682539682539682,
+    "f1_pos": 0.9365079365079365,
+    "f1_neg": 0.6,
     "n_items": 511,
-    "roc_auc": 0.5829467527228722
+    "n_native_items": 511,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7682539682539682,
+    "native_f1_pos": 0.9365079365079365,
+    "native_f1_neg": 0.6,
+    "roc_auc": 0.5823920935861235
   },
   "test": {
-    "macro_f1": 0.6853896103896104,
-    "f1_pos": 0.9136363636363637,
-    "f1_neg": 0.45714285714285713,
+    "macro_f1": 0.6876505605957912,
+    "f1_pos": 0.9148694665153235,
+    "f1_neg": 0.460431654676259,
     "n_items": 510,
-    "roc_auc": 0.47548285808171165
+    "n_native_items": 510,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6876505605957912,
+    "native_f1_pos": 0.9148694665153235,
+    "native_f1_neg": 0.460431654676259,
+    "roc_auc": 0.4754828580817117
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 511,
@@ -32,7 +61,7 @@
       "accuracy": 0.825336838646073,
       "n_votes": 6086,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8058410130843088
+      "roc_auc": 0.805840779331584
     },
     "test": {
       "macro_f1": 0.7176303001919794,
@@ -66,7 +95,7 @@
     "n_candidate_profiles": 2515,
     "n_candidate_communities": 13,
     "linucb_updates": 3212,
-    "linucb_total_update_weight": 1071.9999999999995,
+    "linucb_total_update_weight": 1071.9999999999998,
     "ucb_alpha": 0.5,
     "ridge": 1.0,
     "softmax_temperature": 1.0,

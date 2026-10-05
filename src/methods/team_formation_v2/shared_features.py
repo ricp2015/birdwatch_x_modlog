@@ -12,6 +12,11 @@ import pandas as pd
 from scipy import sparse
 from sklearn.metrics import f1_score, roc_auc_score
 
+from src.utils.net_vote_fallback import (
+    add_net_vote_fallback,
+    calibrate_net_vote_threshold,
+)
+
 DEFAULT_CAUSAL_FEATURES = Path(
     "data/interim/reddit/features/causal_user_vote_features.parquet"
 )
@@ -376,16 +381,50 @@ def apply_thresholds(
 
 
 def classification_metrics(preds: pd.DataFrame) -> dict:
-    """Calculate standard item-level metrics using continuous scores for AUC."""
+    """Calculate final hard-decision metrics and native-score diagnostics."""
     y_true, y_pred = preds["label"], preds["y_hat"]
+    fallback = preds.get("is_fallback", pd.Series(False, index=preds.index)).astype(bool)
+    native = preds.loc[~fallback]
     metrics = {
         "macro_f1": f1_score(y_true, y_pred, average="macro"),
         "f1_pos": f1_score(y_true, y_pred, pos_label=1),
         "f1_neg": f1_score(y_true, y_pred, pos_label=-1),
         "n_items": len(preds),
+        "n_native_items": int((~fallback).sum()),
+        "n_fallback_items": int(fallback.sum()),
+        "score_coverage": float((~fallback).mean()) if len(preds) else 0.0,
+        "used_net_vote_fallback": bool(fallback.any()),
+        "auc_population": "native_method_items",
     }
+    if not native.empty:
+        metrics["native_macro_f1"] = f1_score(
+            native["label"], native["y_hat"], average="macro"
+        )
+        metrics["native_f1_pos"] = f1_score(
+            native["label"], native["y_hat"], pos_label=1
+        )
+        metrics["native_f1_neg"] = f1_score(
+            native["label"], native["y_hat"], pos_label=-1
+        )
     try:
-        metrics["roc_auc"] = roc_auc_score(y_true, preds["score"])
+        metrics["roc_auc"] = roc_auc_score(native["label"], native["score"])
     except ValueError:
         metrics["roc_auc"] = None
     return metrics
+
+
+def complete_with_net_vote_fallback(
+    predictions: pd.DataFrame,
+    validation_votes: pd.DataFrame,
+    evaluation_votes: pd.DataFrame,
+) -> tuple[pd.DataFrame, float]:
+    """Complete a team method's missing decisions with the Net Vote baseline."""
+    threshold = calibrate_net_vote_threshold(validation_votes)
+    completed = add_net_vote_fallback(
+        predictions,
+        evaluation_votes,
+        threshold,
+        prediction_column="y_hat",
+        native_score_column="score",
+    )
+    return completed, threshold

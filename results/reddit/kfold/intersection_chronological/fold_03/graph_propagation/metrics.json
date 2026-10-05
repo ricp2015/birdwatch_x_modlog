@@ -4,21 +4,50 @@
     "f1_pos": 0.8775956284153006,
     "f1_neg": 0.28662420382165604,
     "n_items": 1072,
-    "roc_auc": 0.7109923245614036
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5821099161184783,
+    "native_f1_pos": 0.8775956284153006,
+    "native_f1_neg": 0.28662420382165604,
+    "roc_auc": 0.7114137883771929
   },
   "val": {
     "macro_f1": 0.7079803684281296,
     "f1_pos": 0.9234234234234234,
     "f1_neg": 0.4925373134328358,
     "n_items": 511,
-    "roc_auc": 0.7221998117520506
+    "n_native_items": 511,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.7079803684281296,
+    "native_f1_pos": 0.9234234234234234,
+    "native_f1_neg": 0.4925373134328358,
+    "roc_auc": 0.7229225494150867
   },
   "test": {
     "macro_f1": 0.6210160135228934,
     "f1_pos": 0.8967082860385925,
     "f1_neg": 0.34532374100719426,
     "n_items": 510,
-    "roc_auc": 0.699587425608821
+    "n_native_items": 510,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6210160135228934,
+    "native_f1_pos": 0.8967082860385925,
+    "native_f1_neg": 0.34532374100719426,
+    "roc_auc": 0.6997334696410968
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 1072,
@@ -34,7 +63,7 @@
       "accuracy": 0.825336838646073,
       "n_votes": 6086,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8058410130843088
+      "roc_auc": 0.805840779331584
     },
     "test": {
       "macro_f1": 0.7176303001919794,
@@ -55,7 +84,7 @@
         "attention_local_experience": 0.5,
         "attention_social_core": 0.5
       },
-      "policy_train_auc": 0.7109923245614036
+      "policy_train_auc": 0.7114137883771929
     },
     "candidates": [
       {
@@ -63,7 +92,7 @@
         "weights": {
           "attention_graph": 1.0
         },
-        "policy_train_auc": 0.43162006578947365
+        "policy_train_auc": 0.4316234923245614
       },
       {
         "name": "skill_affinity",
@@ -74,7 +103,7 @@
           "attention_local_experience": 0.5,
           "attention_tenure": 0.25
         },
-        "policy_train_auc": 0.6962822094298247
+        "policy_train_auc": 0.6962856359649123
       },
       {
         "name": "full_social",
@@ -86,7 +115,7 @@
           "attention_tenure": 0.25,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6838438870614034
+        "policy_train_auc": 0.6838473135964912
       },
       {
         "name": "content_social",
@@ -98,7 +127,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7109923245614036
+        "policy_train_auc": 0.7114137883771929
       }
     ],
     "n_graph_users": 1760,

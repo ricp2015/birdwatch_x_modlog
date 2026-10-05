@@ -29,30 +29,41 @@ logger = logging.getLogger("birdwatch.mf_base_scorer")
 logger.setLevel(logging.INFO)
 
 
-def coalesce_columns(df: pd.DataFrame, columnPrefix: str) -> pd.DataFrame:
-  """Condense all columns beginning with columnPrefix into a single column.
+def coalesce_columns(
+  df: pd.DataFrame, columnPrefix: str, includeBaseColumn: bool = False
+) -> pd.DataFrame:
+  """Condense columns for columnPrefix into a single column.
 
-  With each row there must be at most one column with a non-NaN value in the set of
-  columns beginning with columnPrefix.  If a non-NaN value is present that will
-  become the value in the condensed column, otherwise the value will be NaN.  After
-  column values are condensed the original (prefixed) columns will be dropped.
+  By default, condenses columns beginning with ``{columnPrefix}_`` (suffix pattern
+  used by group/topic scorers). If includeBaseColumn is True, also includes an
+  existing bare ``columnPrefix`` column (used when a main model writes the bare
+  name and a secondary model writes ``{columnPrefix}_{id}``).
+
+  With each row there must be at most one column with a non-NaN value in the set.
+  If a non-NaN value is present that will become the value in the condensed
+  column, otherwise the value will be NaN.  After column values are condensed the
+  original columns being coalesced will be dropped (and replaced by columnPrefix).
 
   Args:
     df: DataFrame containing columns to condense
-    collumnPrefix: Prefix used to detect columns to coalesce, and the name for
+    columnPrefix: Prefix used to detect columns to coalesce, and the name for
       the output column.
+    includeBaseColumn: if True, include bare columnPrefix alongside suffix columns
 
   Returns:
-    DataFrame with all columns prefixed by columnPrefix dropped and replaced by
-    a single column named columnPrefix
+    DataFrame with coalesced columns replaced by a single column named columnPrefix
 
   Raises:
-    AssertionError if multiple columns prefixed by columnPrefix have non-NaN values
-    for any row.
+    AssertionError if multiple candidate columns have non-NaN values for any row.
   """
   # Identify columns to coalesce
   columns = [col for col in df.columns if col.startswith(f"{columnPrefix}_")]
+  if includeBaseColumn and columnPrefix in df.columns:
+    columns = [columnPrefix] + columns
   if not columns:
+    return df
+  # Only base column present and no suffixes: nothing to coalesce.
+  if columns == [columnPrefix]:
     return df
   # Validate that at most one column is set, and store which rows have a column set
   rowResults = np.invert(df[columns].isna()).sum(axis=1)
@@ -169,7 +180,7 @@ class MFBaseScorer(Scorer):
     crnhThresholdNoteFactorMultiplier: float = -0.8,
     crnhThresholdNMIntercept: float = -0.15,
     crnhThresholdUCBIntercept: float = -0.04,
-    crhSuperThreshold: Optional[float] = 0.5,
+    crhSuperThreshold: Optional[float] = None,
     crhThresholdNoHighVol: float = 0.37,
     crhThresholdNoCorrelated: float = 0.37,
     lowDiligenceThreshold: float = 0.263,
@@ -198,6 +209,7 @@ class MFBaseScorer(Scorer):
     minMinorityNetHelpfulRatio: Optional[float] = None,
     populationSampledRatingPerNoteLossRatio: Optional[float] = 10.0,
     useGlobalIntercept: bool = True,
+    crnhMinSignCount: int = 3,
   ):
     """Configure MatrixFactorizationScorer object.
 
@@ -237,6 +249,9 @@ class MFBaseScorer(Scorer):
       maxFirstMFTrainError: maximum error allowed for the first MF training process
       maxFinalMFTrainError: maximum error allowed for the final MF training process
       populationSampledRatingPerNoteLossRatio: optional override for ratingPerNoteLossRatio when computing the population sampled intercept
+      crnhMinSignCount: minimum ratings from raters on each side of the factor spectrum required
+        for CRNH in final scoring (applied to GeneralCRNH, UcbCRNH and NmCRNH; RatioCRNH already
+        requires it).  Prescoring rounds are unaffected, mirroring RatioCRNH.
     """
     super().__init__(
       includedTopics=includedTopics,
@@ -280,6 +295,7 @@ class MFBaseScorer(Scorer):
     self._minMinorityNetHelpfulRatings = minMinorityNetHelpfulRatings
     self._minMinorityNetHelpfulRatio = minMinorityNetHelpfulRatio
     self._populationSampledRatingPerNoteLossRatio = populationSampledRatingPerNoteLossRatio
+    self._crnhMinSignCount = crnhMinSignCount
     mfArgs = dict(
       [
         pair
@@ -579,10 +595,13 @@ class MFBaseScorer(Scorer):
         ]
       )
     if len(ratingsForTraining) == 0:
-      # This is only expected to occur for MFTopicScorer_MessiRonaldo in --recent runs
-      assert (
-        self.get_name() == "MFTopicScorer_MessiRonaldo"
-      ), f"Unexpected scorer: {self.get_name()}"
+      # This is expected for sparse topic scorers and NMR group scorer in --recent runs.
+      allowedEmptyRatingScorers = {
+        "MFTopicScorer_MessiRonaldo",
+        "MFTopicScorer_InDimensionTwo",
+        "MFGroupScorer_33",
+      }
+      assert self.get_name() in allowedEmptyRatingScorers, f"Unexpected scorer: {self.get_name()}"
       raise EmptyRatingException
     logger.info(
       f"ratingsForTraining summary {self.get_name()}: {get_df_fingerprint(ratingsForTraining, [c.noteIdKey, c.raterParticipantIdKey])}"
@@ -1032,7 +1051,6 @@ class MFBaseScorer(Scorer):
         userIncorrectTagUsageDf,
         on=c.raterParticipantIdKey,
         how="left",
-        unsafeAllowed={c.totalRatingsMadeByRaterKey, c.incorrectTagRatingsMadeByRaterKey},
       )
       .merge(
         raterParamsUnfiltered[
@@ -1268,6 +1286,7 @@ class MFBaseScorer(Scorer):
         minMinorityNetHelpfulRatio=self._minMinorityNetHelpfulRatio,
         crhThresholdNoHighVol=crhThresholdNoHighVol,
         crhThresholdNoCorrelated=crhThresholdNoCorrelated,
+        crnhMinSignCount=self._crnhMinSignCount,
       )
       logger.info(f"sn cols: {scoredNotes.columns}")
 
@@ -1509,7 +1528,6 @@ class MFBaseScorer(Scorer):
         scoredNoteFinalRoundRatings,
         on=c.noteIdKey,
         how="left",
-        unsafeAllowed=[c.defaultIndexKey, c.numFinalRoundRatingsKey],
       )
 
       noteScores = noteScores.rename(columns=self._get_note_col_mapping())

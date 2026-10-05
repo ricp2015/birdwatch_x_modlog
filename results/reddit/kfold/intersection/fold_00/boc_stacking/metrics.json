@@ -4,21 +4,50 @@
     "f1_pos": 0.917283950617284,
     "f1_neg": 0.36792452830188677,
     "n_items": 916,
+    "n_native_items": 916,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6426042394595853,
+    "native_f1_pos": 0.917283950617284,
+    "native_f1_neg": 0.36792452830188677,
     "roc_auc": 0.8986955508968087
   },
   "val": {
-    "macro_f1": 0.6869233747537343,
-    "f1_pos": 0.9224848818031886,
+    "macro_f1": 0.6869659420893723,
+    "f1_pos": 0.9225700164744646,
     "f1_neg": 0.45136186770428016,
-    "n_items": 1038,
+    "n_items": 1039,
+    "n_native_items": 1038,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990375360923965,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6869233747537343,
+    "native_f1_pos": 0.9224848818031886,
+    "native_f1_neg": 0.45136186770428016,
     "roc_auc": 0.8282266439579612
   },
   "test": {
-    "macro_f1": 0.616727328420332,
-    "f1_pos": 0.902745995423341,
+    "macro_f1": 0.6168383489735016,
+    "f1_pos": 0.9029680365296804,
     "f1_neg": 0.33070866141732286,
-    "n_items": 1001,
-    "roc_auc": 0.8109522883443538
+    "n_items": 1003,
+    "n_native_items": 1001,
+    "n_fallback_items": 2,
+    "score_coverage": 0.9980059820538385,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.616727328420332,
+    "native_f1_pos": 0.902745995423341,
+    "native_f1_neg": 0.33070866141732286,
+    "roc_auc": 0.8109522883443537
+  },
+  "net_vote_fallback": {
+    "threshold": 0.2503128911139072,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,14 +72,14 @@
       "accuracy": 0.890631659705055,
       "n_votes": 11731,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8993436074718892
+      "roc_auc": 0.8993435590135432
     },
     "test": {
       "macro_f1": 0.7929278607753855,
       "accuracy": 0.8844182470527935,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8872826083833995
+      "roc_auc": 0.8872825596931501
     }
   },
   "boc_stacking": {
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 16,
     "eligibility_components": 12,
-    "prediction_explained_variance": 0.9866344928741455,
+    "prediction_explained_variance": 0.9866343140602112,
     "eligibility_explained_variance": 1.0000081062316895,
     "context_features": 31,
     "classifier": "standardized class-balanced L2 logistic regression",

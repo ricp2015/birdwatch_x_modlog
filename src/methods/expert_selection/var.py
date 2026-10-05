@@ -21,6 +21,10 @@ from src.methods.expert_selection.core import (  # noqa: E402
     calculate_var_scores,
     evaluate_fold,
 )
+from src.utils.net_vote_fallback import (  # noqa: E402
+    add_net_vote_fallback,
+    calibrate_net_vote_threshold,
+)
 from src.utils.splits import discover_splits, load_vote_partitions  # noqa: E402
 
 # Aggregation
@@ -368,46 +372,27 @@ def _fallback_val_from_train(split_label: str, train_df: pd.DataFrame):
 
 
 def _complete_with_net_vote(
-    decisions: pd.DataFrame, all_votes: pd.DataFrame
+    decisions: pd.DataFrame,
+    all_votes: pd.DataFrame,
+    threshold: float,
 ) -> tuple[pd.DataFrame, dict]:
-    """Restore uncovered items using the net vote over their full voter panel."""
-    all_items = all_votes[["community", "item_id"]].drop_duplicates()
-    if decisions.empty:
-        completed = decisions.copy()
-        covered_items = all_items.iloc[0:0]
-    else:
-        completed = decisions.copy()
-        completed["decision_source"] = "var_top_k"
-        covered_items = completed[["community", "item_id"]].drop_duplicates()
-
-    missing = all_items.merge(
-        covered_items,
-        on=["community", "item_id"],
-        how="left",
-        indicator=True,
+    """Restore uncovered items with validation-calibrated Net Vote."""
+    n_total = int(all_votes["item_id"].nunique())
+    n_covered = int(decisions["item_id"].nunique()) if not decisions.empty else 0
+    completed = add_net_vote_fallback(
+        decisions,
+        all_votes,
+        threshold,
+        prediction_column="predicted",
+        native_score_column="score",
+        native_source="var_top_k",
     )
-    missing = missing.loc[missing["_merge"] == "left_only", ["community", "item_id"]]
-    if not missing.empty:
-        missing_votes = all_votes.merge(missing, on=["community", "item_id"], how="inner")
-        fallback_rows = (
-            missing_votes.groupby(["community", "item_id"])
-            .agg(
-                predicted=("vote", lambda values: 1 if values.mean() >= 0 else -1),
-                score=("vote", "mean"),
-                label=("label", "first"),
-            )
-            .reset_index()
-        )
-        fallback_rows["decision_source"] = "net_vote_fallback"
-        completed = pd.concat([completed, fallback_rows], ignore_index=True)
-
-    n_total = int(len(all_items))
-    n_covered = int(len(covered_items))
     return completed, {
         "n_expert_covered_items": n_covered,
         "expert_coverage_rate": float(n_covered / n_total) if n_total else 0.0,
         "n_fallback_items": int(n_total - n_covered),
         "used_net_vote_fallback": bool(n_total > n_covered),
+        "net_vote_fallback_threshold": float(threshold),
     }
 
 
@@ -428,6 +413,7 @@ def run_single_split_var(
             return None, None, None
 
     scores = calculate_var_scores(train_df)
+    net_vote_threshold = calibrate_net_vote_threshold(val_for_cal)
 
     selection_modes = {"per_community": _base_votes, "per_item": _base_votes_per_item}
 
@@ -438,7 +424,9 @@ def run_single_split_var(
                 val_votes = base_fn(val_for_cal, scores, k)
                 if val_votes.empty:
                     continue
-                val_decisions, _ = _complete_with_net_vote(agg_fn(val_votes), val_for_cal)
+                val_decisions, _ = _complete_with_net_vote(
+                    agg_fn(val_votes), val_for_cal, net_vote_threshold
+                )
                 if val_decisions["label"].nunique() < 2:
                     continue
                 val_metrics = evaluate_fold(val_decisions)
@@ -454,7 +442,9 @@ def run_single_split_var(
     base_fn = selection_modes[best_cfg["mode"]]
 
     test_votes = base_fn(test_df, scores, best_cfg["k"])
-    test_decisions, coverage = _complete_with_net_vote(agg_fn(test_votes), test_df)
+    test_decisions, coverage = _complete_with_net_vote(
+        agg_fn(test_votes), test_df, net_vote_threshold
+    )
 
     if test_decisions["label"].nunique() < 2:
         print(f"  [{split_label}] single class in test - skipped.")
@@ -462,6 +452,13 @@ def run_single_split_var(
     test_metrics = evaluate_fold(
         test_decisions
     )  # single pass over the whole TEST set, no sub-bucketing
+    native_decisions = test_decisions.loc[~test_decisions["is_fallback"]]
+    native_metrics = (
+        evaluate_fold(native_decisions)
+        if not native_decisions.empty
+        else {"macro_f1": float("nan"), "f1_pos": float("nan"),
+              "f1_neg": float("nan"), "roc_auc": float("nan")}
+    )
 
     test_metrics.update(
         {
@@ -473,6 +470,14 @@ def run_single_split_var(
             "n_train_items": int(train_df["item_id"].nunique()),
             "n_val_items": int(val_df["item_id"].nunique()),
             "n_test_items": int(test_df["item_id"].nunique()),
+            "n_items": int(len(test_decisions)),
+            "score_coverage": coverage["expert_coverage_rate"],
+            "final_decision_coverage": 1.0,
+            "native_macro_f1": native_metrics["macro_f1"],
+            "native_f1_pos": native_metrics["f1_pos"],
+            "native_f1_neg": native_metrics["f1_neg"],
+            "native_roc_auc": native_metrics["roc_auc"],
+            "auc_population": "var_top_k_items",
             **coverage,
         }
     )
@@ -540,12 +545,6 @@ def evaluate_splits(
         scores.to_parquet(split_out_dir / "all_user_var_scores.parquet", index=False)
 
         summary[split_name] = metrics
-
-    summary_path = output_dir / "summaries" / "var.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(summary_path, "w") as fh:
-        json.dump(summary, fh, indent=2)
-    print(f"VAR summary: {summary_path}")
 
     return summary
 

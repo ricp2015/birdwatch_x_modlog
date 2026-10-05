@@ -20,6 +20,7 @@ from sklearn.metrics import (  # noqa: E402
     roc_auc_score,
 )
 from sklearn.model_selection import KFold  # noqa: E402
+
 from src.utils.splits import discover_splits, load_split_data, split_dataset  # noqa: E402
 
 _SCORING_ROOT = Path(__file__).parent.parent.parent / "external/community-notes/scoring/src"
@@ -54,6 +55,7 @@ MF_NOTE_FACTOR_LAMBDA = 0.03
 MF_USER_INTERCEPT_LAMBDA = 0.03 * 5
 MF_NOTE_INTERCEPT_LAMBDA = 0.03 * 5
 MF_GLOBAL_INTERCEPT_LAMBDA = 0.03 * 5
+MF_SEED = 10
 
 # Calibration sample size when validation is empty.
 MIN_CAL_FALLBACK_ITEMS = 50
@@ -142,6 +144,7 @@ def run_cn_mf(
         userInterceptLambda=MF_USER_INTERCEPT_LAMBDA,
         noteInterceptLambda=MF_NOTE_INTERCEPT_LAMBDA,
         globalInterceptLambda=MF_GLOBAL_INTERCEPT_LAMBDA,
+        seed=MF_SEED,
         featureCols=[c.noteIdKey, c.raterParticipantIdKey],
         labelCol=c.helpfulNumKey,
     )
@@ -627,23 +630,6 @@ def evaluate_splits(
             user_analysis.to_parquet(split_out_dir / "user_analysis.parquet", index=False)
 
         summary[split_name] = metrics
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Omit PR curves from the cross-split summary.
-    summary_slim = {
-        name: {
-            k: v
-            for k, v in m.items()
-            if k not in ("pr_curve_precision", "pr_curve_recall", "pr_curve_thresholds")
-        }
-        for name, m in summary.items()
-    }
-    summary_path = output_dir / "summaries" / "community_notes.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(summary_path, "w") as fh:
-        json.dump(summary_slim, fh, indent=2)
-    log.info("Split summary saved: %s", summary_path)
 
     return summary
 

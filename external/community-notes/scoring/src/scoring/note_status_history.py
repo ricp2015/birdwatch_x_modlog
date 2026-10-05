@@ -34,7 +34,6 @@ def merge_note_info(oldNoteStatusHistory: pd.DataFrame, notes: pd.DataFrame) -> 
     # use outer so we don't drop deleted notes from "oldNoteStatusHistory" or new notes from "notes"
     how="outer",
     suffixes=("", noteSuffix),
-    unsafeAllowed={c.createdAtMillisKey, c.createdAtMillisKey + noteSuffix},
   )
   newNotes = pd.isna(newNoteStatusHistory[c.createdAtMillisKey])
   logger.info(f"total notes added to noteStatusHistory: {sum(newNotes)}")
@@ -53,21 +52,30 @@ def merge_note_info(oldNoteStatusHistory: pd.DataFrame, notes: pd.DataFrame) -> 
   assert len(newNoteStatusHistory) == len(
     newNoteStatusHistory[[c.noteIdKey]].drop_duplicates()
   ), "noteStatusHistory must not contain duplicates"
-  assert len(notes) == len(
+  timestampMatches = len(
     newNoteStatusHistory[[c.noteIdKey, c.createdAtMillisKey]].merge(
       notes[[c.noteIdKey, c.createdAtMillisKey]],
       on=[c.noteIdKey, c.createdAtMillisKey],
       how="inner",
-      unsafeAllowed=c.createdAtMillisKey,
     )
-  ), "timestamps from notes and noteStatusHistory must match"
-  assert len(notes) == len(
+  )
+  assert len(notes) == timestampMatches, (
+    f"timestamps from notes and noteStatusHistory must match: "
+    f"len(notes)={len(notes)}, matched={timestampMatches}, len(noteStatusHistory)={len(newNoteStatusHistory)}"
+  )
+  authorshipMatches = len(
     newNoteStatusHistory[[c.noteIdKey, c.noteAuthorParticipantIdKey]].merge(
       notes[[c.noteIdKey, c.noteAuthorParticipantIdKey]],
       on=[c.noteIdKey, c.noteAuthorParticipantIdKey],
       how="inner",
     )
-  ), "authorship from notes and noteStatusHistory must match"
+  )
+  assert len(notes) == authorshipMatches, (
+    f"authorship from notes and noteStatusHistory must match: "
+    f"len(notes)={len(notes)}, matched={authorshipMatches}, len(noteStatusHistory)={len(newNoteStatusHistory)}, "
+    f"notes.{c.noteAuthorParticipantIdKey}.dtype={notes[c.noteAuthorParticipantIdKey].dtype}, "
+    f"nsh.{c.noteAuthorParticipantIdKey}.dtype={newNoteStatusHistory[c.noteAuthorParticipantIdKey].dtype}"
+  )
 
   # Drop cols which were artifacts of the merge
   noteStatusHistory = newNoteStatusHistory.drop(
@@ -144,6 +152,8 @@ def _update_single_note_status_history(mergedNote, currentTimeMillis, newScoredN
   if pd.notna(mergedNote[c.lockedStatusKey]):
     # Clear timestampMillisOfNmrDueToMinStableCrhTimeKey if the note is locked.
     mergedNote[c.timestampMillisOfNmrDueToMinStableCrhTimeKey] = -1
+    # Clear pcrhAboveThresholdTimeKey if the note is locked.
+    mergedNote[c.pcrhAboveThresholdTimeKey] = -1
   else:
     # If note is unlocked, allow updates to the stabilization timestamp and first
     # stabilization timestamp.
@@ -155,6 +165,11 @@ def _update_single_note_status_history(mergedNote, currentTimeMillis, newScoredN
         mergedNote[c.timestampMillisOfFirstNmrDueToMinStableCrhTimeKey] = mergedNote[
           c.timestampMillisOfNmrDueToMinStableCrhTimeKey
         ]
+    # If note is unlocked, allow updates to abovePcrhThresholdTime.
+    if not pd.isna(mergedNote[c.pcrhAboveThresholdTimeKey + newScoredNotesSuffix]):
+      mergedNote[c.pcrhAboveThresholdTimeKey] = mergedNote[
+        c.pcrhAboveThresholdTimeKey + newScoredNotesSuffix
+      ]
 
   if pd.isna(mergedNote[c.createdAtMillisKey + newScoredNotesSuffix]):
     # note used to be scored but isn't now; just retain old info
@@ -301,12 +316,14 @@ def merge_old_and_new_note_statuses(
         c.groupRatingStatusKey,
         c.modelingGroupKey,
         c.updatedTimestampMillisOfNmrDueToMinStableCrhTimeKey,
+        c.pcrhAboveThresholdTimeKey,
         c.multiGroupRatingStatusKey,
         c.modelingMultiGroupKey,
       ]
     ].rename(
       {
         c.createdAtMillisKey: c.createdAtMillisKey + newScoredNotesSuffix,
+        c.pcrhAboveThresholdTimeKey: c.pcrhAboveThresholdTimeKey + newScoredNotesSuffix,
       },
       axis=1,
     ),

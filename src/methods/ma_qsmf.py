@@ -470,7 +470,7 @@ def evaluate_items(items: pd.DataFrame, threshold: float) -> tuple[dict[str, Any
         "precision_remove": float(precision[1]),
         "recall_remove": float(recall[1]),
         "f1_remove": float(f1[1]),
-        # Aliases preserve compatibility with the existing benchmark summaries.
+        # Aliases preserve compatibility with the existing benchmark reports.
         "precision_pos": float(precision[0]),
         "recall_pos": float(recall[0]),
         "f1_pos": float(f1[0]),
@@ -788,8 +788,6 @@ def evaluate_all_splits(
             variants,
             lambda_y_grid,
         )
-        # Persist after each split so partial progress survives an interrupted long run.
-        _write_json(output_dir / "summaries" / "ma_qsmf.json", summary)
     return summary
 
 

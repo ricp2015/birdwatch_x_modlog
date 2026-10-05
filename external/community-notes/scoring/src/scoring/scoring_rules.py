@@ -65,6 +65,11 @@ class RuleID(Enum):
   GROUP_MODEL_12 = RuleAndVersion("GroupModel12", "1.1", True)
   GROUP_MODEL_13 = RuleAndVersion("GroupModel13", "1.1", True)
   GROUP_MODEL_14 = RuleAndVersion("GroupModel14", "1.1", True)
+  GROUP_MODEL_15 = RuleAndVersion("GroupModel15", "1.1", True)
+  GROUP_MODEL_15_NMR = RuleAndVersion("GroupModel15NMR", "1.1", True)
+  GROUP_MODEL_18 = RuleAndVersion("GroupModel18", "1.1", True)
+  GROUP_MODEL_18_NMR = RuleAndVersion("GroupModel18NMR", "1.1", True)
+  GROUP_MODEL_21_NMR = RuleAndVersion("GroupModel21NMR", "1.1", True)
   GROUP_MODEL_33 = RuleAndVersion("GroupModel33", "1.1", True)
   GROUP_MODEL_33_NMR = RuleAndVersion("GroupModel33NMR", "1.1", True)
   TOPIC_MODEL_1 = RuleAndVersion("TopicModel01", "1.0", False)
@@ -78,6 +83,7 @@ class RuleID(Enum):
   NMR_DUE_TO_MIN_STABLE_CRH_TIME = RuleAndVersion("NmrDueToMinStableCrhTime", "1.0", False)
   GAUSSIAN_MODEL = RuleAndVersion("GaussianModel", "1.0", True)
   GAUSSIAN_CORE_WITH_TOPICS_MODEL = RuleAndVersion("GaussianCoreWithTopicsModel", "1.0", True)
+  GAUSSIAN_EXPANSION_MODEL = RuleAndVersion("GaussianExpansionModel", "1.0", True)
 
   def get_name(self) -> str:
     """Returns a string combining the name and version to uniquely name the logic of the ScoringRule."""
@@ -246,7 +252,12 @@ class ApplyModelResult(ScoringRule):
     assert (
       noteStatusUpdates[statusColumn]
       .isin(
-        {c.currentlyRatedHelpful, c.currentlyRatedNotHelpful, c.needsMoreRatings, c.needsYourHelp}
+        {
+          c.currentlyRatedHelpful,
+          c.currentlyRatedNotHelpful,
+          c.needsMoreRatings,
+          c.needsYourHelp,
+        }
       )
       .all()
     ), "status must be set to CRH, CRNH, NMR or NYH"
@@ -314,7 +325,6 @@ class FilterTagOutliers(ScoringRule):
       ][c.noteIdKey]
       impactedNotes = pd.concat(
         [impactedNotes, pd.DataFrame({c.noteIdKey: tagFilteredNotes, c.activeFilterTagsKey: tag})],
-        unsafeAllowed=[c.defaultIndexKey, c.activeFilterTagsKey],
       )
     # log and consolidate imapcted notes
     logger.info(f"Total {{note, tag}} pairs where tag filter logic triggered: {len(impactedNotes)}")
@@ -432,29 +442,42 @@ class FilterLargeFactor(ScoringRule):
     dependencies: Set[RuleID],
     status: str,
     factorThreshold: float,
+    requireCrh: bool = True,
   ):
-    """Filter CRH notes which have especially large factors (whether positive or negative).
+    """Filter notes which have especially large factors (whether positive or negative).
+
+    By default (requireCrh=True), only notes currently on track for CRH are eligible
+    (master / Core behavior). If requireCrh=False, applies to all notes except CRNH
+    so large-factor notes get status even without prior CRH (used by GaussianCoreGroupScorer).
 
     Args:
       rule: enum corresponding to a namedtuple defining a rule name and version string for the ScoringRule.
       dependencies: Rules which must run before this rule can run.
-      status: the status which each note should be set to (e.g. CRH, CRNH, NMR)
+      status: the status which each note should be set to (e.g. CRH, CRNH, NMR, FIRM_REJECT)
       factorThreshold: threshold for filtering large factors
+      requireCrh: if True, only act on currently CRH notes; if False, all except CRNH
     """
     super().__init__(ruleID, dependencies)
     self._status = status
     self._factorThreshold = factorThreshold
+    self._requireCrh = requireCrh
 
   def score_notes(
     self, noteStats: pd.DataFrame, currentLabels: pd.DataFrame, statusColumn: str
   ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Returns notes on track for CRH with a high low diligence intercept."""
-    # Prune noteStats to exclude CRNH notes.  CRNH will have stronger downstream effects, so
-    # we don't want to over-write that status.
-    candidateNotes = currentLabels[currentLabels[statusColumn] == c.currentlyRatedHelpful][
-      [c.noteIdKey]
-    ]
-    noteStats = noteStats.merge(candidateNotes, on=c.noteIdKey, how="inner")
+    """Returns notes with |factor| above threshold (optionally restricted to CRH)."""
+    if len(currentLabels) > 0 and statusColumn in currentLabels.columns:
+      if self._requireCrh:
+        # Master / Core: only demote notes that already achieved CRH in this scorer.
+        candidateNotes = currentLabels[currentLabels[statusColumn] == c.currentlyRatedHelpful][
+          [c.noteIdKey]
+        ]
+      else:
+        # Do not overwrite CRNH; apply to NMR, CRH, NYH, FR, etc.
+        candidateNotes = currentLabels[currentLabels[statusColumn] != c.currentlyRatedNotHelpful][
+          [c.noteIdKey]
+        ]
+      noteStats = noteStats.merge(candidateNotes, on=c.noteIdKey, how="inner")
 
     # Identify impacted notes.
     noteStatusUpdates = noteStats.loc[
@@ -1184,23 +1207,15 @@ class ApplyGroupModelResult(ScoringRule):
       )
     noteStats.loc[noteStats[c.expansionNoteInterceptKey].isna(), "expansion"] = np.nan
 
-    # Prioritize core over expansion intercepts when available
-    def _get_value(row):
-      idx = row.first_valid_index()
-      # If either core or expansion had an intercept then return whether it was in the valid
-      # range.  If neither had an intercept, return False.  Preference is given to core due
-      # to the ordering when selecting columns from noteStats below.
-      if idx is None:
-        return False
-      elif row[idx] == 1.0:
-        return True
-      elif row[idx] == 0.0:
-        return False
-      else:
-        assert False, f"unexpected value: {row[idx]}"
-
+    # Prioritize core over expansion intercepts when available.
+    # Use core when non-NaN, else fall back to expansion, else False.
     with c.time_block("Get value apply for group model"):
-      noteStats["actionable"] = noteStats[["core", "expansion"]].apply(_get_value, axis=1)
+      noteStats["actionable"] = (
+        noteStats["core"]
+        .where(noteStats["core"].notna(), noteStats["expansion"])
+        .fillna(False)
+        .astype(bool)
+      )
 
     # Filter set of note status updates to only include actionable notes
     actionableNotes = noteStats[noteStats["actionable"]][[c.noteIdKey]]
@@ -1222,9 +1237,10 @@ class ApplyNMRGroupModelResult(ScoringRule):
     """Set NMR status based on a modeling group result.
 
     This rule sets NMR note status based on group models subject to several criteria:
-      * The note must have NMR status from the group model.
-      * The note must currently be scored as CRH.  This criteria guarantees that (1) this group
-        model strictly reduces coverage
+      * The note must have NMR, CRNH, or FIRM_REJECT status from the group model.
+        FIRM_REJECT (e.g. from FilterLargeFactor) is treated like NMR for demotion.
+      * The note must currently be scored as CRH or NYH. This guarantees that this group
+        model strictly reduces coverage.
 
     Args:
       ruleID: enum corresponding to a namedtuple defining a rule name and version string for the ScoringRule.
@@ -1237,10 +1253,14 @@ class ApplyNMRGroupModelResult(ScoringRule):
   def score_notes(
     self, noteStats: pd.DataFrame, currentLabels: pd.DataFrame, statusColumn: str
   ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
-    """Flip notes from CRH to NMR based on group models."""
-    # Generate the set of note status updates
+    """Flip notes from CRH/NYH to NMR based on group models."""
+    # Generate the set of note status updates. FIRM_REJECT demotes the same as NMR/CRNH.
     probationaryNMRNotes = noteStats[
-      (noteStats[c.groupRatingStatusKey].isin({c.needsMoreRatings, c.currentlyRatedNotHelpful}))
+      (
+        noteStats[c.groupRatingStatusKey].isin(
+          {c.needsMoreRatings, c.currentlyRatedNotHelpful, c.firmReject}
+        )
+      )
       & (noteStats[c.modelingGroupKey] == self._groupNumber)
     ][[c.noteIdKey]]
     # Identify notes which are currently CRH or NYH.
@@ -1470,7 +1490,12 @@ class InsufficientExplanation(ScoringRule):
 
 class NMtoCRNH(ScoringRule):
   def __init__(
-    self, ruleID: RuleID, dependencies: Set[RuleID], status: str, crnhThresholdNMIntercept: float
+    self,
+    ruleID: RuleID,
+    dependencies: Set[RuleID],
+    status: str,
+    crnhThresholdNMIntercept: float,
+    minSignCount: int = 0,
   ):
     """Configure a ScoringRule to set low scoring, non-misleading notes to CRNH.
 
@@ -1479,20 +1504,29 @@ class NMtoCRNH(ScoringRule):
       dependencies: Rules which must run before this rule can run.
       status: the status which each note should be set to (e.g. CRH, CRNH, NMR).
       crnhThresholdNMIntercept: Intercept for setting notes on non-misleading tweets to CRNH.
+      minSignCount: Minimum ratings from raters on each side of the factor spectrum required
+        for CRNH.  0 disables the requirement.
     """
     super().__init__(ruleID, dependencies)
     self._status = status
     self._crnhThresholdNMIntercept = crnhThresholdNMIntercept
+    self._minSignCount = minSignCount
 
   def score_notes(
     self, noteStats: pd.DataFrame, currentLabels: pd.DataFrame, statusColumn: str
   ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """Returns noteIds for low scoring notes on non-misleading tweets."""
+    hasMinSignCount = (
+      noteStats[c.minSignCountKey] >= self._minSignCount
+      if self._minSignCount > 0
+      else pd.Series(True, index=noteStats.index)
+    )
     noteStatusUpdates = noteStats.loc[
       (noteStats[c.internalNoteInterceptKey] < self._crnhThresholdNMIntercept)
       # Require that that the classification is "not misleading" to explicitly exclude deleted
       # notes where the classification is nan.
       & (noteStats[c.classificationKey] == c.noteSaysTweetIsNotMisleadingKey)
+      & hasMinSignCount
     ][[c.noteIdKey]]
     noteStatusUpdates[statusColumn] = self._status
     return (noteStatusUpdates, None)
@@ -1698,12 +1732,7 @@ def apply_scoring_rules(
         assert set(noteStatusUpdates[c.noteIdKey]) == set(additionalColumns[c.noteIdKey])
 
       # Update noteLabels, which will always hold at most one label per note.
-      unsafeAllowed = {c.internalRatingStatusKey, c.finalRatingStatusKey, c.defaultIndexKey}
-      noteLabels = (
-        pd.concat([noteLabels, noteStatusUpdates], unsafeAllowed=unsafeAllowed)
-        .groupby(c.noteIdKey)
-        .tail(1)
-      )
+      noteLabels = pd.concat([noteLabels, noteStatusUpdates]).groupby(c.noteIdKey).tail(1)
       # Update note rules to have one row per rule which was active for a note
       noteRules = pd.concat(
         [
@@ -1712,14 +1741,11 @@ def apply_scoring_rules(
             {c.noteIdKey: noteStatusUpdates[c.noteIdKey], ruleColumn: rule.get_name()}
           ),
         ],
-        unsafeAllowed={c.internalActiveRulesKey, c.defaultIndexKey, c.metaScorerActiveRulesKey},
       )
       if additionalColumns is not None:
         # Merge any additional columns into current set of new columns
         assert {c.noteIdKey} == (set(noteColumns.columns) & set(additionalColumns.columns))
-        noteColumns = noteColumns.merge(
-          additionalColumns, on=c.noteIdKey, how="outer", unsafeAllowed=c.defaultIndexKey
-        )
+        noteColumns = noteColumns.merge(additionalColumns, on=c.noteIdKey, how="outer")
 
   with c.time_block("Condense noteRules after applying all scoring rules"):
     # Having applied all scoring rules, condense noteRules to have one row per note representing

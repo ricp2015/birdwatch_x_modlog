@@ -32,12 +32,6 @@ METHODS = {
 PANEL_METHODS = frozenset(METHODS) - {"boc_stacking"}
 
 
-def write_summary(path: Path, summary: dict[str, str]) -> None:
-    """Persist progress so a long multi-split run can be inspected or resumed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
-
 def _configured_team_size(payload: dict[str, object]) -> int | None:
     for section in ("protocol", "ensemble", "composition"):
         values = payload.get(section)
@@ -198,8 +192,6 @@ def main() -> None:
     out_root = Path(args.out_root)
     print(f"Prepared splits: {len(splits)}")
 
-    summary_filename = "team_formation_plan.json" if args.dry_run else "team_formation.json"
-    summary_path = out_root / "summaries" / summary_filename
     summary: dict[str, str] = {}
     for split_name, split_path in splits.items():
         for method in selected_methods:
@@ -216,12 +208,10 @@ def main() -> None:
             if args.skip_existing and has_active_metrics(out_dir / "metrics.json", method):
                 summary[run_name] = "SKIPPED (active metrics.json exists)"
                 print(summary[run_name])
-                write_summary(summary_path, summary)
                 continue
             if args.dry_run:
                 print(subprocess.list2cmdline(command))
                 summary[run_name] = "DRY RUN"
-                write_summary(summary_path, summary)
                 continue
             result = subprocess.run(command, cwd=_PROJECT_ROOT, check=False)
             summary[run_name] = (
@@ -229,16 +219,14 @@ def main() -> None:
             )
             if result.returncode == 0:
                 annotate_outer_protocol(out_dir / "metrics.json", split_name, split_path)
-            write_summary(summary_path, summary)
 
     print("Summary")
     for run_name, status in summary.items():
         print(f"{run_name}: {status}")
 
-    write_summary(summary_path, summary)
     failures = {name: status for name, status in summary.items() if status.startswith("FAILED")}
     if failures:
-        print(f"Failed runs: {len(failures)} | details={summary_path}")
+        print(f"Failed runs: {len(failures)}")
         raise SystemExit(1)
 
 

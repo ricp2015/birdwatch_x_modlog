@@ -11,12 +11,19 @@
   "roc_auc": 0.2761866343955896,
   "polarity_correct": false,
   "n_items": 511,
+  "n_test_items": 511,
   "n_items_missing_score": 0,
+  "n_native_items": 511,
+  "n_fallback_items": 0,
   "score_coverage": 1.0,
+  "final_decision_coverage": 1.0,
+  "native_macro_f1": 0.7339696312364425,
+  "native_f1_pos": 0.9479392624728851,
+  "native_f1_neg": 0.52,
   "auc_observed_only": true,
   "n_auc_items": 511,
   "auc_population": "items_with_observed_external_score",
-  "prediction_population": "all_test_items",
+  "prediction_population": "items_with_observed_external_score",
   "mean_score_approve": 7.600319209588714,
   "mean_score_remove": 8.503584380006119,
   "pr_curve_precision": [
@@ -1492,7 +1499,5 @@
   "validation_roc_auc_raw": 0.35879896313364057,
   "n_train_items": 3062,
   "n_val_items": 510,
-  "n_fallback_items": 0,
-  "used_net_vote_fallback": false,
-  "prediction_score_policy": "external_score_when_observed_else_net_vote"
+  "prediction_score_policy": "observed_external_score_only"
 }

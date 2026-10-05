@@ -4,21 +4,50 @@
     "f1_pos": 0.9041382922996333,
     "f1_neg": 0.22127659574468084,
     "n_items": 1072,
-    "roc_auc": 0.7109923245614036
+    "n_native_items": 1072,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5627074440221571,
+    "native_f1_pos": 0.9041382922996333,
+    "native_f1_neg": 0.22127659574468084,
+    "roc_auc": 0.7114137883771929
   },
   "val": {
     "macro_f1": 0.6947326471437013,
     "f1_pos": 0.9366351056081573,
     "f1_neg": 0.4528301886792453,
     "n_items": 766,
-    "roc_auc": 0.7033183183183184
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6947326471437013,
+    "native_f1_pos": 0.9366351056081573,
+    "native_f1_neg": 0.4528301886792453,
+    "roc_auc": 0.7040165165165166
   },
   "test": {
     "macro_f1": 0.5937600064040987,
     "f1_pos": 0.9236311239193083,
     "f1_neg": 0.2638888888888889,
     "n_items": 766,
-    "roc_auc": 0.7183638583638584
+    "n_native_items": 766,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5937600064040987,
+    "native_f1_pos": 0.9236311239193083,
+    "native_f1_neg": 0.2638888888888889,
+    "roc_auc": 0.7192348392348393
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 1072,
@@ -41,7 +70,7 @@
       "accuracy": 0.8430271726925668,
       "n_votes": 8906,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8410843322216343
+      "roc_auc": 0.8410841612961892
     }
   },
   "graph_attention": {
@@ -55,7 +84,7 @@
         "attention_local_experience": 0.5,
         "attention_social_core": 0.5
       },
-      "policy_train_auc": 0.7109923245614036
+      "policy_train_auc": 0.7114137883771929
     },
     "candidates": [
       {
@@ -63,7 +92,7 @@
         "weights": {
           "attention_graph": 1.0
         },
-        "policy_train_auc": 0.43162006578947365
+        "policy_train_auc": 0.4316234923245614
       },
       {
         "name": "skill_affinity",
@@ -74,7 +103,7 @@
           "attention_local_experience": 0.5,
           "attention_tenure": 0.25
         },
-        "policy_train_auc": 0.6962822094298247
+        "policy_train_auc": 0.6962856359649123
       },
       {
         "name": "full_social",
@@ -86,7 +115,7 @@
           "attention_tenure": 0.25,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.6838438870614034
+        "policy_train_auc": 0.6838473135964912
       },
       {
         "name": "content_social",
@@ -98,7 +127,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7109923245614036
+        "policy_train_auc": 0.7114137883771929
       }
     ],
     "n_graph_users": 1760,
@@ -130,6 +159,7 @@
   "outer_split_protocol": {
     "split": "intersection_chronological",
     "split_type": "chronological",
+    "cv_protocol": null,
     "strict_temporal_order": true,
     "prospective_interpretation": true,
     "note": "Outer TRAIN strictly precedes VAL/TEST."

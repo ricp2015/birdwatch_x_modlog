@@ -4,21 +4,50 @@
     "f1_pos": 0.9008863819500403,
     "f1_neg": 0.4581497797356828,
     "n_items": 734,
+    "n_native_items": 734,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6795180808428616,
+    "native_f1_pos": 0.9008863819500403,
+    "native_f1_neg": 0.4581497797356828,
     "roc_auc": 0.8996176861702126
   },
   "val": {
-    "macro_f1": 0.6727196847455866,
-    "f1_pos": 0.9039677975848188,
+    "macro_f1": 0.6727748439658137,
+    "f1_pos": 0.9040781160252729,
     "f1_neg": 0.4414715719063545,
-    "n_items": 1019,
+    "n_items": 1020,
+    "n_native_items": 1019,
+    "n_fallback_items": 1,
+    "score_coverage": 0.9990196078431373,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6727196847455866,
+    "native_f1_pos": 0.9039677975848188,
+    "native_f1_neg": 0.4414715719063545,
     "roc_auc": 0.7705126394577037
   },
   "test": {
-    "macro_f1": 0.6393651215048972,
-    "f1_pos": 0.891844997108155,
-    "f1_neg": 0.38688524590163936,
-    "n_items": 1017,
-    "roc_auc": 0.7897025439006476
+    "macro_f1": 0.6386005382545175,
+    "f1_pos": 0.8915801614763552,
+    "f1_neg": 0.38562091503267976,
+    "n_items": 1020,
+    "n_native_items": 1017,
+    "n_fallback_items": 3,
+    "score_coverage": 0.9970588235294118,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6393651215048972,
+    "native_f1_pos": 0.891844997108155,
+    "native_f1_neg": 0.38688524590163936,
+    "roc_auc": 0.7897025439006475
+  },
+  "net_vote_fallback": {
+    "threshold": 2.252816020025051,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "stack_train": {
@@ -43,14 +72,14 @@
       "accuracy": 0.8877853284544346,
       "n_votes": 11478,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8869548858209697
+      "roc_auc": 0.8869549845253708
     },
     "test": {
       "macro_f1": 0.7998026786998073,
       "accuracy": 0.8916673803202877,
       "n_votes": 11677,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8930077217608099
+      "roc_auc": 0.89300772176081
     }
   },
   "boc_stacking": {
@@ -64,7 +93,7 @@
     "representation": "separate stack-TRAIN TruncatedSVD projections",
     "prediction_components": 16,
     "eligibility_components": 4,
-    "prediction_explained_variance": 0.9891504645347595,
+    "prediction_explained_variance": 0.9891502857208252,
     "eligibility_explained_variance": 0.8708356618881226,
     "context_features": 31,
     "classifier": "standardized class-balanced L2 logistic regression",
@@ -327,6 +356,7 @@
   "outer_split_protocol": {
     "split": "windows/intersection/w080",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

@@ -4,21 +4,50 @@
     "f1_pos": 0.8856031128404669,
     "f1_neg": 0.28292682926829266,
     "n_items": 745,
-    "roc_auc": 0.7853255491787057
+    "n_native_items": 745,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5842649710543798,
+    "native_f1_pos": 0.8856031128404669,
+    "native_f1_neg": 0.28292682926829266,
+    "roc_auc": 0.784896761000066
   },
   "val": {
-    "macro_f1": 0.61622485526868,
-    "f1_pos": 0.8890153671030165,
-    "f1_neg": 0.3434343434343434,
-    "n_items": 1027,
-    "roc_auc": 0.7474313863476425
+    "macro_f1": 0.6123130862125797,
+    "f1_pos": 0.8868778280542986,
+    "f1_neg": 0.33774834437086093,
+    "n_items": 1035,
+    "n_native_items": 1027,
+    "n_fallback_items": 8,
+    "score_coverage": 0.9922705314009662,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.61622485526868,
+    "native_f1_pos": 0.8890153671030165,
+    "native_f1_neg": 0.3434343434343434,
+    "roc_auc": 0.7476855109860037
   },
   "test": {
-    "macro_f1": 0.5800627084059126,
-    "f1_pos": 0.8845070422535212,
-    "f1_neg": 0.2756183745583039,
-    "n_items": 1029,
-    "roc_auc": 0.7641287078583028
+    "macro_f1": 0.5796531709856001,
+    "f1_pos": 0.8846584546472565,
+    "f1_neg": 0.2746478873239437,
+    "n_items": 1035,
+    "n_native_items": 1029,
+    "n_fallback_items": 6,
+    "score_coverage": 0.9942028985507246,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5800627084059126,
+    "native_f1_pos": 0.8845070422535212,
+    "native_f1_neg": 0.2756183745583039,
+    "roc_auc": 0.7638449988651641
+  },
+  "net_vote_fallback": {
+    "threshold": 1.2515644555694792,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "policy_train_eligible_items": 745,
@@ -34,14 +63,14 @@
       "accuracy": 0.8905793364277119,
       "n_votes": 11634,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.891425580798784
+      "roc_auc": 0.8914256293367122
     },
     "test": {
       "macro_f1": 0.7998649357739016,
       "accuracy": 0.8913043478260869,
       "n_votes": 11868,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8923239951688768
+      "roc_auc": 0.8923239459761104
     }
   },
   "graph_attention": {
@@ -55,7 +84,7 @@
         "attention_local_experience": 0.5,
         "attention_social_core": 0.5
       },
-      "policy_train_auc": 0.7853255491787057
+      "policy_train_auc": 0.784896761000066
     },
     "candidates": [
       {
@@ -98,7 +127,7 @@
           "attention_local_experience": 0.5,
           "attention_social_core": 0.5
         },
-        "policy_train_auc": 0.7853255491787057
+        "policy_train_auc": 0.784896761000066
       }
     ],
     "n_graph_users": 1875,
@@ -130,6 +159,7 @@
   "outer_split_protocol": {
     "split": "windows/full/w080",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."

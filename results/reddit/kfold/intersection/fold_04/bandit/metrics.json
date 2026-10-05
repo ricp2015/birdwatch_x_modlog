@@ -4,21 +4,50 @@
     "f1_pos": 0.8978829389788294,
     "f1_neg": 0.3643410852713178,
     "n_items": 932,
-    "roc_auc": 0.7595113834051889
+    "n_native_items": 932,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6311120121250736,
+    "native_f1_pos": 0.8978829389788294,
+    "native_f1_neg": 0.3643410852713178,
+    "roc_auc": 0.7594411488216799
   },
   "val": {
     "macro_f1": 0.6713970776290453,
     "f1_pos": 0.9105597230236584,
     "f1_neg": 0.43223443223443225,
     "n_items": 1003,
-    "roc_auc": 0.7698349178631483
+    "n_native_items": 1003,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6713970776290453,
+    "native_f1_pos": 0.9105597230236584,
+    "native_f1_neg": 0.43223443223443225,
+    "roc_auc": 0.7698874660457897
   },
   "test": {
     "macro_f1": 0.5964941322018836,
     "f1_pos": 0.8922363847045192,
     "f1_neg": 0.3007518796992481,
     "n_items": 996,
-    "roc_auc": 0.7311591308855144
+    "n_native_items": 996,
+    "n_fallback_items": 0,
+    "score_coverage": 1.0,
+    "used_net_vote_fallback": false,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.5964941322018836,
+    "native_f1_pos": 0.8922363847045192,
+    "native_f1_neg": 0.3007518796992481,
+    "roc_auc": 0.7310954003551915
+  },
+  "net_vote_fallback": {
+    "threshold": 1.2515644555694792,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 1003,
@@ -32,14 +61,14 @@
       "accuracy": 0.8826242952332137,
       "n_votes": 11706,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8898255783805165
+      "roc_auc": 0.8898255296902673
     },
     "test": {
       "macro_f1": 0.8099358173493494,
       "accuracy": 0.893415527561869,
       "n_votes": 11193,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8969076722400553
+      "roc_auc": 0.8969076186229719
     }
   },
   "protocol": {
@@ -66,7 +95,7 @@
     "n_candidate_profiles": 2564,
     "n_candidate_communities": 13,
     "linucb_updates": 2795,
-    "linucb_total_update_weight": 932.0000000000005,
+    "linucb_total_update_weight": 931.9999999999997,
     "ucb_alpha": 0.5,
     "ridge": 1.0,
     "softmax_temperature": 1.0,

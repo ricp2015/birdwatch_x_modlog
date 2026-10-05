@@ -134,6 +134,37 @@ METHOD_COLORS = {
     "RoleNSGA2": "#ff6b6b",
 }
 
+METHOD_FAMILIES = {
+    "Baseline": (
+        "Net",
+        "WNet",
+        "SubAdj",
+        "RedditScore",
+        "RedditScore+Sub",
+    ),
+    "Factorization": (
+        "CN",
+        "CN inductive",
+        "QSMF",
+        "MA-MF",
+        "MA-QSMF",
+    ),
+    "Observed-voter expertise": ("VAR", "NVSE", "SEF"),
+    "Eligible voter base": (
+        "Bandit",
+        "GraphPropagation",
+        "RoleNSGA2",
+        "VirtualEnsembles",
+        "BoC",
+    ),
+}
+
+KFOLD_DATASET_LABELS = {
+    "full": "Full",
+    "intersection": "Intersection",
+    "intersection_chronological": "Chronological",
+}
+
 WINDOW_LABELS = {
     20: "20% training",
     40: "40% training",
@@ -852,6 +883,112 @@ def _plot_kfold_metric(
     _save_figure(fig, output_stem)
 
 
+def _kfold_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """Summarize fold-level metrics in conceptual method-family order."""
+    grouped = frame.groupby(["dataset", "method"], sort=False)[list(METRICS)].agg(
+        ["mean", "std", "count"]
+    )
+    grouped.columns = [f"{metric}_{stat}" for metric, stat in grouped.columns]
+    summary = grouped.reset_index()
+
+    family_lookup = {
+        method: family for family, methods in METHOD_FAMILIES.items() for method in methods
+    }
+    family_order = {family: index for index, family in enumerate(METHOD_FAMILIES)}
+    method_order = {
+        method: index
+        for methods in METHOD_FAMILIES.values()
+        for index, method in enumerate(methods)
+    }
+    dataset_order = {dataset: index for index, dataset in enumerate(FIXED_SPLITS)}
+    summary.insert(1, "family", summary["method"].map(family_lookup))
+    summary["_dataset_order"] = summary["dataset"].map(dataset_order)
+    summary["_family_order"] = summary["family"].map(family_order)
+    summary["_method_order"] = summary["method"].map(method_order)
+    summary = summary.sort_values(
+        ["_dataset_order", "_family_order", "_method_order"], kind="stable"
+    )
+    return summary.drop(columns=["_dataset_order", "_family_order", "_method_order"])
+
+
+def _plot_kfold_macro_f1_by_family(frame: pd.DataFrame, output_stem: Path) -> None:
+    """Plot all methods by family with one mean and SD interval per protocol."""
+    summary = _kfold_summary(frame)
+    if summary.empty:
+        return
+
+    available = set(summary["method"])
+    methods: list[str] = []
+    positions: list[float] = []
+    family_ranges: list[tuple[str, float, float]] = []
+    cursor = 0.0
+    for family, family_methods in METHOD_FAMILIES.items():
+        present = [method for method in family_methods if method in available]
+        if not present:
+            continue
+        start = cursor
+        for method in present:
+            methods.append(method)
+            positions.append(cursor)
+            cursor += 1.0
+        family_ranges.append((family, start - 0.48, cursor - 0.52))
+        cursor += 0.65
+
+    fig, axis = plt.subplots(figsize=(10.8, 9.2))
+    family_shades = ("#f3f4f6", "#fff7ed", "#f0fdfa", "#eff6ff")
+    for (family, lower, upper), shade in zip(family_ranges, family_shades, strict=False):
+        axis.axhspan(lower, upper, color=shade, zorder=0)
+        axis.text(
+            0.805,
+            (lower + upper) / 2,
+            family,
+            ha="right",
+            va="center",
+            fontsize=8,
+            color="#374151",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.5},
+        )
+
+    dataset_styles = {
+        "full": ("o", "#7c3aed", -0.21),
+        "intersection": ("s", "#0f766e", 0.0),
+        "intersection_chronological": ("^", "#c2410c", 0.21),
+    }
+    position_lookup = dict(zip(methods, positions, strict=True))
+    for dataset in FIXED_SPLITS:
+        marker, color, offset = dataset_styles[dataset]
+        subset = summary[summary["dataset"] == dataset].set_index("method")
+        present = [method for method in methods if method in subset.index]
+        means = subset.loc[present, "macro_f1_mean"].to_numpy(dtype=float)
+        deviations = subset.loc[present, "macro_f1_std"].fillna(0.0).to_numpy(dtype=float)
+        y = np.array([position_lookup[method] + offset for method in present])
+        axis.errorbar(
+            means,
+            y,
+            xerr=deviations,
+            fmt=marker,
+            markersize=5.2,
+            capsize=2.5,
+            elinewidth=1.1,
+            color=color,
+            linestyle="none",
+            label=KFOLD_DATASET_LABELS[dataset],
+            zorder=3,
+        )
+
+    axis.set_yticks(positions)
+    axis.set_yticklabels([method_label(method) for method in methods], fontsize=9)
+    axis.invert_yaxis()
+    axis.set_xlim(0.40, 0.81)
+    axis.set_xlabel("Mean macro-F1 (error bars: sample SD across five folds)")
+    axis.set_title("Five-fold macro-F1 by method family", fontsize=15, pad=12)
+    axis.grid(axis="x", linestyle="--", alpha=0.28)
+    axis.set_axisbelow(True)
+    axis.legend(loc="lower right", frameon=True, fontsize=9)
+    fig.tight_layout()
+    _save_figure(fig, output_stem)
+
+
 def run_kfold_graphs(results_root: Path, splits_root: Path, output_dir: Path) -> int:
     """Generate K-fold figures, or skip cleanly when K-fold inputs are absent."""
     kfold_results = results_root if results_root.name == "kfold" else results_root / "kfold"
@@ -869,12 +1006,18 @@ def run_kfold_graphs(results_root: Path, splits_root: Path, output_dir: Path) ->
         return 0
     fold_metrics.insert(0, "dataset", fold_metrics["split"].map(_kfold_dataset))
     figures_dir = output_dir / "figures"
+    tables_dir = output_dir / "tables"
+    _write_table(fold_metrics, tables_dir / "fold_metrics")
+    _write_table(_kfold_summary(fold_metrics), tables_dir / "summary_by_family")
     generated = 0
     for dataset in sorted(fold_metrics["dataset"].unique()):
         for metric in METRICS:
             output_stem = figures_dir / f"{metric}__kfold_{dataset}"
             _plot_kfold_metric(fold_metrics, dataset, metric, output_stem)
             generated += int(output_stem.with_suffix(".png").exists())
+    family_stem = figures_dir / "macro_f1__kfold_by_family"
+    _plot_kfold_macro_f1_by_family(fold_metrics, family_stem)
+    generated += int(family_stem.with_suffix(".png").exists())
     log.info("K-fold graphs saved to %s (%d figures)", figures_dir, generated)
     return generated
 

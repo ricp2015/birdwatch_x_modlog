@@ -13,6 +13,11 @@ import pandas as pd
 logger = logging.getLogger("birdwatch.constants")
 logger.setLevel(logging.INFO)
 
+try:
+  participantIdDtype = pd.StringDtype("pyarrow")
+except TypeError:
+  participantIdDtype = object
+
 
 # Default number of threads to use in torch if os.cpu_count() is unavailable
 # and no value is specified.
@@ -69,6 +74,19 @@ helpfulnessLevelKey = "helpfulnessLevel"
 createdAtMillisKey = "createdAtMillis"
 summaryKey = "summary"
 noteTopicKey = "noteTopic"
+
+pflipProbaKey = "pflipProba"
+
+# Predicted CRH (PCRH) early-exit model
+pcrhAboveThresholdTimeKey = "abovePcrhThresholdTime"
+pcrhExitNKey = "pcrhExitN"
+pcrhExitProbaKey = "pcrhExitProba"
+pcrhRevokedKey = "pcrhRevoked"
+pcrhRevokeNKey = "pcrhRevokeN"
+pcrhFinalPredKey = "pcrhFinalPred"
+pcrhPerNThresholds = {8: 0.77, 10: 0.78, 15: 0.76, 20: 0.74, 30: 0.70, 50: 0.67}
+pcrhRevokeThreshold = 0.5
+pcrhTrainingCutoffMillis = 1773100800000  # March 10, 2026 00:00:00 UTC
 authorTopNotHelpfulTagValues = "authorTopNotHelpfulTagValues"
 modelingPopulationKey = "modelingPopulation"
 modelingGroupKey = "modelingGroup"
@@ -81,9 +99,8 @@ correlatedRaterKey = "correlatedRater"
 # Scoring Groups
 coreGroups: Set[int] = {1, 2, 3, 6, 8, 9, 10, 11, 13, 14, 19, 21, 25}
 coverageGroups: Set[int] = {1, 2, 3, 6, 8, 9, 10, 11, 13, 14, 19, 25}
-expansionGroups: Set[int] = {0, 4, 5, 7, 12, 15, 16, 18, 20, 22, 23, 24, 26, 27, 28, 29, 33}
-expansionPlusGroups: Set[int] = {17, 30, 31, 32}
-
+expansionGroups: Set[int] = {0, 4, 5, 7, 12, 15, 16, 20, 22, 23, 24, 26, 27, 28, 29, 33}
+expansionPlusGroups: Set[int] = {17, 18, 30, 31, 32}
 # Bins for Gaussian Scorer
 quantileRange = np.array(
   [
@@ -150,6 +167,10 @@ class GaussianParams:
   smoothingValue: float = 0.35
   adaptiveWeightBase: Optional[int] = 9
   priorFactor: bool = True
+  # Coefficient on noteFactor*center in the opposite-side prior:
+  # prior = priorSlope * noteFactor * center + smoothingValue (then capped/floored).
+  # Default 0.5 matches the historical (noteFactor * center) / 2 formula.
+  priorSlope: float = 0.5
   negWeight: float = 1.75
   minPrior: Optional[float] = 0.2
   weightLim: float = 1e-9
@@ -374,6 +395,17 @@ gaussianCoreWithTopicsNoteInterceptNoCorrelatedKey = (
 gaussianCoreWithTopicsNoteInterceptPopulationSampledKey = (
   "gaussianCoreWithTopicsNoteInterceptPopulationSampled"
 )
+# Gaussian Expansion Model (coverage model after MFExpansionScorer)
+gaussianExpansionNoteInterceptKey = "gaussianExpansionNoteIntercept"
+gaussianExpansionNoteFactor1Key = "gaussianExpansionNoteFactor1"
+gaussianExpansionRatingStatusKey = "gaussianExpansionRatingStatus"
+gaussianExpansionActiveRulesKey = "gaussianExpansionActiveRules"
+gaussianExpansionNumFinalRoundRatingsKey = "gaussianExpansionNumFinalRoundRatings"
+gaussianExpansionNoteInterceptNoHighVolKey = "gaussianExpansionNoteInterceptNoHighVol"
+gaussianExpansionNoteInterceptNoCorrelatedKey = "gaussianExpansionNoteInterceptNoCorrelated"
+gaussianExpansionNoteInterceptPopulationSampledKey = (
+  "gaussianExpansionNoteInterceptPopulationSampled"
+)
 # Harassment/Abuse Tag
 harassmentNoteInterceptKey = "harassmentNoteIntercept"
 harassmentNoteFactor1Key = "harassmentNoteFactor1"
@@ -410,6 +442,11 @@ raterAgreeRatioWithHarassmentAbusePenaltyKey = "raterAgreeRatioKeyWithHarassment
 crhTotal14dKey = "crhTotal14d"
 crnhTotal14dKey = "crnhTotal14d"
 nmrTotal14dKey = "nmrTotal14d"
+crhTotal90dKey = "crhTotal90d"
+crnhTotal90dKey = "crnhTotal90d"
+nmrTotal90dKey = "nmrTotal90d"
+ratingsMade14dKey = "ratingsMade14d"
+ratingsMade90dKey = "ratingsMade90d"
 
 # Note Status Labels
 currentlyRatedHelpful = "CURRENTLY_RATED_HELPFUL"
@@ -605,7 +642,7 @@ isCollaborativeNoteKey = "isCollaborativeNote"
 noteTSVColumnsAndTypes = (
   [
     (noteIdKey, np.int64),
-    (noteAuthorParticipantIdKey, object),
+    (noteAuthorParticipantIdKey, participantIdDtype),
     (createdAtMillisKey, np.int64),
     (tweetIdKey, np.int64),
     (classificationKey, object),
@@ -631,10 +668,12 @@ agreeKey = "agree"
 disagreeKey = "disagree"
 ratedOnTweetIdKey = "ratedOnTweetId"
 ratingSourceBucketedKey = "ratingSourceBucketed"
+suggestionKey = "suggestion"
+suggestionIdKey = "suggestionId"
 ratingTSVColumnsAndTypes = (
   [
     (noteIdKey, np.int64),
-    (raterParticipantIdKey, object),
+    (raterParticipantIdKey, participantIdDtype),
     (createdAtMillisKey, np.int64),
     (versionKey, pd.Int8Dtype()),
     (agreeKey, pd.Int8Dtype()),
@@ -651,6 +690,20 @@ ratingTSVColumnsAndTypes = (
 ratingTSVColumns = [col for (col, dtype) in ratingTSVColumnsAndTypes]
 ratingTSVTypes = [dtype for (col, dtype) in ratingTSVColumnsAndTypes]
 ratingTSVTypeMapping = {col: dtype for (col, dtype) in ratingTSVColumnsAndTypes}
+
+# The on-disk public ratings TSV has extra trailing columns the scoring pipeline
+# ignores: "suggestion" (added by BirdwatchTsvConverter in Jan 2026) and
+# "suggestionId" (added in May 2026). Reading code uses these public-format
+# constants and then drops the columns; downstream code keeps using
+# ratingTSVColumns / ratingTSVTypeMapping.
+publicRatingTSVColumnsAndTypes = ratingTSVColumnsAndTypes + [
+  (suggestionKey, object),
+  # Nullable Int64 so the reader tolerates the column being absent from older
+  # TSV inputs.
+  (suggestionIdKey, pd.Int64Dtype()),
+]
+publicRatingTSVColumns = [col for (col, _) in publicRatingTSVColumnsAndTypes]
+publicRatingTSVTypeMapping = {col: dtype for (col, dtype) in publicRatingTSVColumnsAndTypes}
 
 timestampMillisOfNoteFirstNonNMRLabelKey = "timestampMillisOfFirstNonNMRStatus"
 firstNonNMRLabelKey = "firstNonNMRStatus"
@@ -678,7 +731,7 @@ timestampMillisOfFirstNmrDueToMinStableCrhTimeKey = "timestampMillisOfFirstNmrDu
 
 noteStatusHistoryTSVColumnsAndTypes = [
   (noteIdKey, np.int64),
-  (noteAuthorParticipantIdKey, object),
+  (noteAuthorParticipantIdKey, participantIdDtype),
   (createdAtMillisKey, np.int64),
   (timestampMillisOfNoteFirstNonNMRLabelKey, np.double),  # double because nullable.
   (firstNonNMRLabelKey, "category"),
@@ -700,6 +753,7 @@ noteStatusHistoryTSVColumnsAndTypes = [
   (currentModelingMultiGroupKey, np.double),  # TODO: int
   (timestampMinuteOfFinalScoringOutput, np.double),  # double because nullable.
   (timestampMillisOfFirstNmrDueToMinStableCrhTimeKey, np.double),  # double because nullable.
+  (pcrhAboveThresholdTimeKey, np.double),  # double because nullable.
 ]
 noteStatusHistoryTSVColumns = [col for (col, dtype) in noteStatusHistoryTSVColumnsAndTypes]
 noteStatusHistoryTSVTypes = [dtype for (col, dtype) in noteStatusHistoryTSVColumnsAndTypes]
@@ -759,7 +813,7 @@ topWriterHitRate = 0.04
 hasCrnhSinceEarnOut = "hasCrnhSinceEarnOut"
 
 userEnrollmentTSVColumnsAndTypes = [
-  (participantIdKey, str),
+  (participantIdKey, participantIdDtype),
   (enrollmentState, str),
   (successfulRatingNeededToEarnIn, np.int64),
   (timestampOfLastStateChange, np.int64),
@@ -849,6 +903,11 @@ auxiliaryScoredNotesTSVColumnsAndTypes = (
   + [
     (coreNegFactorPopulationSampledRatingCountKey, np.int64),
     (corePosFactorPopulationSampledRatingCountKey, np.int64),
+    (pcrhExitNKey, np.double),
+    (pcrhExitProbaKey, np.double),
+    (pcrhRevokedKey, pd.BooleanDtype()),
+    (pcrhRevokeNKey, np.double),
+    (pcrhFinalPredKey, pd.BooleanDtype()),
   ]
 )
 auxiliaryScoredNotesTSVColumns = [col for (col, dtype) in auxiliaryScoredNotesTSVColumnsAndTypes]
@@ -976,6 +1035,9 @@ noteModelOutputTSVColumnsAndTypes = [
   (gaussianNoteInterceptNoHighVolKey, np.double),
   (gaussianNoteInterceptPopulationSampledKey, np.double),
   (gaussianNumFinalRoundRatingsKey, np.double),  # double because nullable.
+  # Index 88 must be timestampMinuteOfFinalScoringOutput to match
+  # NoteModelOutput.fromStrings in BirdwatchTsvSchema.scala. Set by combine job.
+  (timestampMinuteOfFinalScoringOutput, np.double),  # double because nullable.
   (gaussianCoreWithTopicsNoteInterceptKey, np.double),
   (gaussianCoreWithTopicsNoteFactor1Key, np.double),
   (gaussianCoreWithTopicsRatingStatusKey, "category"),
@@ -984,6 +1046,19 @@ noteModelOutputTSVColumnsAndTypes = [
   (gaussianCoreWithTopicsNoteInterceptNoCorrelatedKey, np.double),
   (gaussianCoreWithTopicsNoteInterceptPopulationSampledKey, np.double),
   (gaussianCoreWithTopicsNumFinalRoundRatingsKey, np.double),  # double because nullable.
+  (pcrhAboveThresholdTimeKey, np.double),
+  (pflipProbaKey, np.double),  # double because nullable.
+  # Appended after fixed Scala indices for pcrh/pflip (97-98) so existing TSV
+  # layout is preserved. See BirdwatchTsvSchema.scala NoteModelOutput.fromStrings.
+  (gaussianExpansionNoteInterceptKey, np.double),
+  (gaussianExpansionNoteFactor1Key, np.double),
+  (gaussianExpansionRatingStatusKey, "category"),
+  (gaussianExpansionActiveRulesKey, "category"),
+  (gaussianExpansionNoteInterceptNoHighVolKey, np.double),
+  (gaussianExpansionNoteInterceptNoCorrelatedKey, np.double),
+  (gaussianExpansionNoteInterceptPopulationSampledKey, np.double),
+  (gaussianExpansionNumFinalRoundRatingsKey, np.double),  # double because nullable.
+  (pcrhExitProbaKey, np.double),  # double because nullable.
 ]
 noteModelOutputTSVColumns = [col for (col, dtype) in noteModelOutputTSVColumnsAndTypes]
 noteModelOutputTSVTypeMapping = {col: dtype for (col, dtype) in noteModelOutputTSVColumnsAndTypes}
@@ -1076,6 +1151,11 @@ raterModelOutputTSVColumnsAndTypes = [
   (crhTotal14dKey, pd.Int64Dtype()),
   (crnhTotal14dKey, pd.Int64Dtype()),
   (nmrTotal14dKey, pd.Int64Dtype()),
+  (crhTotal90dKey, pd.Int64Dtype()),
+  (crnhTotal90dKey, pd.Int64Dtype()),
+  (nmrTotal90dKey, pd.Int64Dtype()),
+  (ratingsMade14dKey, pd.Int64Dtype()),
+  (ratingsMade90dKey, pd.Int64Dtype()),
 ]
 raterModelOutputTSVColumns = [col for (col, dtype) in raterModelOutputTSVColumnsAndTypes]
 raterModelOutputTSVTypeMapping = {col: dtype for (col, dtype) in raterModelOutputTSVColumnsAndTypes}
@@ -1246,3 +1326,9 @@ class NoteSubset:
   maxNewCrhChurnRate: float
   maxOldCrhChurnRate: float
   description: RescoringRuleID
+
+
+@dataclass
+class NotesToRescore:
+  noteSubsets: list  # List[NoteSubset]
+  noteIds: set

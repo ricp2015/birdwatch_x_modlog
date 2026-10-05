@@ -1,17 +1,38 @@
 {
   "val": {
-    "macro_f1": 0.6622629955547492,
-    "f1_pos": 0.9006849315068494,
-    "f1_neg": 0.423841059602649,
-    "n_items": 1027,
-    "roc_auc": 0.552990851513019
+    "macro_f1": 0.6515980958857531,
+    "f1_pos": 0.8855491329479769,
+    "f1_neg": 0.4176470588235294,
+    "n_items": 1035,
+    "n_native_items": 1027,
+    "n_fallback_items": 8,
+    "score_coverage": 0.9922705314009662,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6558030093858803,
+    "native_f1_pos": 0.8877254217568353,
+    "native_f1_neg": 0.42388059701492536,
+    "roc_auc": 0.5597701149425287
   },
   "test": {
-    "macro_f1": 0.6016130961188803,
-    "f1_pos": 0.892756878158338,
-    "f1_neg": 0.3104693140794224,
-    "n_items": 1029,
-    "roc_auc": 0.5128585645197897
+    "macro_f1": 0.6212418148887754,
+    "f1_pos": 0.888385269121813,
+    "f1_neg": 0.3540983606557377,
+    "n_items": 1035,
+    "n_native_items": 1029,
+    "n_fallback_items": 6,
+    "score_coverage": 0.9942028985507246,
+    "used_net_vote_fallback": true,
+    "auc_population": "native_method_items",
+    "native_macro_f1": 0.6217592870431494,
+    "native_f1_pos": 0.8882554161915621,
+    "native_f1_neg": 0.35526315789473684,
+    "roc_auc": 0.5975871641321997
+  },
+  "net_vote_fallback": {
+    "threshold": 1.2515644555694792,
+    "threshold_source": "validation",
+    "applies_when": "candidate_pool_empty"
   },
   "coverage": {
     "val_eligible_items": 1027,
@@ -25,14 +46,14 @@
       "accuracy": 0.8788035069623518,
       "n_votes": 11634,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.868198992886524
+      "roc_auc": 0.8681991870382374
     },
     "test": {
       "macro_f1": 0.7762050487912742,
       "accuracy": 0.8837209302325582,
       "n_votes": 11868,
       "post_embedding_coverage": 1.0,
-      "roc_auc": 0.8680430605928948
+      "roc_auc": 0.8680433065567267
     }
   },
   "composition": {
@@ -87,6 +108,7 @@
   "outer_split_protocol": {
     "split": "windows/full/w040",
     "split_type": "nested_training_windows",
+    "cv_protocol": null,
     "strict_temporal_order": false,
     "prospective_interpretation": false,
     "note": "Comparative seeded-item/window benchmark; the internal TRAIN prefix is chronological, but outer TRAIN need not precede VAL/TEST."
