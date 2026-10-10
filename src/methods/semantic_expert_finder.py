@@ -119,6 +119,12 @@ def main() -> None:
         "kfold = optional legacy shuffled K-fold benchmark",
     )
     parser.add_argument("--skip-tasks", nargs="+", default=[], choices=["kfold", "splits"])
+    parser.add_argument(
+        "--n-workers",
+        type=int,
+        default=1,
+        help="Concurrent split workers sharing the read-only embedding/profile caches.",
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.causal_metadata_weight <= 1.0:
@@ -202,6 +208,7 @@ def main() -> None:
             min_coverage=args.min_user_votes,
             do_grid_search=not args.no_grid_search,
             reuse_hyperparams=args.reuse_hyperparams,
+            n_workers=args.n_workers,
         )
 
     log.info("Processing complete.")

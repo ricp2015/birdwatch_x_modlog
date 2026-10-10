@@ -207,7 +207,13 @@ def main() -> None:
     candidate_pools, profiles = build_candidate_profiles(
         simulator_train, simulator, args.min_user_history
     )
-    familiarity, familiarity_scales = fit_familiarity(simulator_train)
+    eligible_by_community = {
+        str(community): set(group["username"].astype(str))
+        for community, group in candidate_pools.items()
+    }
+    familiarity, familiarity_scales = fit_familiarity(
+        simulator_train, eligible_by_community
+    )
     profiles = assign_core_periphery_roles(profiles, familiarity)
     ideology = fit_ideology(simulator_train)
     profiles["mf_viewpoint"] = profiles["username"].astype(str).map(

@@ -37,11 +37,15 @@ def fit_ideology(train: pd.DataFrame) -> dict[str, np.ndarray]:
 
 def fit_familiarity(
     train: pd.DataFrame,
+    eligible_by_community: dict[str, set[str]] | None = None,
 ) -> tuple[dict[FamiliarityKey, float], dict[str, float]]:
     """Count prior shared cases, Huddler's direct familiarity operationalization."""
     counts: defaultdict[FamiliarityKey, float] = defaultdict(float)
     for (community, _), group in train.groupby(["community", "item_id"], sort=False):
         users = sorted(group["username"].dropna().astype(str).unique())
+        if eligible_by_community is not None:
+            eligible = eligible_by_community.get(str(community), set())
+            users = [user for user in users if user in eligible]
         for left, right in combinations(users, 2):
             counts[(str(community), left, right)] += 1.0
 

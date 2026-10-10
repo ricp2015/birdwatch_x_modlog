@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -99,6 +100,7 @@ def _build_candidates(y: np.ndarray) -> List[Tuple[str, Any]]:
                     eval_metric="logloss",
                     verbosity=0,
                     random_state=10,
+                    n_jobs=max(1, int(os.environ.get("OMP_NUM_THREADS", "1"))),
                 ),
             )
         )

@@ -285,7 +285,10 @@ def fit_model(
         required = config.tolerance * max(1.0, abs(best_loss)) if math.isfinite(best_loss) else 0
         if improvement > required:
             best_loss = current
-            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            # Keep the early-stopping snapshot on the active device.  Copying
+            # every improving state to CPU forces a full GPU synchronization and
+            # PCIe transfer on most epochs for large user/item tables.
+            best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
             stale = 0
         else:
             stale += 1
@@ -363,46 +366,91 @@ def infer_new_items(
     ridge_quality = config.lambda_quality * n_votes / n_items
     ridge_view = config.lambda_item_view * n_votes / n_items
 
-    rows: list[dict[str, Any]] = []
-    squared_errors: list[float] = []
-    known_votes_total = 0
-    for item_id, group in part.groupby("item_id", sort=True):
-        names = group["username"].tolist()
-        indices = np.array([train.user_to_idx.get(name, -1) for name in names], dtype=np.int64)
-        known = indices >= 0
-        safe = np.maximum(indices, 0)
-        biases = np.where(known, user_bias[safe], 0.0)
-        sensitivities = np.where(known, rho[safe], 1.0)
-        viewpoints = np.where(known, user_view[safe], 0.0)
-        response = group["vote"].to_numpy(dtype=float) - mu - biases
-        design = np.column_stack([sensitivities, viewpoints])
-        normal = design.T @ design + np.diag([ridge_quality, ridge_view])
-        rhs = design.T @ response
-        try:
-            quality, item_view = np.linalg.solve(normal, rhs)
-        except np.linalg.LinAlgError:
-            quality, item_view = np.linalg.lstsq(normal, rhs, rcond=None)[0]
+    # Every unseen item is an independent two-parameter ridge problem.  Form all
+    # normal equations with grouped bincount reductions and solve the closed-form
+    # 2x2 systems in one vectorized pass instead of one Python groupby/solve per
+    # item.  This is algebraically identical and is critical for large folds.
+    item_names = sorted(part["item_id"].unique().tolist())
+    item_lookup = {item_id: index for index, item_id in enumerate(item_names)}
+    item_indices = part["item_id"].map(item_lookup).to_numpy(dtype=np.int64)
+    user_indices = part["username"].map(train.user_to_idx).fillna(-1).to_numpy(dtype=np.int64)
+    known = user_indices >= 0
+    safe = np.maximum(user_indices, 0)
+    biases = np.where(known, user_bias[safe], 0.0)
+    sensitivities = np.where(known, rho[safe], 1.0)
+    viewpoints = np.where(known, user_view[safe], 0.0)
+    votes = part["vote"].to_numpy(dtype=float)
+    response = votes - mu - biases
+    n_items = len(item_names)
 
-        reconstructed = mu + biases + sensitivities * quality + viewpoints * item_view
-        squared_errors.extend(np.square(group["vote"].to_numpy(dtype=float) - reconstructed))
-        logit = classifier_weight * float(quality) + classifier_bias
-        probability = float(1.0 / (1.0 + np.exp(-np.clip(logit, -40.0, 40.0))))
-        n_known = int(known.sum())
-        known_votes_total += n_known
-        rows.append(
-            {
-                "item_id": item_id,
-                "label": int(group["label"].iloc[0]),
-                "quality": float(quality),
-                "viewpoint": float(item_view),
-                "moderator_logit": float(logit),
-                "score": probability,
-                "n_votes": int(len(group)),
-                "n_known_rater_votes": n_known,
-                "known_rater_fraction": float(n_known / len(group)),
-            }
+    def grouped(values: np.ndarray) -> np.ndarray:
+        return np.bincount(item_indices, weights=values, minlength=n_items)
+
+    normal_qq = grouped(sensitivities * sensitivities) + ridge_quality
+    normal_qz = grouped(sensitivities * viewpoints)
+    normal_zz = grouped(viewpoints * viewpoints) + ridge_view
+    rhs_q = grouped(sensitivities * response)
+    rhs_z = grouped(viewpoints * response)
+    determinant = normal_qq * normal_zz - normal_qz * normal_qz
+    stable = np.abs(determinant) > np.finfo(float).eps
+    quality = np.divide(
+        rhs_q * normal_zz - rhs_z * normal_qz,
+        determinant,
+        out=np.zeros(n_items, dtype=float),
+        where=stable,
+    )
+    item_view = np.divide(
+        normal_qq * rhs_z - normal_qz * rhs_q,
+        determinant,
+        out=np.zeros(n_items, dtype=float),
+        where=stable,
+    )
+    # Positive ridge terms should make every system nonsingular; retain a
+    # defensive least-squares fallback for pathological floating-point inputs.
+    for index in np.flatnonzero(~stable):
+        normal = np.asarray(
+            [
+                [normal_qq[index], normal_qz[index]],
+                [normal_qz[index], normal_zz[index]],
+            ]
         )
-    result = pd.DataFrame(rows)
+        quality[index], item_view[index] = np.linalg.lstsq(
+            normal, np.asarray([rhs_q[index], rhs_z[index]]), rcond=None
+        )[0]
+
+    reconstructed = (
+        mu
+        + biases
+        + sensitivities * quality[item_indices]
+        + viewpoints * item_view[item_indices]
+    )
+    squared_errors = np.square(votes - reconstructed)
+    logits = classifier_weight * quality + classifier_bias
+    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -40.0, 40.0)))
+    counts = np.bincount(item_indices, minlength=n_items).astype(np.int64)
+    known_counts = np.bincount(
+        item_indices, weights=known.astype(np.int8), minlength=n_items
+    ).astype(np.int64)
+    label_lookup = part.drop_duplicates("item_id").set_index("item_id")["label"]
+    result = pd.DataFrame(
+        {
+            "item_id": item_names,
+            "label": [int(label_lookup[item_id]) for item_id in item_names],
+            "quality": quality,
+            "viewpoint": item_view,
+            "moderator_logit": logits,
+            "score": probabilities,
+            "n_votes": counts,
+            "n_known_rater_votes": known_counts,
+            "known_rater_fraction": np.divide(
+                known_counts,
+                counts,
+                out=np.zeros(n_items, dtype=float),
+                where=counts > 0,
+            ),
+        }
+    )
+    known_votes_total = int(known.sum())
     diagnostics: dict[str, float | int] = {
         "n_items": int(len(result)),
         "n_votes": int(len(part)),
@@ -410,7 +458,7 @@ def infer_new_items(
         "known_rater_vote_fraction": float(known_votes_total / len(part)) if len(part) else math.nan,
         "n_items_without_known_rater": int((result["n_known_rater_votes"] == 0).sum()),
         "vote_reconstruction_rmse": float(np.sqrt(np.mean(squared_errors)))
-        if squared_errors
+        if len(squared_errors)
         else math.nan,
         "ridge_quality": float(ridge_quality),
         "ridge_viewpoint": float(ridge_view),

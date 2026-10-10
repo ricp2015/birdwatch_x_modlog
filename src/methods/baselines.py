@@ -35,6 +35,13 @@ ALPHA_GRID = np.linspace(1.0, 5.0, 20)
 MIN_SUB_VAL_ITEMS = 10
 N_FOLDS = 5
 REDDIT_SCORES_PATH = Path("data/interim/reddit/auxiliary/moderated_posts_scores.parquet")
+CANONICAL_BASELINES = (
+    "BL1_net_vote",
+    "BL2_net_vote_alpha",
+    "BL3_net_vote_alpha_subreddit",
+    "BL4_reddit_score",
+    "BL5_subreddit",
+)
 
 
 def _timestamp_date(value):
@@ -885,6 +892,7 @@ def evaluate_splits(
     output_dir: Path,
     external_scores_path: Path = REDDIT_SCORES_PATH,
     only_external: bool = False,
+    baseline_names: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Dict]]:
     """Evaluate splits and return its metrics."""
     splits = discover_splits(votes_dir)
@@ -895,8 +903,18 @@ def evaluate_splits(
         )
         return {}
 
+    selected = set(baseline_names or CANONICAL_BASELINES)
+    unknown = sorted(selected.difference(CANONICAL_BASELINES))
+    if unknown:
+        raise ValueError(f"Unknown baselines: {unknown}")
+    if only_external:
+        selected.intersection_update({"BL4_reddit_score", "BL5_subreddit"})
+
     external_scores_compressed = None
-    if external_scores_path.exists():
+    needs_external_scores = bool(
+        selected.intersection({"BL4_reddit_score", "BL5_subreddit"})
+    )
+    if needs_external_scores and external_scores_path.exists():
         ext = load_external_scores(external_scores_path)
         # Preserve missing external scores through the fixed log transform.
         # ``run_single_split_external`` detects these NaNs and applies the
@@ -905,7 +923,7 @@ def evaluate_splits(
         raw = pd.to_numeric(ext["score"], errors="coerce")
         external_scores_compressed = ext[["item_id"]].copy()
         external_scores_compressed["score"] = np.sign(raw) * np.log1p(np.abs(raw))
-    else:
+    elif needs_external_scores:
         log.warning(
             "BL4/BL5 skipped: external scores missing at %s",
             external_scores_path,
@@ -925,6 +943,8 @@ def evaluate_splits(
                 ("BL3_net_vote_alpha_subreddit", dict(use_alpha=True, use_subreddit=True)),
             ]
             for baseline_name, kwargs in baseline_configs:
+                if baseline_name not in selected:
+                    continue
                 metric, item_scores = run_single_split_baseline(
                     split_name, all_df, train_df, val_df, test_df, baseline_name, **kwargs
                 )
@@ -935,6 +955,8 @@ def evaluate_splits(
 
         if external_scores_compressed is not None:
             for baseline_name, use_sub in (("BL4_reddit_score", False), ("BL5_subreddit", True)):
+                if baseline_name not in selected:
+                    continue
                 metric, item_scores = run_single_split_external(
                     split_name,
                     external_scores_compressed,
@@ -979,10 +1001,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Run only BL4/BL5.",
     )
+    parser.add_argument(
+        "--baseline",
+        action="append",
+        choices=CANONICAL_BASELINES,
+        dest="baselines",
+        help="Run one baseline; repeat to select several. Omit to run all five.",
+    )
     args = parser.parse_args()
     evaluate_splits(
         votes_dir=args.votes_dir,
         output_dir=args.output_dir,
         external_scores_path=args.external_scores,
         only_external=args.only_external,
+        baseline_names=args.baselines,
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -479,6 +480,80 @@ def _load_reusable_hyperparams(
     )
 
 
+def _evaluate_prepared_split(
+    split_name: str,
+    split_path: Path,
+    output_dir: Path,
+    post_emb: np.ndarray,
+    post_id2idx: Dict[str, int],
+    user_profiles: TemporalUserProfiles,
+    faiss_index: faiss.Index,
+    default_k: int,
+    default_t: int,
+    default_alpha: float,
+    default_beta: float,
+    min_coverage: int,
+    do_grid_search: bool,
+    reuse_hyperparams: bool,
+) -> tuple[str, Dict | None]:
+    """Evaluate one split while sharing immutable embeddings and profiles."""
+
+    chronological = "chronological" in split_name.lower()
+    train_votes = _load_split_votes(split_path / "train_votes.parquet")
+    val_votes = _load_split_votes(split_path / "val_votes.parquet")
+    test_votes = _load_split_votes(split_path / "test_votes.parquet")
+    split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
+    if runtime.causal_feature_table is None:
+        raise RuntimeError("SEF requires the full causal metadata feature table")
+    split_vote_df = attach_causal_features(split_vote_df, runtime.causal_feature_table)
+
+    train_ids = set(train_votes["item_id"].unique())
+    val_ids = set(val_votes["item_id"].unique())
+    test_ids = set(test_votes["item_id"].unique())
+    if not test_ids:
+        log.warning("[%s] skipped: empty test set", split_name)
+        return split_name, None
+    fixed_hyperparams = (
+        _load_reusable_hyperparams(output_dir, split_name) if reuse_hyperparams else None
+    )
+    metrics, decisions, weights_df = run_single_split(
+        train_ids,
+        val_ids,
+        test_ids,
+        split_vote_df,
+        post_emb,
+        post_id2idx,
+        user_profiles,
+        faiss_index,
+        default_k,
+        default_t,
+        default_alpha,
+        default_beta,
+        min_coverage,
+        do_grid_search,
+        split_label=split_name,
+        fixed_hyperparams=fixed_hyperparams,
+        dataset=split_dataset(split_path, split_name),
+    )
+    if metrics is None:
+        return split_name, None
+    metrics["causal_metadata_profile"] = "full"
+    metrics["causal_metadata_weight"] = runtime.causal_metadata_weight
+    metrics["semantic_user_profiles_are_static"] = False
+    metrics["semantic_profile_regime"] = "causal_as_of_case_time"
+    metrics["chronological_split"] = chronological
+    metrics["temporal_profile_is_causal"] = True
+    metrics["prospective_interpretation"] = chronological
+
+    split_out_dir = output_dir / split_name / "expertise"
+    split_out_dir.mkdir(parents=True, exist_ok=True)
+    decisions.to_parquet(split_out_dir / "item_scores.parquet", index=False)
+    weights_df.to_parquet(split_out_dir / "weights.parquet", index=False)
+    with open(split_out_dir / "metrics.json", "w") as fh:
+        json.dump(metrics, fh, indent=2)
+    return split_name, metrics
+
+
 def evaluate_splits(
     votes_dir: Path,
     output_dir: Path,
@@ -493,6 +568,7 @@ def evaluate_splits(
     min_coverage: int,
     do_grid_search: bool = True,
     reuse_hyperparams: bool = False,
+    n_workers: int = 1,
 ) -> Dict[str, Dict]:
     """Evaluate splits and return its metrics."""
     global post_ids_ordered
@@ -507,37 +583,15 @@ def evaluate_splits(
         )
         return {}
 
-    summary: Dict[str, Dict] = {}
-    for split_name, split_path in splits.items():
-        chronological = "chronological" in split_name.lower()
+    if n_workers < 1:
+        raise ValueError("n_workers must be at least 1")
+    items = list(splits.items())
 
-        train_votes = _load_split_votes(split_path / "train_votes.parquet")
-        val_votes = _load_split_votes(split_path / "val_votes.parquet")
-        test_votes = _load_split_votes(split_path / "test_votes.parquet")
-
-        # Use only votes assigned to this split.
-        split_vote_df = pd.concat([train_votes, val_votes, test_votes], ignore_index=True)
-        if runtime.causal_feature_table is None:
-            raise RuntimeError("SEF requires the full causal metadata feature table")
-        split_vote_df = attach_causal_features(split_vote_df, runtime.causal_feature_table)
-
-        train_ids = set(train_votes["item_id"].unique())
-        val_ids = set(val_votes["item_id"].unique())
-        test_ids = set(test_votes["item_id"].unique())
-
-        if not test_ids:
-            log.warning("[%s] skipped: empty test set", split_name)
-            continue
-
-        fixed_hyperparams = (
-            _load_reusable_hyperparams(output_dir, split_name) if reuse_hyperparams else None
-        )
-
-        metrics, decisions, weights_df = run_single_split(
-            train_ids,
-            val_ids,
-            test_ids,
-            split_vote_df,
+    def evaluate(item: tuple[str, Path]) -> tuple[str, Dict | None]:
+        return _evaluate_prepared_split(
+            item[0],
+            item[1],
+            output_dir,
             post_emb,
             post_id2idx,
             user_profiles,
@@ -548,27 +602,19 @@ def evaluate_splits(
             default_beta,
             min_coverage,
             do_grid_search,
-            split_label=split_name,
-            fixed_hyperparams=fixed_hyperparams,
-            dataset=split_dataset(split_path, split_name),
+            reuse_hyperparams,
         )
-        if metrics is None:
-            continue
-        metrics["causal_metadata_profile"] = "full"
-        metrics["causal_metadata_weight"] = runtime.causal_metadata_weight
-        metrics["semantic_user_profiles_are_static"] = False
-        metrics["semantic_profile_regime"] = "causal_as_of_case_time"
-        metrics["chronological_split"] = chronological
-        metrics["temporal_profile_is_causal"] = True
-        metrics["prospective_interpretation"] = chronological
 
-        split_out_dir = output_dir / split_name / "expertise"
-        split_out_dir.mkdir(parents=True, exist_ok=True)
-        decisions.to_parquet(split_out_dir / "item_scores.parquet", index=False)
-        weights_df.to_parquet(split_out_dir / "weights.parquet", index=False)
-        with open(split_out_dir / "metrics.json", "w") as fh:
-            json.dump(metrics, fh, indent=2)
-        summary[split_name] = metrics
+    if n_workers == 1:
+        completed = map(evaluate, items)
+    else:
+        executor = ThreadPoolExecutor(max_workers=min(n_workers, len(items)))
+        completed = executor.map(evaluate, items)
+    try:
+        summary = {name: metrics for name, metrics in completed if metrics is not None}
+    finally:
+        if n_workers != 1:
+            executor.shutdown(wait=True)
 
     return summary
 

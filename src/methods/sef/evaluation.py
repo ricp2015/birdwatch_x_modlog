@@ -10,6 +10,7 @@ import pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
+from . import runtime
 from .data import TemporalUserProfiles
 from .features import _compute_weighted_votes, compute_expert_weights
 from .modeling import (
@@ -66,20 +67,39 @@ def grid_search_hyperparams(
     best = {"f1": -1.0, "k": K_NEIGHBORS, "t": TOP_T, "alpha": ALPHA, "beta": BETA}
 
     for k in GRID_K:
+        # Neighbour search, temporal profile lookup, and evidence aggregation do
+        # not depend on alpha/beta.  The old loop repeated all of that for every
+        # grid point (44 full feature builds with the default grid).  Build the
+        # three component signals once per K and combine them vectorially.
+        base_weights = compute_expert_weights(
+            val_ids,
+            train_ids,
+            vote_df,
+            prec_df,
+            post_emb,
+            post_id2idx,
+            user_profiles,
+            faiss_index,
+            k,
+            0.0,
+            0.0,
+            lambda_smooth,
+        )
         for alpha, beta in valid_ab:
-            weights_df = compute_expert_weights(
-                val_ids,
-                train_ids,
-                vote_df,
-                prec_df,
-                post_emb,
-                post_id2idx,
-                user_profiles,
-                faiss_index,
-                k,
-                alpha,
-                beta,
-                lambda_smooth,
+            gamma = 1.0 - alpha - beta
+            semantic = (
+                alpha * base_weights["local_prec"].to_numpy(dtype=float)
+                + beta * base_weights["reliability"].to_numpy(dtype=float)
+                + gamma * base_weights["signal_c_directed"].to_numpy(dtype=float)
+            )
+            expert = (
+                (1.0 - runtime.causal_metadata_weight) * semantic
+                + runtime.causal_metadata_weight
+                * base_weights["causal_metadata_score"].to_numpy(dtype=float)
+            )
+            weights_df = base_weights.assign(
+                semantic_expert_weight=semantic,
+                expert_weight=expert,
             )
             # The grid uses the fixed fallback scale only as a cheap proxy for
             # K/alpha/beta.  All TOP_T_LIST scales enter the final meta-model.

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
 import pandas as pd
+
 from src.methods.team_formation_v2.role_utils import FamiliarityKey, crowding_distance
 
 
@@ -63,29 +65,21 @@ class CommunityNSGA2Optimizer:
         self.generations = int(generations)
         self.community = str(self.candidates.iloc[0]["community"])
         users = self.candidates["username"].astype(str).tolist()
+        self.users = users
 
         ideology_dimension = len(next(iter(ideology.values()))) if ideology else 1
-        vectors = np.vstack(
+        self.ideology_vectors = np.vstack(
             [ideology.get(user, np.zeros(ideology_dimension)) for user in users]
         )
-        known = np.asarray([user in ideology for user in users], dtype=bool)
-        self.ideology_matrix = np.linalg.norm(
-            vectors[:, None, :] - vectors[None, :, :],
-            axis=2,
+        self.ideology_known = np.asarray([user in ideology for user in users], dtype=bool)
+        # Only k*(k-1)/2 pairs are read for a proposed team (k=3 by default).
+        # Dense candidate-by-candidate matrices made memory O(U^2), reaching
+        # hundreds of GB for large communities.  Sparse dictionary lookup keeps
+        # exactly the same objective while making resident memory O(U + E).
+        self.familiarity = familiarity
+        self.familiarity_scale = max(
+            float(familiarity_scales.get(self.community, 1.0)), 1.0
         )
-        self.ideology_matrix *= known[:, None] & known[None, :]
-
-        self.familiarity_matrix = np.zeros(
-            (self.n_candidates, self.n_candidates),
-            dtype=float,
-        )
-        scale = max(float(familiarity_scales.get(self.community, 1.0)), 1.0)
-        for left in range(self.n_candidates):
-            for right in range(left + 1, self.n_candidates):
-                key = (self.community, *sorted((users[left], users[right])))
-                value = familiarity.get(key, 0.0) / scale
-                self.familiarity_matrix[left, right] = value
-                self.familiarity_matrix[right, left] = value
 
         # Relative bands avoid imposing a universal agreement threshold on
         # communities with different moderator base rates.
@@ -116,9 +110,32 @@ class CommunityNSGA2Optimizer:
             if cached is not None:
                 return cached
             selected = np.asarray(indices, dtype=int)
-            upper = np.triu_indices(len(selected), k=1)
-            ideology = self.ideology_matrix[np.ix_(selected, selected)][upper]
-            familiar = self.familiarity_matrix[np.ix_(selected, selected)][upper]
+            pair_positions = list(itertools.combinations(selected.tolist(), 2))
+            ideology = np.asarray(
+                [
+                    np.linalg.norm(
+                        self.ideology_vectors[left] - self.ideology_vectors[right]
+                    )
+                    if self.ideology_known[left] and self.ideology_known[right]
+                    else 0.0
+                    for left, right in pair_positions
+                ],
+                dtype=float,
+            )
+            familiar = np.asarray(
+                [
+                    self.familiarity.get(
+                        (
+                            self.community,
+                            *sorted((self.users[left], self.users[right])),
+                        ),
+                        0.0,
+                    )
+                    / self.familiarity_scale
+                    for left, right in pair_positions
+                ],
+                dtype=float,
+            )
             objectives = (
                 float(ideology.mean()) if len(ideology) else 0.0,
                 float(expertise[selected].mean()),

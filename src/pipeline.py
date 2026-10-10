@@ -12,7 +12,7 @@ import platform
 import shlex
 import subprocess
 import sys
-from typing import Annotated, Sequence
+from typing import Annotated, Mapping, Sequence
 
 import typer
 
@@ -23,6 +23,7 @@ from src.reproducibility import (
     resolve_method_selection,
     validate_reproduction_config,
 )
+from src.utils.parallel import CommandJob, resolve_worker_count, run_command_jobs
 from src.utils.splits import discover_splits
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,24 @@ TEAM_FORMATION_METHODS = (
     "boc_stacking",
     "role_nsga2",
 )
+BASELINE_METHODS = (
+    "BL1_net_vote",
+    "BL2_net_vote_alpha",
+    "BL3_net_vote_alpha_subreddit",
+    "BL4_reddit_score",
+    "BL5_subreddit",
+)
+MA_QSMF_BRANCHES = (
+    ("cn_inductive", "ma_mf"),
+    ("qsmf", "ma_qsmf"),
+)
+TEAM_FORMATION_MODULES = {
+    "bandit": "src.methods.team_formation_v2.bandit.pipeline",
+    "graph_propagation": "src.methods.team_formation_v2.graph_propagation.pipeline",
+    "virtual_ensembles": "src.methods.team_formation_v2.virtual_ensembles.pipeline",
+    "boc_stacking": "src.methods.team_formation_v2.boc_stacking.pipeline",
+    "role_nsga2": "src.methods.team_formation_v2.role_nsga2.pipeline",
+}
 NESTED_METHODS = {"team-formation": TEAM_FORMATION_METHODS}
 
 app = typer.Typer(
@@ -179,7 +198,7 @@ def _write_run_manifest(
 
 
 def _execute(
-    commands: Sequence[tuple[str, list[str]]],
+    commands: Sequence[tuple[str, list[str]] | CommandJob],
     *,
     category: str,
     manifest_path: Path,
@@ -187,32 +206,42 @@ def _execute(
     dry_run: bool,
     continue_on_error: bool = False,
     extra_inputs: Sequence[Path] = (),
+    n_workers: int = 1,
+    threads_per_worker: int = 1,
+    resource_limits: Mapping[str, int] | None = None,
 ) -> None:
-    records: list[dict[str, object]] = []
-    failure = False
-    for name, command in commands:
-        typer.echo(f"\n[{name}] {_display_command(command)}")
-        started = datetime.now(timezone.utc)
-        return_code: int | None = None
-        if not dry_run:
-            return_code = subprocess.run(command, cwd=PROJECT_ROOT, check=False).returncode
-        ended = datetime.now(timezone.utc)
-        records.append(
-            {
-                "name": name,
-                "command": command,
-                "dry_run": dry_run,
-                "started_at_utc": started.isoformat(),
-                "ended_at_utc": ended.isoformat(),
-                "duration_seconds": (ended - started).total_seconds(),
-                "return_code": return_code,
-                "status": ("dry-run" if dry_run else "ok" if return_code == 0 else "failed"),
-            }
-        )
-        if return_code not in (None, 0):
-            failure = True
-            if not continue_on_error:
-                break
+    jobs = [
+        command if isinstance(command, CommandJob) else CommandJob(command[0], command[1])
+        for command in commands
+    ]
+    for job in jobs:
+        typer.echo(f"\n[{job.name}] {_display_command(job.command)}")
+    results = run_command_jobs(
+        jobs,
+        cwd=PROJECT_ROOT,
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        dry_run=dry_run,
+        continue_on_error=continue_on_error,
+        announce=lambda name: typer.echo(f"[{name}] started", err=True),
+        resource_limits=resource_limits,
+    )
+    records: list[dict[str, object]] = [
+        {
+            "name": result.name,
+            "command": result.command,
+            "dry_run": dry_run,
+            "started_at_utc": result.started_at_utc,
+            "ended_at_utc": result.ended_at_utc,
+            "duration_seconds": result.duration_seconds,
+            "return_code": result.return_code,
+            "status": result.status,
+            "resource": result.resource,
+            "environment_overrides": dict(result.environment or {}),
+        }
+        for result in results
+    ]
+    failure = any(result.return_code not in (None, 0) for result in results)
     _write_run_manifest(
         manifest_path,
         category,
@@ -374,7 +403,85 @@ def _local_model_files(model: str) -> list[Path]:
     return sorted(path for path in candidate.rglob("*") if path.is_file())
 
 
-def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[str]]]:
+def _parallel_methods_command(
+    config: ReproductionConfig,
+    *,
+    splits_root: Path,
+    results_root: Path,
+    manifest: Path,
+    n_workers: int,
+    threads_per_worker: int,
+    memory_workers: int,
+    gpu_devices: Sequence[str],
+) -> list[str]:
+    """Build a nested method-stage command while preserving stage dependencies."""
+
+    post_texts = _optional_path(config.post_texts, config.interim / "missing_post_texts")
+    user_documents = _optional_path(
+        config.user_documents, config.interim / "auxiliary" / "user_documents.parquet"
+    )
+    external_scores = _optional_path(
+        config.external_scores, config.interim / "missing_external_scores"
+    )
+    args: list[object] = [
+        "run",
+        "methods",
+        "--splits-root",
+        splits_root,
+        "--results-root",
+        results_root,
+        "--input",
+        config.votes,
+        "--causal-features",
+        config.causal_features,
+        "--nvse-scores",
+        config.nvse_scores,
+        "--nvse-work",
+        config.cache / "nvse" / "work",
+        "--post-texts",
+        post_texts,
+        "--user-documents",
+        user_documents,
+        "--external-scores",
+        external_scores,
+        "--embedding-cache",
+        config.embedding_cache,
+        "--embedding-model",
+        config.embedding_model,
+        "--device",
+        config.device,
+        "--n-workers",
+        n_workers,
+        "--threads-per-worker",
+        threads_per_worker,
+        "--memory-workers",
+        memory_workers,
+        "--manifest",
+        manifest,
+    ]
+    for method in config.methods:
+        args.extend(("--method", method))
+    for excluded in config.excluded_methods:
+        args.extend(("--exclude-method", excluded))
+    for gpu in gpu_devices:
+        args.extend(("--gpu-device", gpu))
+    if config.reuse_sef_hyperparameters:
+        args.append("--reuse-sef-hyperparameters")
+    if config.skip_existing_team_methods:
+        args.append("--skip-existing-team-methods")
+    if config.continue_on_error:
+        args.append("--continue-on-error")
+    return _python_module("src.pipeline", *args)
+
+
+def _reproduction_commands(
+    config: ReproductionConfig,
+    *,
+    n_workers: int = 1,
+    threads_per_worker: int = 1,
+    memory_workers: int = 1,
+    gpu_devices: Sequence[str] = (),
+) -> list[tuple[str, list[str]]]:
     """Build the complete preparation/evaluation/report plan for one dataset."""
     commands: list[tuple[str, list[str]]] = []
     datasets_dir = config.interim / "datasets"
@@ -531,53 +638,41 @@ def _reproduction_commands(config: ReproductionConfig) -> list[tuple[str, list[s
             )
         )
 
-    post_texts = _optional_path(config.post_texts, config.interim / "missing_post_texts")
-    user_documents = _optional_path(
-        config.user_documents, config.interim / "auxiliary" / "user_documents.parquet"
-    )
-    external_scores = _optional_path(
-        config.external_scores, config.interim / "missing_external_scores"
-    )
-    nvse_work = config.cache / "nvse" / "work"
-    commands.extend(
-        _method_commands(
-            config.methods,
-            config.splits,
-            config.results,
-            config.votes,
-            config.causal_features,
-            config.nvse_scores,
-            nvse_work,
-            post_texts,
-            user_documents,
-            external_scores,
-            config.embedding_cache,
-            config.embedding_model,
-            config.reuse_sef_hyperparameters,
-            config.skip_existing_team_methods,
-            config.excluded_methods,
+    commands.append(
+        (
+            "methods",
+            _parallel_methods_command(
+                config,
+                splits_root=config.splits,
+                results_root=config.results,
+                manifest=config.results / "reproducibility" / "latest_methods_run.json",
+                n_workers=n_workers,
+                threads_per_worker=threads_per_worker,
+                memory_workers=memory_workers,
+                gpu_devices=gpu_devices,
+            ),
         )
     )
 
     if config.kfold:
         kfold_results = _scoped_root(config.results, KFOLD_DIRNAME)
-        commands.extend(
-            _method_commands(
-                config.methods,
-                kfold_root,
-                kfold_results,
-                config.votes,
-                config.causal_features,
-                config.nvse_scores,
-                nvse_work,
-                post_texts,
-                user_documents,
-                external_scores,
-                config.embedding_cache,
-                config.embedding_model,
-                config.reuse_sef_hyperparameters,
-                config.skip_existing_team_methods,
-                config.excluded_methods,
+        commands.append(
+            (
+                "kfold-methods",
+                _parallel_methods_command(
+                    config,
+                    splits_root=kfold_root,
+                    results_root=kfold_results,
+                    manifest=(
+                        config.results
+                        / "reproducibility"
+                        / "latest_kfold_methods_run.json"
+                    ),
+                    n_workers=n_workers,
+                    threads_per_worker=threads_per_worker,
+                    memory_workers=memory_workers,
+                    gpu_devices=gpu_devices,
+                ),
             )
         )
         commands.append(
@@ -699,6 +794,28 @@ def reproduce(
         str,
         typer.Option("--device", help="Execution device: cpu, cuda, or cuda:N."),
     ] = "cpu",
+    gpu_device: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--gpu-device",
+            help="GPU scheduling lane for methods; repeat for multiple GPUs.",
+        ),
+    ] = None,
+    n_workers: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Concurrent method/split processes; 0 selects a conservative value.",
+        ),
+    ] = 1,
+    threads_per_worker: Annotated[
+        int,
+        typer.Option(min=1, help="BLAS/OpenMP threads available to each method process."),
+    ] = 1,
+    memory_workers: Annotated[
+        int,
+        typer.Option(min=1, help="Maximum concurrent memory-heavy Team Formation jobs."),
+    ] = 1,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", "-c", help="Optional advanced config for non-standard paths."),
@@ -749,7 +866,13 @@ def reproduce(
     else:
         raise typer.BadParameter("provide the votes table with --input", param_hint="--input")
     _preflight(config)
-    commands = _reproduction_commands(config)
+    commands = _reproduction_commands(
+        config,
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        memory_workers=memory_workers,
+        gpu_devices=gpu_device or (),
+    )
     if not commands:
         typer.echo("Nothing to run: every configured stage is disabled or already prepared.")
         return
@@ -1108,7 +1231,24 @@ def prepare_nvse_cache(
     )
 
 
-def _method_commands(
+def _split_output_parent(results_root: Path, split_name: str) -> Path:
+    """Return the root that makes a direct split retain its canonical result path."""
+
+    return results_root.joinpath(*split_name.split("/")).parent
+
+
+def _gpu_assignments(device: str, gpu_devices: Sequence[str]) -> list[str]:
+    configured = [value.removeprefix("cuda:") for value in gpu_devices if value != ""]
+    if configured:
+        return configured
+    if device.startswith("cuda:"):
+        return [device.split(":", 1)[1]]
+    if device == "cuda":
+        return ["0"]
+    return []
+
+
+def _granular_method_jobs(
     selected: Sequence[str],
     splits_root: Path,
     results_root: Path,
@@ -1122,86 +1262,178 @@ def _method_commands(
     embedding_cache: Path,
     embedding_model: str,
     reuse_sef_hyperparameters: bool,
+    excluded_methods: Sequence[str],
+    device: str,
+    gpu_devices: Sequence[str],
     skip_existing_team_methods: bool,
-    excluded_methods: Sequence[str] = (),
-) -> list[tuple[str, list[str]]]:
-    unknown = sorted(set(selected).difference(METHOD_MODULES))
-    if unknown:
-        raise typer.BadParameter(
-            f"unknown method(s): {unknown}; choose from {list(METHOD_MODULES)}"
+    n_workers: int,
+) -> tuple[list[CommandJob], dict[str, int]]:
+    """Build independent jobs covering every one of the 18 benchmark methods."""
+
+    splits = discover_splits(splits_root)
+    if not splits:
+        raise typer.BadParameter(f"No prepared splits found below {splits_root}")
+    jobs: list[CommandJob] = []
+    gpus = _gpu_assignments(device, gpu_devices)
+    gpu_cursor = 0
+
+    def gpu_job(name: str, command: list[str]) -> CommandJob:
+        nonlocal gpu_cursor
+        if not gpus:
+            return CommandJob(name, command, resource="cpu")
+        gpu = gpus[gpu_cursor % len(gpus)]
+        gpu_cursor += 1
+        return CommandJob(
+            name,
+            command,
+            environment={"CUDA_VISIBLE_DEVICES": gpu},
+            resource=f"gpu:{gpu}",
         )
-    commands: list[tuple[str, list[str]]] = []
-    for method in selected:
-        module = METHOD_MODULES[method]
-        if method == "nvse":
-            args: list[object] = [
-                "--votes_dir",
-                splits_root,
-                "--violation_scores",
-                nvse_scores,
-                "--causal_features",
-                causal_features,
-                "--results_dir",
-                results_root,
-                "--out_dir",
-                nvse_work,
-                "--tasks",
-                "splits",
-            ]
-        elif method == "sef":
-            args = [
-                "--votes-dir",
-                splits_root,
-                "--output-dir",
-                results_root,
-                "--causal-features",
-                causal_features,
-                "--input-csv",
-                input_path,
-                "--post-texts",
-                post_texts,
-                "--user-documents",
-                user_documents,
-                "--embedding-dir",
-                embedding_cache,
-                "--embedding-model",
-                embedding_model,
-                "--tasks",
-                "splits",
-            ]
-            if reuse_sef_hyperparameters:
-                args.append("--reuse-hyperparams")
-        elif method == "team-formation":
-            args = [
-                "--votes-dir",
-                splits_root,
-                "--out-root",
-                results_root,
-                "--causal-features",
-                causal_features,
-                "--embedding-dir",
-                embedding_cache,
-            ]
-            if skip_existing_team_methods:
-                args.append("--skip-existing")
-            for excluded in nested_exclusions(
-                "team-formation", excluded_methods, NESTED_METHODS
-            ):
-                args.extend(("--exclude-method", excluded))
-        elif method == "baselines":
-            args = [
-                "--votes-dir",
-                splits_root,
-                "--output-dir",
-                results_root,
-                "--external-scores",
-                external_scores,
-            ]
-        else:
-            output_flag = "--output-dir"
-            args = ["--votes-dir", splits_root, output_flag, results_root]
-        commands.append((method, _python_module(module, *args)))
-    return commands
+
+    for split_name, split_path in splits.items():
+        output_parent = _split_output_parent(results_root, split_name)
+        split_result = results_root.joinpath(*split_name.split("/"))
+
+        if "baselines" in selected:
+            for baseline in BASELINE_METHODS:
+                jobs.append(
+                    CommandJob(
+                        f"{split_name}/baseline/{baseline}",
+                        _python_module(
+                            "src.methods.baselines",
+                            "--votes-dir",
+                            split_path,
+                            "--output-dir",
+                            output_parent,
+                            "--external-scores",
+                            external_scores,
+                            "--baseline",
+                            baseline,
+                        ),
+                    )
+                )
+        if "community-notes" in selected:
+            jobs.append(
+                CommandJob(
+                    f"{split_name}/cn",
+                    _python_module(
+                        "src.methods.community_notes",
+                        "--votes-dir",
+                        split_path,
+                        "--output-dir",
+                        output_parent,
+                    ),
+                )
+            )
+        if "var" in selected:
+            jobs.append(
+                CommandJob(
+                    f"{split_name}/var",
+                    _python_module(
+                        "src.methods.expert_selection.var",
+                        "--votes-dir",
+                        split_path,
+                        "--output-dir",
+                        output_parent,
+                    ),
+                )
+            )
+        if "nvse" in selected:
+            jobs.append(
+                CommandJob(
+                    f"{split_name}/nvse",
+                    _python_module(
+                        "src.methods.normvio_skill_extraction",
+                        "--votes_dir",
+                        split_path,
+                        "--violation_scores",
+                        nvse_scores,
+                        "--causal_features",
+                        causal_features,
+                        "--results_dir",
+                        output_parent,
+                        "--out_dir",
+                        nvse_work,
+                        "--tasks",
+                        "splits",
+                    ),
+                )
+            )
+        if "ma-qsmf" in selected:
+            for variants in MA_QSMF_BRANCHES:
+                command = _python_module(
+                    "src.methods.ma_qsmf",
+                    "--votes-dir",
+                    split_path,
+                    "--output-dir",
+                    output_parent,
+                    "--variants",
+                    *variants,
+                    "--device",
+                    "cuda" if gpus else device,
+                )
+                jobs.append(gpu_job(f"{split_name}/{'-'.join(variants)}", command))
+        if "team-formation" in selected:
+            excluded = set(
+                nested_exclusions("team-formation", excluded_methods, NESTED_METHODS)
+            )
+            for method in TEAM_FORMATION_METHODS:
+                if method in excluded:
+                    continue
+                if skip_existing_team_methods:
+                    from src.methods.team_formation_v2.run_all import has_active_metrics
+
+                    if has_active_metrics(split_result / method / "metrics.json", method):
+                        continue
+                command = _python_module(
+                    TEAM_FORMATION_MODULES[method],
+                    "--votes-dir",
+                    split_path,
+                    "--out-dir",
+                    split_result / method,
+                    "--causal-features",
+                    causal_features,
+                    "--embedding-dir",
+                    embedding_cache,
+                )
+                if method != "boc_stacking":
+                    command.extend(("--team-size", "3"))
+                jobs.append(CommandJob(f"{split_name}/{method}", command, resource="memory"))
+
+    # SEF deliberately remains one shared-cache producer/consumer process.  Its
+    # expensive hyperparameter work is optimized internally; launching one copy
+    # per split would duplicate the base vote table and temporal profile cache.
+    if "sef" in selected:
+        args: list[object] = [
+            "--votes-dir",
+            splits_root,
+            "--output-dir",
+            results_root,
+            "--causal-features",
+            causal_features,
+            "--input-csv",
+            input_path,
+            "--post-texts",
+            post_texts,
+            "--user-documents",
+            user_documents,
+            "--embedding-dir",
+            embedding_cache,
+            "--embedding-model",
+            embedding_model,
+            "--tasks",
+            "splits",
+            "--n-workers",
+            resolve_worker_count(n_workers),
+        ]
+        if reuse_sef_hyperparameters:
+            args.append("--reuse-hyperparams")
+        command = _python_module("src.methods.semantic_expert_finder", *args)
+        jobs.append(gpu_job("sef/all-splits", command))
+
+    resource_limits = {"memory": 1}
+    resource_limits.update({f"gpu:{gpu}": 1 for gpu in gpus})
+    return jobs, resource_limits
 
 
 @run_app.command("methods")
@@ -1233,6 +1465,17 @@ def run_methods(
     external_scores: Annotated[Path, typer.Option()] = DEFAULT_EXTERNAL_SCORES,
     embedding_cache: Annotated[Path, typer.Option()] = DEFAULT_EMBEDDING_CACHE,
     embedding_model: Annotated[str, typer.Option()] = DEFAULT_EMBEDDING_MODEL,
+    device: Annotated[
+        str,
+        typer.Option(help="Device for MA-QSMF: cpu, cuda, or cuda:N."),
+    ] = "cpu",
+    gpu_device: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--gpu-device",
+            help="GPU index for resource-aware scheduling; repeat for multiple GPUs.",
+        ),
+    ] = None,
     k_fold: Annotated[
         bool,
         typer.Option(
@@ -1249,6 +1492,24 @@ def run_methods(
         bool,
         typer.Option(help="Reuse valid Team Formation v2 outputs."),
     ] = False,
+    n_workers: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Concurrent method/split processes; 0 chooses a conservative automatic value.",
+        ),
+    ] = 1,
+    threads_per_worker: Annotated[
+        int,
+        typer.Option(min=1, help="Native BLAS/OpenMP threads available to each process."),
+    ] = 1,
+    memory_workers: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Maximum concurrent memory-heavy Team Formation jobs.",
+        ),
+    ] = 1,
     continue_on_error: Annotated[bool, typer.Option()] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     manifest: Annotated[Path | None, typer.Option()] = None,
@@ -1272,7 +1533,7 @@ def run_methods(
             "`python -m src.pipeline prepare kfold` first.",
             param_hint="--k-fold",
         )
-    commands = _method_commands(
+    commands, resource_limits = _granular_method_jobs(
         selected,
         evaluation_splits_root,
         evaluation_results_root,
@@ -1286,25 +1547,13 @@ def run_methods(
         embedding_cache,
         embedding_model,
         reuse_sef_hyperparameters,
-        skip_existing_team_methods,
         normalized_exclusions,
+        device,
+        gpu_device or [],
+        skip_existing_team_methods,
+        n_workers,
     )
-    if k_fold:
-        commands.append(
-            (
-                "kfold-graphs",
-                _python_module(
-                    "src.comparison.graphs",
-                    "--k-fold-only",
-                    "--splits-root",
-                    evaluation_splits_root,
-                    "--results-root",
-                    evaluation_results_root,
-                    "--output-dir",
-                    DEFAULT_REPORT / "kfold",
-                ),
-            )
-        )
+    resource_limits["memory"] = memory_workers
     manifest_path = manifest or Path(
         "results/reproducibility/"
         + ("latest_kfold_methods_run.json" if k_fold else "latest_methods_run.json")
@@ -1316,7 +1565,32 @@ def run_methods(
         splits_root=evaluation_splits_root,
         dry_run=dry_run,
         continue_on_error=continue_on_error,
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        resource_limits=resource_limits,
     )
+    if k_fold and not dry_run:
+        _execute(
+            [
+                (
+                    "kfold-graphs",
+                    _python_module(
+                        "src.comparison.graphs",
+                        "--k-fold-only",
+                        "--splits-root",
+                        evaluation_splits_root,
+                        "--results-root",
+                        evaluation_results_root,
+                        "--output-dir",
+                        DEFAULT_REPORT / "kfold",
+                    ),
+                )
+            ],
+            category="kfold-graphs",
+            manifest_path=Path("results/reproducibility/latest_kfold_graphs_run.json"),
+            splits_root=evaluation_splits_root,
+            dry_run=False,
+        )
 
 
 @run_app.command("kfold-graphs")

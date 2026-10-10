@@ -13,6 +13,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.methods.team_formation_v2.shared_features import load_split_manifest
+from src.utils.parallel import CommandJob, run_command_jobs
 from src.utils.splits import discover_splits
 
 CHRONOLOGICAL_SPLIT = "intersection_chronological"
@@ -181,6 +182,18 @@ def main() -> None:
         action="store_true",
         help="Skip a method when its active metrics.json already exists for that split.",
     )
+    parser.add_argument(
+        "--n-workers",
+        type=int,
+        default=1,
+        help="Concurrent split/method subprocesses; 0 chooses a conservative automatic value.",
+    )
+    parser.add_argument(
+        "--threads-per-worker",
+        type=int,
+        default=1,
+        help="Native BLAS/OpenMP threads available to each subprocess.",
+    )
     args = parser.parse_args()
 
     excluded = set(args.exclude_method)
@@ -193,6 +206,8 @@ def main() -> None:
     print(f"Prepared splits: {len(splits)}")
 
     summary: dict[str, str] = {}
+    jobs: list[CommandJob] = []
+    job_outputs: dict[str, tuple[Path, str, Path]] = {}
     for split_name, split_path in splits.items():
         for method in selected_methods:
             out_dir = out_root.joinpath(*split_name.split("/"), method)
@@ -204,7 +219,6 @@ def main() -> None:
                 args.causal_features,
                 args.embedding_dir,
             )
-            print(f"Running {run_name}")
             if args.skip_existing and has_active_metrics(out_dir / "metrics.json", method):
                 summary[run_name] = "SKIPPED (active metrics.json exists)"
                 print(summary[run_name])
@@ -213,12 +227,24 @@ def main() -> None:
                 print(subprocess.list2cmdline(command))
                 summary[run_name] = "DRY RUN"
                 continue
-            result = subprocess.run(command, cwd=_PROJECT_ROOT, check=False)
-            summary[run_name] = (
-                "OK" if result.returncode == 0 else f"FAILED (exit {result.returncode})"
-            )
-            if result.returncode == 0:
-                annotate_outer_protocol(out_dir / "metrics.json", split_name, split_path)
+            jobs.append(CommandJob(run_name, command))
+            job_outputs[run_name] = (out_dir, split_name, split_path)
+
+    results = run_command_jobs(
+        jobs,
+        cwd=_PROJECT_ROOT,
+        n_workers=args.n_workers,
+        threads_per_worker=args.threads_per_worker,
+        continue_on_error=True,
+        announce=lambda name: print(f"Running {name}", flush=True),
+    )
+    for result in results:
+        summary[result.name] = (
+            "OK" if result.return_code == 0 else f"FAILED (exit {result.return_code})"
+        )
+        if result.return_code == 0:
+            out_dir, split_name, split_path = job_outputs[result.name]
+            annotate_outer_protocol(out_dir / "metrics.json", split_name, split_path)
 
     print("Summary")
     for run_name, status in summary.items():

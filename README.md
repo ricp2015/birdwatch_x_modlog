@@ -54,6 +54,35 @@ optional field:
 }
 ```
 
+### Parallel method execution
+
+`run methods` expands the benchmark into independent method/split jobs. All 18
+reported methods participate: the five baselines are separate jobs, MA/QSMF is
+split into its fixed- and learned-rho branches (preserving their shared base
+fits), and the five Team Formation methods are scheduled independently. Defaults
+remain serial for reproducibility.
+
+For a large two-GPU server, a suitable starting point is:
+
+```sh
+python -m src.pipeline run methods \
+  --n-workers 16 \
+  --threads-per-worker 4 \
+  --memory-workers 1 \
+  --device cuda \
+  --gpu-device 0 \
+  --gpu-device 1
+```
+
+GPU jobs are limited to one per listed device. Team Formation jobs have a
+separate memory semaphore controlled by `--memory-workers`; start at 1 and
+increase it only after observing that peak memory usage remains within the
+machine's available RAM. Native BLAS/OpenMP thread counts are capped per subprocess
+to prevent nested oversubscription.
+
+The same four scheduling options are accepted by `reproduce`; preparation and
+graph stages remain ordered around the parallel method stage.
+
 For another dataset, choose a unique name and pass its CSV from any location:
 
 ```sh
@@ -188,8 +217,25 @@ Hugging Face automatically downloads NormVio's
 | `--force` | Rebuild splits, causal features, and NVSE scores. |
 | `--graphs` / `--no-graphs` | Enable or skip final figures. Default: enabled. |
 | `--device cpu|cuda|cuda:N` | Execution device. Default: `cpu`. |
+| `--gpu-device INDEX` | GPU scheduling lane for the method stage; repeat once per GPU. |
+| `--n-workers N` | Maximum concurrent method/split jobs. Default: 1. |
+| `--threads-per-worker N` | BLAS/OpenMP threads assigned to each method subprocess. Default: 1. |
+| `--memory-workers N` | Maximum concurrent Team Formation jobs. Default: 1. |
 | `--dry-run` | Validate and print the plan without executing it. |
 | `--config PATH`, `-c PATH` | Optional advanced JSON configuration for non-standard model/cache paths. |
+
+### `run methods`
+
+| Option | Meaning |
+|---|---|
+| `--n-workers N` | Maximum concurrent jobs. `0` selects a conservative affinity-aware value; default: 1. |
+| `--threads-per-worker N` | BLAS/OpenMP threads assigned to each subprocess; default: 1. |
+| `--memory-workers N` | Maximum concurrent Team Formation jobs; default: 1. |
+| `--device cpu|cuda|cuda:N` | Device used by MA-QSMF. |
+| `--gpu-device INDEX` | GPU scheduling lane; repeat once per GPU. |
+| `--k-fold` | Run the materialized K-fold split collection and render its graphs after all jobs finish. |
+| `--continue-on-error` | Finish independent jobs and report every failure. |
+| `--dry-run` | Print the complete method/split execution matrix without running it. |
 
 ### `prepare auxiliary`
 
