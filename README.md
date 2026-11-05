@@ -218,7 +218,7 @@ For a large two-GPU server, a suitable starting point is:
 python -m src.pipeline run methods \
   --n-workers 16 \
   --threads-per-worker 4 \
-  --memory-workers 4 \
+  --memory-workers 2 \
   --device cuda \
   --gpu-device 0 \
   --gpu-device 1
@@ -229,7 +229,9 @@ separate memory semaphore controlled by `--memory-workers` (default 1, which
 runs the 65 Team Formation jobs one at a time). Each run manifest
 (`results/<dataset>/reproducibility/latest_methods_run.json`) records every
 job's `peak_rss_mb`; use it to raise `--memory-workers` as far as the machine's
-RAM allows. Native BLAS/OpenMP thread counts are capped per subprocess to
+RAM allows. For reference, on the Intersection split Team Formation jobs peak
+at roughly 0.4–0.8 GB (Role-NSGA2 is the largest); jobs on the Full split need
+several times more. Native BLAS/OpenMP thread counts are capped per subprocess to
 prevent nested oversubscription.
 
 The same scheduling options are accepted by `reproduce`, where they also
